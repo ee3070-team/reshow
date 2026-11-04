@@ -90,6 +90,113 @@ test("callback removes query before exchange; session authority is backend and t
   h.session.dispose();
 });
 
+test("live showcase PKCE return stays on the exact allowed route", async () => {
+  const h = harness();
+  await h.session.startSignIn("#live-demo");
+  const transaction = JSON.parse([...h.persisted.values()][0]);
+  assert.equal(transaction.returnHash, "#live-demo");
+  h.location.pathname = "/auth/callback.html";
+  h.location.search = "?" + new URLSearchParams({ state: transaction.state, code: "synthetic-code" });
+  await h.session.completeCallback();
+  assert.ok(h.events.some(([kind, url]) => kind === "history" && url === "/#live-demo"));
+  assert.equal(safeReturnHash("#live-demo?redirect=evil"), "#staff");
+  h.session.dispose();
+});
+
+test("an already cancelled staff read never reaches fetch", async () => {
+  const h = harness();
+  await h.authenticate();
+  const before = h.calls.length, timerCount = h.timers.size;
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(h.session.request("/showcases/demo-test-case", { signal: controller.signal }), { code: "request_cancelled" });
+  assert.equal(h.calls.length, before);
+  assert.equal(h.timers.size, timerCount);
+  assert.equal(h.session.snapshot().user.role, "Viewer");
+  h.session.dispose();
+});
+
+function pendingStaffRequest(h, path) {
+  let fetchSignal;
+  h.setHandler((url, init) => {
+    if (!url.endsWith(path)) return null;
+    fetchSignal = init.signal;
+    return new Promise((_resolve, reject) => {
+      fetchSignal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+  });
+  return () => fetchSignal;
+}
+
+test("cancelling a staff read aborts the actual fetch signal and clears its timeout", async () => {
+  const h = harness();
+  await h.authenticate();
+  const before = h.calls.length, timerCount = h.timers.size;
+  const signal = pendingStaffRequest(h, "/showcases/demo-test-case");
+  const controller = new AbortController();
+  const request = h.session.request("/showcases/demo-test-case", { signal: controller.signal });
+  assert.equal(signal().aborted, false);
+  controller.abort();
+  assert.equal(signal().aborted, true);
+  await assert.rejects(request, { code: "request_cancelled" });
+  assert.equal(h.calls.length, before + 1);
+  assert.equal(h.timers.size, timerCount);
+  assert.equal(h.session.snapshot().user.role, "Viewer");
+  h.session.dispose();
+});
+
+test("staff read timeout still aborts fetch without retrying or clearing the valid session", async () => {
+  const h = harness();
+  await h.authenticate();
+  const before = h.calls.length;
+  const signal = pendingStaffRequest(h, "/showcases/demo-test-case");
+  const caller = new AbortController();
+  const request = h.session.request("/showcases/demo-test-case", { signal: caller.signal });
+  const timeout = [...h.timers.values()].find((entry) => entry.delay === 15000);
+  assert.ok(timeout);
+  timeout.fn();
+  assert.equal(signal().aborted, true);
+  assert.equal(caller.signal.aborted, false);
+  await assert.rejects(request, { code: "network_error" });
+  assert.equal(h.calls.length, before + 1);
+  assert.equal(h.session.snapshot().user.role, "Viewer");
+  h.session.dispose();
+});
+
+test("caller cancellation also aborts response-body reads after headers arrive", async () => {
+  const h = harness();
+  await h.authenticate();
+  let fetchSignal;
+  h.setHandler((url, init) => {
+    if (!url.endsWith("/showcases/demo-test-case")) return null;
+    fetchSignal = init.signal;
+    return { ok: true, status: 200, json: () => new Promise((_resolve, reject) => {
+      fetchSignal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }) };
+  });
+  const caller = new AbortController();
+  const request = h.session.request("/showcases/demo-test-case", { signal: caller.signal });
+  await new Promise(setImmediate);
+  caller.abort();
+  await assert.rejects(request, { code: "request_cancelled" });
+  assert.equal(fetchSignal.aborted, true);
+  assert.equal(h.session.snapshot().user.role, "Viewer");
+  h.session.dispose();
+});
+
+test("an aborted staff write remains ambiguous and is never retried", async () => {
+  const h = harness();
+  await h.authenticate();
+  const before = h.calls.length;
+  pendingStaffRequest(h, "/commands");
+  const caller = new AbortController();
+  const request = h.session.request("/commands", { method: "POST", body: {}, signal: caller.signal });
+  caller.abort();
+  await assert.rejects(request, (error) => error.code === "network_error" && /may already have happened/.test(error.message));
+  assert.equal(h.calls.length, before + 1);
+  h.session.dispose();
+});
+
 test("invalid, expired, future-dated and altered-return transactions never exchange a code", async () => {
   for (const kind of ["state", "expired", "future", "return", "duplicate-state", "duplicate-code", "missing-code"]) {
     const h = harness();
