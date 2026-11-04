@@ -17,6 +17,7 @@ import { render as labels } from "./pages/labels.js";
 import { render as activity } from "./pages/activity.js";
 import { render as reports } from "./pages/reports.js";
 import { render as staff } from "./pages/staff.js";
+import { render as liveDemo } from "./pages/live-demo.js";
 import { render as technologyShowcase } from "./pages/technology-showcase.js";
 const pages = {
   overview: {
@@ -54,6 +55,13 @@ const pages = {
     subtitle: "Manage staff permissions and showcase access cards",
     icon: "users",
     render: staff,
+  },
+  "live-demo": {
+    title: "Live showcase",
+    subtitle: "AWS test data and Python updates",
+    icon: "display",
+    live: true,
+    render: liveDemo,
   },
   technology: {
     title: "3D & AI studio",
@@ -119,6 +127,8 @@ async function refresh() {
   document.title = `ReShow · ${page.title}`;
   document.querySelector("#page-title").textContent = page.title;
   document.querySelector("#page-subtitle").textContent = page.subtitle;
+  document.querySelector("#page-mode").textContent = page.live ? "Live AWS showcase" : "Local showcase demo";
+  document.querySelector("#demo-controls").hidden = Boolean(page.live);
   document.querySelector("#report-shortcut").hidden = ![
     "overview",
     "activity",
@@ -129,13 +139,17 @@ async function refresh() {
     else a.removeAttribute("aria-current");
   });
   content.innerHTML =
-    '<div class="loading-state" role="status"><div class="spinner"></div><span>Loading demo records…</span></div>';
+    `<div class="loading-state" role="status"><div class="spinner"></div><span>${page.live ? "Opening live showcase…" : "Loading demo records…"}</span></div>`;
   try {
-    const snap = await api.getSnapshot();
-    if (id !== renderId) return;
-    document.querySelector("#demo-date").textContent =
-      `${formatDate(snap.now)} · Demo clock`;
-    updateBanner(snap);
+    if (page.live) {
+      document.querySelector("#demo-date").textContent = "HKT (UTC+8)";
+      document.querySelector("#scenario-banner").hidden = true;
+    } else {
+      const snap = await api.getSnapshot();
+      if (id !== renderId) return;
+      document.querySelector("#demo-date").textContent = `${formatDate(snap.now)} · Demo clock`;
+      updateBanner(snap);
+    }
     const stage = document.createElement("div");
     content.replaceChildren(stage);
     const off = await page.render(stage, {
@@ -231,6 +245,7 @@ api.subscribe(() => {
   updateHeader().catch(reportError);
 });
 async function updateHeader() {
+  if (pages[current].live) return;
   const snapshot = await api.getSnapshot();
   updateBanner(snapshot);
   document.querySelector("#demo-date").textContent =
