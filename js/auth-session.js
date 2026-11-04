@@ -5,7 +5,7 @@ const CALLBACKS = new Set([
   "https://dkbznu9f5nh9n.cloudfront.net/auth/callback.html",
   "http://localhost:8000/auth/callback.html",
 ]);
-const RETURNS = new Set(["#overview", "#exhibits", "#labels", "#activity", "#reports", "#staff"]);
+const RETURNS = new Set(["#overview", "#exhibits", "#labels", "#activity", "#reports", "#staff", "#live-demo"]);
 
 export function base64url(bytes) {
   const encoded = btoa(String.fromCharCode(...bytes));
@@ -62,11 +62,16 @@ export function createStaffSession(runtime = {}) {
   };
 
   async function fetchResponse(url, options = {}) {
+    if (options.signal?.aborted) throw new SessionError("The live data request was cancelled.", 0, "request_cancelled");
     const controller = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
     const timeout = setTimer(() => controller.abort(), 15000);
     try {
-      return await fetcher(url, { ...options, credentials: "omit", cache: "no-store", signal: controller.signal });
+      return await fetcher(url, { ...options, credentials: "omit", cache: "no-store", signal });
     } catch (_error) {
+      if (options.signal?.aborted && (!options.method || options.method === "GET")) {
+        throw new SessionError("The live data request was cancelled.", 0, "request_cancelled");
+      }
       throw new SessionError("The request did not finish. An action may already have happened; refresh current records before retrying.", 0, "network_error");
     } finally { clearTimer(timeout); }
   }
@@ -125,7 +130,7 @@ export function createStaffSession(runtime = {}) {
       throw error;
     }
   }
-  async function request(path, { method = "GET", body, version } = {}) {
+  async function request(path, { method = "GET", body, version, signal } = {}) {
     if (!/^\/[A-Za-z0-9_/?=&%.,:-]*$/.test(path) || path.includes("..") || path.startsWith("//")) {
       throw new SessionError("Invalid application operation.", 400, "invalid_path");
     }
@@ -139,11 +144,12 @@ export function createStaffSession(runtime = {}) {
     if (version !== undefined) headers["if-match"] = String(version);
     try {
       const result = await jsonResponse(await fetchResponse(API_BASE + "/staff-api" + path,
-        { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }));
+        { method, headers, signal, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }));
       if (requestGeneration !== generation) throw new SessionError("The staff session changed. Refresh before continuing.", 401, "session_changed");
       return result;
     } catch (error) {
       if (requestGeneration !== generation) throw error;
+      if (signal?.aborted && method === "GET") throw new SessionError("The live data request was cancelled.", 0, "request_cancelled");
       if (error.status === 401) clear("session_expired", "Staff session expired or was signed out. Sign in again to continue.");
       else if (error.status === 403 && error.code === "account_unavailable") clear("disabled_account", "Website account access is unavailable. Contact an Administrator.");
       throw error;
