@@ -16,7 +16,7 @@ Staff sign-in is configured for the production website using the exact `/auth/ca
 
 Use the same origin/port to keep saved demo records. Data is stored in that browser's `localStorage`; it is not shared with a server. If storage is unavailable, an on-screen warning explains that changes are held in memory.
 
-## Explore the seven tabs
+## Explore the dashboard
 
 - **Overview:** confirmed showcase status, environmental readings, assigned exhibit, actual acknowledged label, lighting requests, heatmap, and recent events.
 - **Exhibits:** search/filter, create/edit profiles and limits, simulate an exhibit-tag scan, confirm assignment, and inspect illustrative model metadata.
@@ -24,6 +24,7 @@ Use the same origin/port to keep saved demo records. Data is stored in that brow
 - **Activity:** filter by Hong Kong dates and exhibit, switch heatmap measures, inspect cells with mouse or keyboard, and filter the event log.
 - **Reports:** choose sections and filters, generate a stored preview, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
 - **Staff access:** sign in through Cognito for live website account administration. An Administrator can manage live invitations, roles and account status. The separate expandable browser-local demo edits sample staff/cards and historical accepted/denied attempts; these sample roles and cards do not grant live website access.
+- **Live showcase:** sign in to inspect the shared AWS `demo-test-case` fixture, its actual latest readings, saved profiles/label drafts, confirmed device state, command history and historical report. Changes from the [Python data tools](tools/demo-showcase/README.md) appear automatically while this tab is visible: the next paced read starts 30 seconds after the previous one finishes. Loads never overlap. Hiding the tab, navigating away or signing out stops its requests. Automatic refresh can be paused; **Refresh live data** still performs a single check. The previous display remains visible while loading or after a transient error, with retained sections explicitly marked; a permission denial clears that section. Reads show one page of up to 20 entries per history section; role filtering can leave fewer visible entries. Administrator-only card/access data and Operator exhibit scans follow the backend's role rules. The original showcase tabs retain their browser-local samples.
 - **3D & AI studio:** explore and adjust the 3D model, import a `.glb`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
 
 Image-to-JSON generation requires Cloudflare Workers AI access. Enter your 32-character Cloudflare Account ID and API token in the **3D & AI studio** tab when generating. Credentials are sent to the Python API for that request only; they are not stored in browser storage or written to disk. Production forwards them through CloudFront HTTPS to Lambda without API caching or application request-body logging. Enable the model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. The image is processed in memory and is not saved.
@@ -50,10 +51,13 @@ The fixed demonstration clock starts on **6 October 2026 at 13:20 HKT**, matchin
 ## Source map
 
 ```text
-index.html              App shell and seven-tab navigation
+index.html              App shell and dashboard navigation
 auth/callback.html      Matching app shell for the exact Cognito callback
 js/auth-session.js      PKCE login and memory-only staff tokens
 js/live-accounts.js     Live account controls backed by the staff API
+js/live-showcase.js     Paced, read-only AWS showcase fixture loader
+js/live-refresh.js      Visible-tab refresh scheduler with no overlapping loads
+js/pages/live-demo.js   Signed-in live fixture view and manual refresh
 server.py               Local Python server and shared Cloudflare API functions
 lambda_handler.py       Production Lambda adapter for the showcase API
 BACKEND_ASSET_UPLOAD.md  Backend contract proposal for exhibit .glb and .jpg assets
@@ -69,6 +73,7 @@ js/pages/technology-showcase.js  3D studio and image-to-JSON generator
 css/technology-showcase.css      Showcase-tab components
 js/vendor/              Included Three.js r128 and GLTFLoader
 assets/                 Local SVG illustrations, image and GLB model
+tools/demo-showcase/     Synthetic seed, immutable updater and GET-only report
 ```
 
 The original project under `C:\Coding\EE3070\php` is not modified or removed.
