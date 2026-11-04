@@ -1,15 +1,90 @@
 """Display-independent operations for the bounded desktop demo editor."""
 import hashlib
+import base64
 import json
 import math
+import os
+import tempfile
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
+from urllib.request import Request, build_opener
 
-from demo_common import API, Client, read_private, require_admin, save
+from demo_common import API, Client, NoRedirect, read_private, require_admin, save
 import update_demo
 
 EXHIBITS = ("demo-test-clock", "demo-test-vase", "demo-test-camera")
+TOKEN_ENDPOINT = "https://reshow-835822826851-us-east-1.auth.us-east-1.amazoncognito.com/oauth2/token"
+CLIENT_ID = "uuhbj6m6f94ibe836m2igb70"
+SIGN_IN = "Sign in again and choose a fresh private Administrator OAuth file."
+
+
+def token_expiry(token):
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            raise ValueError()
+        claim = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+        expiry = claim["exp"]
+        if isinstance(expiry, bool) or not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
+            raise ValueError()
+        return expiry  # Renewal hint only; the staff API still authenticates the account.
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        raise ValueError(SIGN_IN) from None
+
+
+def administrator_token(filename):
+    path = Path(filename)
+    try:
+        private = read_private(path)
+        original = path.read_bytes()
+        current = json.loads(original)
+    except json.JSONDecodeError:
+        raise ValueError(SIGN_IN) from None
+    fingerprint = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_mode)
+    before = fingerprint(path.stat())
+    if path.is_symlink() or not path.is_file() or before[-1] & 0o077 or current != private:
+        raise ValueError("The private OAuth file changed. Load current data again.")
+    tokens = private.get("tokens") if isinstance(private, dict) else None
+    config = private.get("config") if isinstance(private, dict) else None
+    if not isinstance(tokens, dict) or not isinstance(tokens.get("access_token"), str):
+        raise ValueError(SIGN_IN)
+    if config is not None and (not isinstance(config, dict) or config.get("token_endpoint") != TOKEN_ENDPOINT
+                               or config.get("client_id") != CLIENT_ID):
+        raise ValueError(SIGN_IN)
+    if token_expiry(tokens["access_token"]) > time.time() + 30:
+        return tokens["access_token"]
+    if config is None or not isinstance(tokens.get("refresh_token"), str) or not tokens["refresh_token"]:
+        raise ValueError(SIGN_IN)
+    request = Request(TOKEN_ENDPOINT, data=urlencode({"grant_type": "refresh_token", "client_id": CLIENT_ID,
+        "refresh_token": tokens["refresh_token"]}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with build_opener(NoRedirect()).open(request, timeout=20) as response:
+            renewed = json.loads(response.read(65537))
+        if (not isinstance(renewed, dict) or not isinstance(renewed.get("access_token"), str)
+                or len(renewed["access_token"]) < 32 or any(c.isspace() for c in renewed["access_token"])
+                or token_expiry(renewed["access_token"]) <= time.time() + 30
+                or "refresh_token" in renewed and (not isinstance(renewed["refresh_token"], str) or not renewed["refresh_token"])):
+            raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ValueError("Session renewal failed. " + SIGN_IN) from None
+    private["tokens"] = {**tokens, **renewed}
+    descriptor, temporary = tempfile.mkstemp(prefix=".reshow-renew-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(private, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.is_symlink() or fingerprint(path.stat()) != before or path.read_bytes() != original:
+            raise ValueError("The private OAuth file changed during renewal. Load current data again.")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return renewed["access_token"]
 
 
 def exhibit_id(value):
@@ -68,12 +143,7 @@ class DemoEditor:
             return self._admin
         if not self.admin_tokens:
             raise ValueError("Choose a current private Administrator token file first.")
-        # Re-read each action so replacing an expired token file takes effect.
-        private = read_private(self.admin_tokens)
-        tokens = private.get("tokens") if isinstance(private, dict) else None
-        if not isinstance(tokens, dict) or not isinstance(tokens.get("access_token"), str):
-            raise ValueError("The Administrator file does not contain an access token.")
-        return Client(tokens["access_token"])
+        return Client(administrator_token(self.admin_tokens))
 
     def load(self, selected):
         selected = exhibit_id(selected)
