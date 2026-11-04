@@ -1,13 +1,21 @@
 """Desktop editor service behavior; no display, credentials or network required."""
 import copy
+import base64
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 
 from demo_ui_service import DemoEditor
+import demo_ui_service as ui
+
+
+def jwt(expiry):
+    claim = base64.urlsafe_b64encode(json.dumps({"exp": expiry}).encode()).decode().rstrip("=")
+    return "e30." + claim + "." + "s" * 40
 
 
 PROFILE = {"name": "Demo clock", "collection": "Demo", "description": "Test exhibit",
@@ -149,14 +157,14 @@ class EditorTests(unittest.TestCase):
 
     def test_replacing_the_token_file_is_used_by_the_next_action(self):
         path = self.folder / "private.json"
-        path.write_text(json.dumps({"tokens": {"access_token": "first-test-token"}}))
+        path.write_text(json.dumps({"tokens": {"access_token": jwt(5000)}}))
         os.chmod(path, 0o600)
         editor = DemoEditor(self.folder, admin_tokens=path)
-        with patch("demo_ui_service.Client") as client:
+        with patch("demo_ui_service.Client") as client, patch("demo_ui_service.time.time", return_value=1000):
             editor.admin()
-            path.write_text(json.dumps({"tokens": {"access_token": "replacement-test-token"}}))
+            path.write_text(json.dumps({"tokens": {"access_token": jwt(6000)}}))
             editor.admin()
-        self.assertEqual([call.args[0] for call in client.call_args_list], ["first-test-token", "replacement-test-token"])
+        self.assertEqual([call.args[0] for call in client.call_args_list], [jwt(5000), jwt(6000)])
 
     def test_malformed_private_file_is_a_recoverable_validation_error(self):
         path = self.folder / "private.json"
@@ -183,6 +191,99 @@ class EditorTests(unittest.TestCase):
         admin.rows["/staff-api/exhibit-profiles/demo-test-clock"]["version"] = True
         with self.assertRaisesRegex(ValueError, "current version"):
             editor.load("demo-test-clock")
+
+
+class TokenRenewalTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "private.json"
+        self.value = {"config": {"token_endpoint": ui.TOKEN_ENDPOINT, "client_id": ui.CLIENT_ID},
+                      "tokens": {"access_token": jwt(900), "refresh_token": "private-test-refresh"}, "metadata": {"keep": True}}
+        self.write(self.value)
+        self.clock = patch("demo_ui_service.time.time", return_value=1000)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+
+    def write(self, value):
+        self.path.write_text(json.dumps(value))
+        os.chmod(self.path, 0o600)
+
+    def reply(self, value):
+        class Reply:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, size): return json.dumps(value).encode()
+        return Reply()
+
+    def test_expired_token_renews_once_atomically_and_staff_api_still_checks_account(self):
+        admin = LocalClient()
+        admin.rows["/staff-api/showcases/demo-test-case"] = {"device_id": "demo-test-device"}
+        admin.rows["/staff-api/exhibit-profiles/demo-test-clock"] = {"exhibit_id": "demo-test-clock", "version": 1, "name": "Clock"}
+        with patch("demo_ui_service.build_opener") as factory, patch("demo_ui_service.Client", return_value=admin):
+            factory.return_value.open.return_value = self.reply({"access_token": jwt(5000)})
+            DemoEditor(self.path.parent, admin_tokens=self.path).load("demo-test-clock")
+            factory.return_value.open.assert_called_once()
+            request = factory.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, ui.TOKEN_ENDPOINT)
+            self.assertNotIn(b"scope=", request.data)
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved["tokens"], {**self.value["tokens"], "access_token": jwt(5000)})
+        self.assertEqual(saved["metadata"], self.value["metadata"])
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(admin.calls[0][0], "/staff-api/session")
+        with patch.object(admin, "request", return_value=(200, {"user": {"staff_id": "ee3070-staff", "role": "Viewer"}})), \
+                patch("demo_ui_service.Client", return_value=admin), self.assertRaisesRegex(ValueError, "Administrator"):
+            DemoEditor(self.path.parent, admin_tokens=self.path).load("demo-test-clock")
+
+    def test_fresh_token_uses_no_renewal_http_or_file_write(self):
+        self.value["tokens"]["access_token"] = jwt(5000)
+        self.write(self.value)
+        original = self.path.read_bytes()
+        with patch("demo_ui_service.build_opener") as factory:
+            self.assertEqual(ui.administrator_token(self.path), jwt(5000))
+            factory.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_provider_or_client_mismatch_never_sends_or_overwrites(self):
+        for key, invalid in (("token_endpoint", "https://other.example/token"), ("client_id", "other-client")):
+            value = copy.deepcopy(self.value)
+            value["config"][key] = invalid
+            self.write(value)
+            original = self.path.read_bytes()
+            with patch("demo_ui_service.build_opener") as factory, self.assertRaisesRegex(ValueError, "Sign in again"):
+                ui.administrator_token(self.path)
+            factory.assert_not_called()
+            self.assertEqual(self.path.read_bytes(), original)
+
+    def test_failed_renewal_preserves_original_private_file(self):
+        original = self.path.read_bytes()
+        with patch("demo_ui_service.build_opener") as factory:
+            factory.return_value.open.side_effect = URLError("private error must not be displayed")
+            with self.assertRaisesRegex(ValueError, "Session renewal failed. Sign in again") as error:
+                ui.administrator_token(self.path)
+        self.assertNotIn("private error", str(error.exception))
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_concurrent_file_replacement_wins_over_renewal(self):
+        newer = {**self.value, "tokens": {"access_token": jwt(6000)}, "newer": True}
+        def changed(*args, **kwargs):
+            self.write(newer)
+            return self.reply({"access_token": jwt(5000)})
+        with patch("demo_ui_service.build_opener") as factory:
+            factory.return_value.open.side_effect = changed
+            with self.assertRaisesRegex(ValueError, "changed during renewal"):
+                ui.administrator_token(self.path)
+        self.assertEqual(json.loads(self.path.read_text()), newer)
+        self.assertEqual(list(self.path.parent.glob(".reshow-renew-*")), [])
+
+    def test_malformed_or_nonrenewable_tokens_request_sign_in_without_http(self):
+        for tokens in ({"access_token": "malformed"}, {"access_token": jwt(True)},
+                       {"access_token": jwt(10 ** 400)}, {"access_token": jwt(900)}):
+            self.write({"tokens": tokens})
+            with patch("demo_ui_service.build_opener") as factory, self.assertRaisesRegex(ValueError, "Sign in again"):
+                ui.administrator_token(self.path)
+            factory.assert_not_called()
 
 
 if __name__ == "__main__":

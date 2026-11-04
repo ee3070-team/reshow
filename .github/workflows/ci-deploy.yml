@@ -32,8 +32,8 @@ jobs:
         with:
           python-version: '3.14'
       - run: npm run check && npm test && python3 -m unittest discover -s checks -p '*_test.py' && npm run build && python3 scripts/preflight.py
-      - name: Validate standalone demo data plans
-        run: python3 -m unittest discover -s tools/demo-showcase -p 'test_validation.py'
+      - name: Validate standalone demo data plans and editor
+        run: python3 -m unittest discover -s tools/demo-showcase -p 'test_*.py'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployment-preflight
