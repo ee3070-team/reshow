@@ -9,7 +9,7 @@ export function createLiveRefresh({ load, cancel, changed = () => {}, onError = 
   function clear() { if (timer !== null) clearTimer(timer); timer = null; }
   function schedule() {
     clear();
-    if (active && enabled && !busy && !disposed) timer = setTimer(() => { timer = null; run(); }, interval);
+    if (active && enabled && !busy && !disposed) timer = setTimer(() => { timer = null; run().catch(onError); }, interval);
   }
   async function run() {
     if (!active || busy || disposed) return;
@@ -21,7 +21,7 @@ export function createLiveRefresh({ load, cancel, changed = () => {}, onError = 
     finally {
       busy = false;
       publish();
-      if (wake && active && !disposed) { wake = false; run(); }
+      if (wake && active && !disposed) { wake = false; run().catch(onError); }
       else schedule();
     }
   }
@@ -32,7 +32,7 @@ export function createLiveRefresh({ load, cancel, changed = () => {}, onError = 
       active = next;
       clear();
       if (!active) { wake = false; cancel(); }
-      else if (loadNow) { if (busy) wake = true; else run(); }
+      else if (loadNow) { if (busy) wake = true; else run().catch(onError); }
       publish();
       schedule();
     },
