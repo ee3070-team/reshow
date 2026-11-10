@@ -490,7 +490,7 @@ test("real facade selects Live on callback and routes reads through the shared c
 test("real facade propagates identity changes and rejects a read crossing sign-out", async () => {
   const h = harness();
   const facade = createApi(h.session, { location: h.location });
-  await facade.selectMode("live");
+  await facade.startLiveLogin();
   await h.authenticate();
   let notifications = 0;
   const off = facade.subscribe(() => notifications++);
