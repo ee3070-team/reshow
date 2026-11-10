@@ -15,10 +15,9 @@ Thumbs.db
 # Local development material; not required to run the website
 /project-materials/
 
-# Per-device firmware credentials
-/firmware/**/local_config.h
 /Reference Picture/
 /AGENT.md
+/prompt.md
 /AGENTS.md
 /BACKEND_HANDOFF.md
 /CONTRACT.md
@@ -32,6 +31,9 @@ Thumbs.db
 /sonar-report/
 /.scannerwork/
 /preflight-report.json
+
+# Per-device firmware credentials
+/firmware/**/local_config.h
 
 # Local firmware download bundle; source is tracked for review
 /firmware/*.zip
