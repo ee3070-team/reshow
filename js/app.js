@@ -243,6 +243,13 @@ async function refresh() {
       content.dataset.loadState = "ready";
       return;
     }
+    // The remaining Live pages are introduced by the next PR in this stack.
+    // Keep incomplete editors away from production writes during staged rollout.
+    if (api.isLive() && ["exhibits", "labels", "activity", "reports"].includes(current)) {
+      stage.innerHTML = '<div class="card empty"><h3>Live page integration pending</h3><p>This page is available in Demo. Live support is completed by the next integration update. Overview, Staff access and Live showcase are available now.</p></div>';
+      content.dataset.loadState = "ready";
+      return;
+    }
     const off = await page.render(stage, {
       api,
       navigate,
