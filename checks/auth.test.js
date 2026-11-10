@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { createStaffSession, safeReturnHash, base64url } from "../js/auth-session.js";
+import { createSessionAuth } from "../js/session-auth.js";
 const ORIGIN = "https://dkbznu9f5nh9n.cloudfront.net";
 const CONFIG = {
   client_id: "publicclient123", issuer: "https://cognito-idp.us-east-1.amazonaws.com/unit",
@@ -372,4 +373,59 @@ test("base64url preserves binary bytes and trims padding in a single linear pass
     const bytes = Uint8Array.from({ length }, (_, index) => index % 256);
     assert.equal(base64url(bytes), Buffer.from(bytes).toString("base64url"));
   }
+});
+
+
+test("merged dashboard and live showcase share one callback, identity and request credential", async () => {
+  const h = harness({ location: { hash: "#live-demo" } });
+  const auth = createSessionAuth(h.session, h.location);
+  await auth.startLogin();
+  const transaction = JSON.parse([...h.persisted.values()][0]);
+  assert.equal(transaction.returnHash, "#live-demo");
+  h.location.pathname = "/auth/callback.html";
+  h.location.search = "?" + new URLSearchParams({ state: transaction.state, code: "synthetic-code" });
+  await auth.initialize();
+  assert.equal(auth.getSession().id, h.session.snapshot().user.staff_id);
+  assert.equal(auth.can("view"), true);
+  assert.equal(auth.can("manage_accounts"), false);
+  await auth.request("/staff-api/exhibit-profiles/item", { method: "PATCH", headers: { "If-Match": "7" }, body: { name: "Updated" } });
+  const dashboard = h.calls.at(-1);
+  assert.ok(dashboard.url.endsWith("/staff-api/exhibit-profiles/item"));
+  assert.equal(dashboard.init.headers["if-match"], "7");
+  assert.equal(dashboard.init.body, JSON.stringify({ name: "Updated" }));
+  await h.session.request("/showcases");
+  assert.equal(dashboard.init.headers.authorization, h.calls.at(-1).init.headers.authorization);
+  h.session.dispose();
+});
+
+test("merged session subscriptions invalidate on identity changes, not routine permission checks", async () => {
+  const h = harness();
+  await h.authenticate();
+  const auth = createSessionAuth(h.session, h.location);
+  let changes = 0;
+  const off = auth.subscribe(() => changes++);
+  await auth.refreshSession();
+  assert.equal(changes, 0);
+  h.setHandler(url => url.endsWith("/session") ? response({ user: { ...USER, role: "Operator" } }) : null);
+  assert.equal((await auth.refreshSession()).role, "Operator");
+  assert.equal(changes, 1);
+  await auth.signOut();
+  assert.equal(auth.getSession(), null);
+  assert.ok(changes >= 2);
+  assert.ok(h.moves.at(-1).startsWith(CONFIG.logout_endpoint));
+  off(); h.session.dispose();
+});
+
+test("merged dashboard forwards read cancellation and preserves unknown mutation outcomes", async () => {
+  const h = harness();
+  await h.authenticate();
+  const auth = createSessionAuth(h.session, h.location);
+  const controller = new AbortController(); controller.abort();
+  const calls = h.calls.length;
+  await assert.rejects(auth.request("/staff-api/showcases", { signal: controller.signal }), error => error.code === "request_cancelled");
+  assert.equal(h.calls.length, calls);
+  h.setHandler(() => { throw new TypeError("Disconnected"); });
+  await assert.rejects(auth.request("/staff-api/exhibit-profiles/item", { method: "PATCH", body: {} }), /may already have happened/);
+  assert.equal(h.calls.length, calls + 1, "No mutation retries");
+  h.session.dispose();
 });
