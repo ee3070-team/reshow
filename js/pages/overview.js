@@ -14,6 +14,17 @@ import {
   activityNotes,
 } from "../ui.js";
 
+export function applyNavigationAvailability(container, canNavigate) {
+  const targets = [["[data-edit], [data-change]", "exhibits"], ["[data-label]", "labels"], ["[data-events], [data-alert]", "activity"]];
+  for (const [selector, target] of targets) {
+    if (canNavigate?.(target) !== false) continue;
+    container.querySelectorAll(selector).forEach(button => {
+      button.disabled = true;
+      button.title = "This Live page is not yet available.";
+    });
+  }
+}
+
 export async function render(container, ctx) {
   let disposed = false, period = "today", drawing = null, queued = false;
   let cachedActivity = null;
@@ -139,6 +150,7 @@ export async function render(container, ctx) {
         eventType: outBrightness ? "brightness" : "temperature",
       }),
     );
+    applyNavigationAvailability(container, ctx.canNavigate);
     container.querySelector("[data-period]").onchange = (event) => {
       period = event.target.value;
       draw().catch(showRefreshError);

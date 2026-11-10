@@ -5,6 +5,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { createApi } from "../js/api.js";
 import { renderLogin } from "../js/login.js";
 import { isOwnStaffRecord } from "../js/pages/staff.js";
+import { applyNavigationAvailability } from "../js/pages/overview.js";
 
 const read = async path => (await readFile(path, "utf8")).replaceAll("\r\n", "\n");
 test("callback and home have one identical application shell and complete module graph", async () => {
@@ -20,8 +21,18 @@ test("callback and home have one identical application shell and complete module
     assert.match(html, /css\/technology-showcase\.css/);
     assert.match(html, /id="staff-sign-in"/);
     const imports = JSON.parse(html.match(/<script type="importmap">([\s\S]*?)<\/script>/)[1]).imports;
+    assert.ok(html.indexOf('<script type="importmap">') < html.indexOf('<script type="module"'));
+    // Import-map keys and relative module specifiers normalize to absolute URLs.
+    const base = "https://workspace.example.invalid/";
+    const normalized = new Map(Object.entries(imports).map(([key, value]) => [new URL(key, base).href, new URL(value, base).href]));
     for (const moduleUrl of Object.values(imports)) {
-      assert.ok((await read(moduleUrl.split("?")[0])).length, "Every mapped module exists in the checkout");
+      const source = await read(moduleUrl.split("?")[0]);
+      assert.ok(source.length, "Every mapped module exists in the checkout");
+      for (const [, specifier] of source.matchAll(/(?:from\s*|import\s*)["'](\.{1,2}\/[^"']+)["']/g)) {
+        const canonical = new URL(specifier, new URL(moduleUrl, base)).href;
+        assert.ok(normalized.has(canonical), `${moduleUrl}: ${specifier} resolves to a mapped module`);
+        assert.equal(new URL(normalized.get(canonical)).search, new URL(moduleUrl, base).search);
+      }
     }
     for (const directory of ["js", "js/pages"]) {
       for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -38,6 +49,25 @@ test("callback and home have one identical application shell and complete module
   const staff = await read("js/pages/staff.js");
   assert.doesNotMatch(staff, /renderDemo|data-local-staff/);
   assert.match(staff, /requestClose\(\)\.catch\(reportError\)/);
+});
+
+test("Overview disables links to unavailable pages while preserving existing disabled controls", () => {
+  const edit = {}, change = {}, label = { disabled: true }, events = {}, alert = {};
+  const buttons = new Map([
+    ["[data-edit], [data-change]", [edit, change]],
+    ["[data-label]", [label]], ["[data-events], [data-alert]", [events, alert]],
+  ]);
+  const container = { querySelectorAll: selector => buttons.get(selector) };
+  applyNavigationAvailability(container, () => false);
+  for (const button of [edit, change, label, events, alert]) {
+    assert.equal(button.disabled, true);
+    assert.match(button.title, /not yet available/);
+  }
+  const availableEdit = {}, unavailableLabel = { disabled: true };
+  const available = { querySelectorAll: () => [availableEdit, unavailableLabel] };
+  applyNavigationAvailability(available, () => true);
+  assert.equal(availableEdit.disabled, undefined);
+  assert.equal(unavailableLabel.disabled, true, "Availability must not override record/permission restrictions");
 });
 
 test("workspace uses the merged facade and Demo persona cannot become a Live identity", async () => {
