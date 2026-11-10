@@ -705,9 +705,11 @@ export async function saveStaff(profile) {
   if (!["Administrator", "Operator", "Viewer"].includes(profile.role))
     error("Choose a valid role.", { role: "Invalid role" });
   if (existing?.role === "Administrator" && profile.role !== "Administrator") {
+    const actor = currentStaff();
+    if (!actor) error("Sign in to continue.");
     if (state.staff.filter((p) => p.role === "Administrator").length <= 1)
       error("Keep at least one Administrator. Add another Administrator before changing this role.", { role: "At least one Administrator is required" });
-    if (existing.id === currentStaff().id)
+    if (existing.id === actor.id)
       error("You cannot change your own Administrator role. Ask another Administrator to make this change.", { role: "You cannot demote yourself" });
   }
   const record = {

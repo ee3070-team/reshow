@@ -340,8 +340,12 @@ document.querySelector("#demo-controls").onclick = handleAction(async () => {
           )
         ) {
           dirty = false;
-          await api.resetDemo();
+          const snapshot = await api.resetDemo();
           d.close();
+          if (!snapshot) {
+            showLogin("Demo records were reset. Your custom demo account was removed; choose a sample staff email to sign in again.");
+            return;
+          }
           await refresh();
         }
       });
