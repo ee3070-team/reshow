@@ -27,6 +27,11 @@ const paths = {
   database:
     "M21 5c0 2-4 4-9 4S3 7 3 5s4-4 9-4 9 2 9 4ZM3 5v14c0 2 4 4 9 4s9-2 9-4V5M3 12c0 2 4 4 9 4s9-2 9-4",
 };
+export function staffIdentity(user) {
+  const name = typeof user?.name === "string" && user.name.trim() ? user.name.trim() : "Staff member";
+  return { name, initials: name.split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase() };
+}
+
 export const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,

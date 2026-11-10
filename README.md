@@ -220,8 +220,8 @@ The unused duplicate OAuth implementation has been removed. Facade tests exercis
 the shared session, callback mode, identity invalidation and actual request headers.
 
 Both entry shells use one application script and matching complete import maps
-at revision `20261110-review-4`. The callback differs only by its root base URL.
-Local verification: syntax checks and 63 repository JavaScript tests; earlier
+at revision `20261110-review-5`. The callback differs only by its root base URL.
+Local verification: syntax checks and 65 repository JavaScript tests; earlier
 integration checks also covered the local dashboard suite and eight-tab navigation. Synthetic tests cover the
 shared callback/session, request versions, cancellation and sign-out; no live
 account changes or device operations were performed. Linux deployment and Python
@@ -240,3 +240,5 @@ its view is disposed. Both entry shells use revision `20261110-review-1`.
 
 The firmware ZIP is a local convenience bundle and is not tracked; review and use
 the source under `firmware/ReShow/`.
+
+The repository test suite also opens the real home and callback shells in headless Chromium, verifying that the sign-in UI renders and normalized relative imports share the same versioned API module. CI requires Chromium; local runs without a browser explicitly skip that one integration test. The test uses a temporary profile and a loopback server restricted to public runtime paths.
