@@ -68,6 +68,10 @@ test("Chromium loads home and callback with one versioned API module instance", 
       assert.match(stdout, /data-import-map-verified="true"/, `${path}: canonical and relative imports share one instance`);
       assert.match(stdout, /id="login-form"/, `${path}: the actual app module graph rendered the sign-in form`);
       assert.match(stdout, /data-mode="live"/, `${path}: Live entry is available`);
+      if (path.includes("callback")) {
+        assert.match(stdout, /id="login-mode-badge"[^>]*>Live workspace/, "A failed callback stays in Live sign-in mode");
+        assert.match(stdout, /id="live-login-error"[^>]*>[^<]*(?:invalid|expired)/, "Callback failure is visible in the Live form");
+      }
     }
   } finally {
     server.closeAllConnections();
