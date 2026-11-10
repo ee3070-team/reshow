@@ -5,7 +5,7 @@ const CALLBACKS = new Set([
   "https://dkbznu9f5nh9n.cloudfront.net/auth/callback.html",
   "http://localhost:8000/auth/callback.html",
 ]);
-const RETURNS = new Set(["#overview", "#exhibits", "#labels", "#activity", "#reports", "#staff", "#live-demo"]);
+const RETURNS = new Set(["#overview", "#exhibits", "#labels", "#activity", "#reports", "#staff", "#live-demo", "#technology"]);
 
 export function base64url(bytes) {
   const encoded = btoa(String.fromCharCode(...bytes));

@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { renderLogin } from "./login.js";
+import { renderLiveAccounts } from "./live-accounts.js";
 import {
   icon,
   esc,
@@ -77,7 +78,7 @@ let current = "overview",
   renderId = 0;
 const content = document.querySelector("#page-content");
 const loginScreen = document.querySelector("#login-screen");
-let sessionUser = null, loginCleanup = null;
+let sessionUser = null, loginCleanup = null, accountCleanup = null;
 
 function updateIdentity(user) {
   sessionUser = user;
@@ -88,6 +89,7 @@ function updateIdentity(user) {
   document.querySelector("#workspace-mode").textContent = api.isLive() ? "Live backend" : "Demo data";
   document.querySelector("#workspace-note").textContent = api.isLive() ? "Connected staff workspace" : "Prototype · Case 01";
   document.querySelector("#live-refresh").hidden = !api.isLive();
+  document.querySelector("#staff-sign-in").hidden = !api.isLive();
   document.querySelector("#mode-footer").textContent = api.isLive() ? "Live backend · Device execution requires producer acknowledgement · All times HKT (UTC+8)" : "Simulated devices & acknowledgements · All times HKT (UTC+8)";
 }
 
@@ -104,6 +106,8 @@ function showLogin(message = "") {
   cleanup?.();
   cleanup = null;
   loginCleanup?.();
+  accountCleanup?.();
+  accountCleanup = null;
   sessionUser = null;
   dirty = false;
   content.replaceChildren();
@@ -209,8 +213,8 @@ async function refresh() {
   document.title = `ReShow · ${page.title}`;
   document.querySelector("#page-title").textContent = page.title;
   document.querySelector("#page-subtitle").textContent = page.subtitle;
-  document.querySelector("#page-mode").textContent = page.live ? "Live AWS showcase" : "Local showcase demo";
-  document.querySelector("#demo-controls").hidden = Boolean(page.live);
+  document.querySelector("#workspace-mode").textContent = page.live ? "Live AWS showcase" : api.isLive() ? "Live backend" : "Demo data";
+  document.querySelector("#demo-controls").hidden = Boolean(page.live) || !api.can("demo");
   document.querySelector("#report-shortcut").hidden = ![
     "overview",
     "activity",
@@ -282,7 +286,7 @@ function updateBanner(snap) {
     ? `<div class="notice ${mode === "offline" || mode === "failed" ? "warning" : "info"}">${icon("info")}${esc(message)}</div>`
     : "";
 }
-document.querySelector("#demo-controls").onclick = async () => {
+document.querySelector("#demo-controls").onclick = handleAction(async () => {
   if (!(await requireSession()) || !api.can("demo")) return;
   const snap = await api.getSnapshot();
   const mode = api.getDemoMode();
@@ -334,6 +338,18 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+document.querySelector("#staff-sign-in").onclick = handleAction(async () => {
+  if (!(await canLeave()) || !api.isLive()) return;
+  showDialog("Live website account", '<div data-account-panel></div>', dialog => {
+    let stop, closed = false;
+    accountCleanup = () => { closed = true; stop?.(); };
+    dialog.addEventListener("close", () => { accountCleanup?.(); accountCleanup = null; }, { once: true });
+    renderLiveAccounts(dialog.querySelector("[data-account-panel]")).then(dispose => {
+      if (closed) dispose(); else stop = dispose;
+    }).catch(reportError);
+  });
+});
+
 document.querySelector("#sign-out").onclick = async () => {
   if (!(await canLeave())) return;
   try { await api.signOut(); }
@@ -381,7 +397,7 @@ api.subscribe(async (event) => {
     await requireSession();
   }
 });
-window.addEventListener("popstate", async (e) => {
+window.addEventListener("popstate", handleAction(async (e) => {
   if (!(await requireSession())) return;
   const target = e.state?.tab || location.hash.slice(1);
   if (!(await canLeave())) {

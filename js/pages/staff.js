@@ -10,16 +10,7 @@ import {
   showDialog,
 } from "../ui.js";
 
-import { renderLiveAccounts } from "../live-accounts.js";
-
 export async function render(container, ctx) {
-  container.innerHTML = '<div class="stack"><section data-live-accounts></section><details class="card local-staff-demo"><summary>Browser-local staff and physical-card demo</summary><p class="notice info">These sample staff, scans, roles and acknowledgements are stored only in this browser. They do not change live website accounts or physical card permissions.</p><div data-local-staff></div></details></div>';
-  const stopLive = await renderLiveAccounts(container.querySelector("[data-live-accounts]"));
-  const stopDemo = await renderDemo(container.querySelector("[data-local-staff]"), ctx);
-  return () => { stopLive(); stopDemo?.(); };
-}
-
-async function renderDemo(container, ctx) {
   const { api } = ctx;
   const live = api.getMode?.() === "live";
   if (!api.can("staff")) {

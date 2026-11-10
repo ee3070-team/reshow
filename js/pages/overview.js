@@ -6,7 +6,6 @@ import {
   dateKey,
   badge,
   toast,
-  reportError,
   statusStrip,
   metric,
   heatmap,

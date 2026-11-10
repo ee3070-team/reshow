@@ -208,3 +208,23 @@ The last recorded GitHub AWS role trust rejects new role assumptions at **27 Dec
 After checks, Sonar and AI review succeed, deployment assumes `ee3070-reshow-github-actions` in AWS account `835822826851` using OIDC. Before any production change, the constrained SSM document `EE3070-ReShow-ValidateFrontend` validates the installed extractor against the exact commit on existing instance `i-00301bb65c9133a63` in `us-east-1`. For the one existing manual auth release, `EE3070-ReShow-AdoptFrontend` first compares every installed public file path/hash against immutable source commit `03ce9a0e269337055388d45a04d52cdae411c072` before adding the missing release metadata. It does not switch the release or restart the service. An existing valid release marker is a no-op; a different unmarked release, content mismatch or invalid marker blocks deployment. The legacy commit is retained in repository history so rollback can retrieve its exact authenticated runtime. The workflow stages and checks an immutable Lambda API version, deploys that commit's static files, then activates the API alias. CloudFront distribution `E1P2W5YKS25NPQ` is invalidated, then the workflow verifies both `release.json` and `/api/health` report that commit at **https://dkbznu9f5nh9n.cloudfront.net**. Deployment failures after static deployment begins trigger restoration of the previous API alias and static release; rollback errors fail explicitly. Manual dispatch from other branches runs checks only. The AI gateway is separate from website hosting.
 
 Infrastructure prerequisites are the OIDC trust restricted to this repository's immutable-ID `master` subject (the account uses GitHub's repository-ID subject format), least-privilege SSM/parameter/CloudFront/Lambda permissions, the constrained validation, adoption and deployment SSM documents and installed deployment helper, and the reviewed `infra/studio-api.json` and `infra/frontend.json` resources. The private Lambda Function URL requires AWS IAM authentication and CloudFront origin access control; `/api/*` uses HTTPS with POST support and caching disabled. A missing prerequisite causes an explicit failed run. The callback, index and JavaScript use disabled CloudFront caching; the trusted static server marks the callback no-store and removes query strings from request logs. CloudFront overrides Referrer-Policy with no-referrer and does not log access queries. Browser demo records remain local to each origin. The separate staff API enforces real website account permissions; the studio Python API supports image generation. No initial Administrator invitation is sent by deployment.
+
+
+## PR #7 integration (10 November 2026)
+
+The dashboard, Live showcase, and Website account panel now share the same
+`auth-session.js` staff session. `session-auth.js` adapts that session for the
+six-tab API facade, preserving request cancellation and exact If-Match versions.
+Demo mode still uses the separate local login. In Live mode, the **Website account**
+header button opens account administration; **Staff access** manages the directory
+and physical cards. The Live showcase and 3D & AI studio tabs from master remain available.
+The older `auth.js` implementation is retained for reference and its existing tests;
+the running dashboard uses the shared session instead.
+
+Both entry shells use one application script and matching complete import maps
+at revision `20261110-merge-1`. The callback differs only by its root base URL.
+Local verification: syntax checks, 54 repository JavaScript tests, the 121-test
+local dashboard suite, and eight-tab browser navigation. Synthetic tests cover the
+shared callback/session, request versions, cancellation and sign-out; no live
+account changes or device operations were performed. Linux deployment and Python
+3.14 checks run in GitHub CI, since this workstation has Windows and Python 3.10.

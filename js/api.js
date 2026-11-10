@@ -1,8 +1,9 @@
 import { api as demo } from "./services.js";
-import { createAuth, DEFAULT_API_ORIGIN } from "./auth.js";
+import { createSessionAuth } from "./session-auth.js";
+import { staffSession, createStaffSession } from "./auth-session.js";
 import { createLiveApi } from "./live-api.js";
 
-const auth = createAuth({ apiOrigin: globalThis.document?.querySelector('meta[name="reshow-api-origin"]')?.content || DEFAULT_API_ORIGIN });
+const auth = createSessionAuth(staffSession || createStaffSession({ channel: null }));
 globalThis.document?.documentElement?.setAttribute("data-api-build", "2026-11-04-live-timing");
 // Read-only local timing evidence. Never retain request URLs/IDs, headers,
 // response bodies, signed media links or authentication values.
