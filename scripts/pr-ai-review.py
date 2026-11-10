@@ -207,12 +207,19 @@ def parse_decision(result):
     try:
         choices = result['choices']
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-            raise ReviewError('AI response schema is invalid; no AI verdict was accepted')
+            raise ReviewError('AI response must contain exactly one completion object; no AI verdict was accepted')
         if choices[0].get('finish_reason') != 'stop':
             raise ReviewError('AI completion is incomplete; no AI verdict was accepted')
         decision = json.loads(choices[0]['message']['content'])
-        if not isinstance(decision, dict) or set(decision) != {'decision', 'blockers', 'review'}:
-            raise ReviewError('AI response schema is invalid; no AI verdict was accepted')
+        if not isinstance(decision, dict):
+            raise ReviewError('AI verdict must be a JSON object; no AI verdict was accepted')
+        expected = {'decision', 'blockers', 'review'}
+        if set(decision) != expected:
+            # Report only fixed field names and a count, never arbitrary model data.
+            missing = ', '.join(sorted(expected - set(decision))) or 'none'
+            extra_count = len(set(decision) - expected)
+            raise ReviewError(f'AI verdict fields are invalid (missing: {missing}; extra fields: {extra_count}); '
+                              'no AI verdict was accepted')
         blockers, review = decision['blockers'], decision['review']
         if (decision['decision'] not in ('pass', 'block') or not isinstance(blockers, list)
                 or len(blockers) > 20 or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 2000 for item in blockers)
@@ -228,6 +235,21 @@ def parse_decision(result):
 def ai_review(files, model, key):
     payload = {
         'model': model, 'max_tokens': 8192, 'reasoning_effort': 'low',
+        'response_format': {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': 'pr_review', 'strict': True,
+                'schema': {
+                    'type': 'object', 'additionalProperties': False,
+                    'required': ['decision', 'blockers', 'review'],
+                    'properties': {
+                        'decision': {'type': 'string', 'enum': ['pass', 'block']},
+                        'blockers': {'type': 'array', 'items': {'type': 'string'}},
+                        'review': {'type': 'string'},
+                    },
+                },
+            },
+        },
         'messages': [
             {'role': 'system', 'content': (
                 'Review this complete pull request diff for concrete correctness, security, integration and '

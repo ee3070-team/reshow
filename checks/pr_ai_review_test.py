@@ -101,6 +101,14 @@ class PrReviewTests(unittest.TestCase):
         url, key, payload = gateway.call_args.args
         self.assertEqual(url, review.AI_BASE + '/chat/completions')
         self.assertEqual(key, 'ai-key-secret')
+        output = payload['response_format']
+        self.assertEqual(output['type'], 'json_schema')
+        self.assertIs(output['json_schema']['strict'], True)
+        schema = output['json_schema']['schema']
+        self.assertIs(schema['additionalProperties'], False)
+        self.assertEqual(set(schema['required']), {'decision', 'blockers', 'review'})
+        self.assertEqual(set(schema['properties']), set(schema['required']))
+        self.assertEqual(schema['properties']['decision']['enum'], ['pass', 'block'])
         evidence = json.loads(payload['messages'][1]['content'])
         self.assertEqual(evidence['files'][0]['patch'], FILE['patch'])
         self.assertNotIn('tools', payload)
@@ -152,6 +160,28 @@ class PrReviewTests(unittest.TestCase):
                 if stage == 'key':
                     gateway.assert_not_called()
                 self.assertNotIn('Model:', github.body())
+
+    def test_invalid_fields_report_only_fixed_names_and_counts(self):
+        github = FakeGitHub()
+        arbitrary_field = 'private-model-text-should-never-be-logged'
+        result, _, _ = self.execute(github, completion({
+            'decision': 'pass', arbitrary_field: 'sensitive model content',
+        }))
+        self.assertEqual(result, 1)
+        self.assertIn('missing: blockers, review', github.body())
+        self.assertIn('extra fields: 1', github.body())
+        self.assertNotIn(arbitrary_field, github.body())
+        self.assertNotIn('sensitive model content', github.body())
+        self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+
+    def test_unsupported_structured_output_fails_closed_without_fallback(self):
+        github = FakeGitHub()
+        with patch.object(review, 'load_key', return_value='key'), patch.object(
+                review, 'request_json', side_effect=review.ReviewError('API request failed (HTTP 400)')) as gateway:
+            self.assertEqual(review.process(github, copy.deepcopy(EVENT)), 1)
+        gateway.assert_called_once()
+        self.assertIn('HTTP 400', github.body())
+        self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
 
     def test_failed_cancelled_missing_or_skipped_required_ci_does_not_call_ai(self):
         for conclusion in ('failure', 'cancelled', 'timed_out', 'missing', 'skipped'):
