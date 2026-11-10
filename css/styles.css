@@ -1321,3 +1321,10 @@ dialog::backdrop {
     color: inherit;
   }
 }
+
+/* API coverage states share the desktop heatmap without hiding overnight records. */
+.heatmap-scroll { overflow-x: auto; max-width: 100%; }
+.heatmap-cell.partial, .heatmap-cell.unknown_assignment, .heatmap-cell.ambiguous_assignment { background: repeating-linear-gradient(135deg,#e8c47b,#e8c47b 4px,#fff4dc 4px,#fff4dc 8px); }
+.heatmap-cell.no_known_display { background: #eef1f5; border-style: dashed; }
+.evidence-notes { align-items: flex-start; font-size: 12px; overflow-wrap: anywhere; }
+.evidence-notes p { margin-top: 5px; }

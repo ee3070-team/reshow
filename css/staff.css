@@ -369,3 +369,9 @@
 .staff-access-log .card-head h2 {
   white-space: nowrap;
 }
+
+.staff-accounts { padding: 22px; }
+.staff-accounts > p { margin: 0 0 18px; }
+.staff-account-form { display: grid; gap: 16px; }
+.staff-account-form > p { margin: 0; overflow-wrap: anywhere; }
+.staff-scan [data-scan-detail] { overflow-wrap: anywhere; }
