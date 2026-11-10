@@ -367,6 +367,7 @@
 }
 .label-image-control {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 22px;
   margin: 16px 0;

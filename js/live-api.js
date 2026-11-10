@@ -1,5 +1,7 @@
 // Live staff API adapter. Device observations and receipts are authoritative.
 // This module never produces telemetry, scans or acknowledgements.
+import { createImageUploader } from "./image-upload.js";
+
 const PREFIX = "/staff-api";
 const SNAPSHOT_COLLECTIONS = ["exhibits", "operations", "staff", "reports", "events"];
 const clone = (value) => value == null ? value : JSON.parse(JSON.stringify(value));
@@ -49,7 +51,7 @@ const role = (value) => {
 const date = (instant) => new Date(Date.parse(instant) + 8 * 3600000).toISOString().slice(0, 10);
 const endDate = (instant) => date(new Date(Date.parse(instant) - 1).toISOString());
 
-export function createLiveApi(auth) {
+export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTimeoutMs = 60000 } = {}) {
   if (typeof auth?.request !== "function") throw new TypeError("A staff authentication request adapter is required.");
   const listeners = new Set(), drafts = new Map(), staffRecords = new Map(), media = new Map(), mediaWarnings = new Map();
   const pendingCreates = new Map(), pendingCommands = new Map(), snapshotRequests = new Map();
@@ -58,6 +60,7 @@ export function createLiveApi(auth) {
   let requestTail = Promise.resolve(), nextRequestAt = 0, generation = 0;
   const identity = () => JSON.stringify(auth.getSession?.() || null);
   let sessionIdentity = identity();
+  let sessionController = new AbortController();
   let selectedShowcaseId = null, selectedShowcase = null, pollTimer = null, pollBusy = false, pollEpoch = 0;
   let pollReads = null;
   const snapshotPending = new Map();
@@ -71,6 +74,19 @@ export function createLiveApi(auth) {
     if (!auth.getSession?.()) throw issue("Sign in to continue.", "unauthorized", 401);
     if (!can(permission)) throw issue("Your current account does not permit this action.", "forbidden", 403);
   }
+  function editContext() {
+    const expectedGeneration = generation, expectedIdentity = identity();
+    return {
+      sessionSignal: sessionController.signal,
+      assertCurrent() {
+        checkGeneration(expectedGeneration);
+        if (identity() !== expectedIdentity) throw issue("The signed-in account changed. Reload this view.", "session_changed", 401);
+        requirePermission("editExhibits");
+      },
+    };
+  }
+  const upload = createImageUploader({ request, issue, newMediaId: () => uid("media"), fetchUpload: uploadFetch, timeoutMs: uploadTimeoutMs });
+  const uploadImage = (file, options) => upload(file, options, editContext());
   // Mutation notifications run independently: a delayed view must not delay an
   // accepted write. allSettled observes subscriber failures; polling awaits it.
   function emit(event) {
@@ -89,10 +105,12 @@ export function createLiveApi(auth) {
   function sharedPollReads() {
     return pollReads?.generation === generation && pollReads.showcaseId === selectedShowcaseId ? pollReads : null;
   }
-  async function requestSlot(expectedGeneration) {
+  async function requestSlot(expectedGeneration, signal) {
     const turn = requestTail.then(async () => {
+      signal?.throwIfAborted();
       const wait = nextRequestAt - Date.now();
       if (wait > 0) await sleep(wait);
+      signal?.throwIfAborted();
       if (generation !== expectedGeneration) throw issue("The signed-in account changed. Reload this view.", "session_changed", 401);
       nextRequestAt = Date.now() + minimumRequestIntervalMs;
     });
@@ -102,7 +120,8 @@ export function createLiveApi(auth) {
   async function performRequest(path, options, expectedGeneration) {
     try {
       for (let attempt = 0; ; attempt++) {
-        await requestSlot(expectedGeneration);
+        await requestSlot(expectedGeneration, options.signal);
+        options.signal?.throwIfAborted();
         try {
           const result = await auth.request(path, options);
           if (generation !== expectedGeneration) throw issue("The signed-in account changed. Reload this view.", "session_changed", 401);
@@ -114,6 +133,7 @@ export function createLiveApi(auth) {
       }
     }
     catch (error) {
+      if (options.signal?.aborted) throw error;
       if (error.status === 401) error.message = "Your live session expired or was revoked. Sign in again.";
       else if (error.status === 403) error.message = `Your current account does not permit this action. ${error.message || ""}`.trim();
       else if (error.status === 409 || error.status === 428) error.message = `The record or device request conflicts with current server state. Reload and review before retrying. ${error.message || ""}`.trim();
@@ -153,10 +173,12 @@ export function createLiveApi(auth) {
   }
   async function imageUrl(mediaId) {
     if (!mediaId) return "";
+    const expectedGeneration = generation;
     const cached = media.get(mediaId);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
     try {
       const result = await request(`${PREFIX}/media/${encode(mediaId)}`);
+      checkGeneration(expectedGeneration);
       const url = result.download?.url || "";
       if (url && !/^https:\/\//i.test(url)) throw issue("The server returned an invalid media download URL.", "invalid_response", 502);
       if (!url) throw issue("The private image is not ready.", "media_not_ready", 409);
@@ -164,6 +186,7 @@ export function createLiveApi(auth) {
       media.set(mediaId, { url, expiresAt: Date.now() + Math.max(0, (result.download?.expires_in_seconds || 0) - 30) * 1000 });
       return url;
     } catch (error) {
+      checkGeneration(expectedGeneration);
       if (error.status === 401) throw error;
       mediaWarnings.set(mediaId, `Private image unavailable${error.status ? ` (${error.status})` : ""}. The existing media reference is preserved.`);
       media.set(mediaId, { url: "", expiresAt: Date.now() + 30000 });
@@ -292,8 +315,33 @@ export function createLiveApi(auth) {
     if (!pendingCreates.has(key)) pendingCreates.set(key, uid(prefix));
     return pendingCreates.get(key);
   }
+  function matchesFields(item, body) {
+    return item && Object.entries(body).every(([key, value]) => item[key] === value);
+  }
+  async function writeAssociation(path, options, readPath, matches, assertCurrent) {
+    let result;
+    try { result = await request(path, options); }
+    catch (error) {
+      assertCurrent();
+      const unreadableSuccess = error.code === "invalid_response" && error.status >= 200 && error.status < 300;
+      if (!error.ambiguous && error.status !== 503 && !unreadableSuccess) throw error;
+      // Reconciliation needs a read started after the write, even if an older
+      // view read for this record is still in flight.
+      try { result = await performRequest(readPath, {}, generation); }
+      catch { assertCurrent(); throw error; }
+      assertCurrent();
+      if (!matches(result?.item)) throw error;
+      return result;
+    }
+    assertCurrent();
+    if (result?.status === "duplicate" && !matches(result.item)) {
+      throw issue("The exhibit was created earlier and has since changed. Reload it before editing.", "version_conflict", 409);
+    }
+    return result;
+  }
   async function saveExhibit(profile) {
-    requirePermission("editExhibits");
+    const { assertCurrent } = editContext();
+    assertCurrent();
     const tagId = identifier(text(profile.tagId, "tagId", 64).toUpperCase(), "tagId");
     if (tagId.startsWith("CARD-")) throw issue("Staff card identifiers cannot be exhibit tags.", "validation", 400, { tagId: "Use an exhibit tag" });
     const body = { name: text(profile.name, "name", 120), description: text(profile.description, "description", 2000, false), tag_id: tagId,
@@ -304,10 +352,17 @@ export function createLiveApi(auth) {
       throw issue("Minimum thresholds must be below maximum thresholds.");
     if (profile.id && !own(profile, "imageMediaId") && !own(profile, "image_media_id")) delete body.image_media_id;
     const key = `exhibit:${tagId}`;
-    const result = profile.id ? await request(`${PREFIX}/exhibit-profiles/${encode(identifier(profile.id))}`, { method: "PATCH", headers: { "If-Match": version(profile.version) }, body })
-      : await request(`${PREFIX}/exhibit-profiles`, { method: "POST", body: { exhibit_id: createId(key, "ex"), ...body } });
+    const id = profile.id ? identifier(profile.id) : createId(key, "ex");
+    const path = `${PREFIX}/exhibit-profiles`, readPath = `${path}/${encode(id)}`;
+    const options = profile.id ? { method: "PATCH", headers: { "If-Match": version(profile.version) }, body }
+      : { method: "POST", body: { exhibit_id: id, ...body } };
+    const nextVersion = profile.id ? profile.version + 1 : 1;
+    const result = await writeAssociation(profile.id ? readPath : path, options, readPath,
+      item => item?.exhibit_id === id && item.version === nextVersion && matchesFields(item, body), assertCurrent);
     pendingCreates.delete(key); void emit();
-    return exhibitRecord(result.item, selectedShowcase ? [selectedShowcase] : []);
+    const saved = await exhibitRecord(result.item, selectedShowcase ? [selectedShowcase] : []);
+    assertCurrent();
+    return saved;
   }
   async function queue(type, payload, requestId) {
     requirePermission(type === "card" ? "cards" : "operate");
@@ -319,25 +374,40 @@ export function createLiveApi(auth) {
     pendingCommands.delete(key); void emit();
     return commandRecord(result.item);
   }
+  function rememberDraft(exhibitId, draft) {
+    const previous = drafts.get(exhibitId);
+    // Draft versions only increase. An earlier read may return after a save.
+    if (Number.isInteger(draft?.version) && draft.version > (previous?.version ?? 0)) drafts.set(exhibitId, clone(draft));
+  }
   async function getLabel(exhibitId) {
     requirePermission("view"); identifier(exhibitId);
+    const expectedGeneration = generation;
     let draft;
     try { draft = (await request(`${PREFIX}/label-drafts/${encode(exhibitId)}`)).item; }
     catch (error) { if (error.status !== 404) throw error; draft = null; }
-    drafts.set(exhibitId, clone(draft));
+    checkGeneration(expectedGeneration);
+    rememberDraft(exhibitId, draft);
     const [showcase, history] = await Promise.all([currentShowcase(), commands({ exhibit_id: exhibitId, type: "label" })]);
+    checkGeneration(expectedGeneration);
+    draft = drafts.get(exhibitId) || null;
     const normalized = draft ? await labelContent(draft.content, { version: draft.version }) : null;
-    return { draft: normalized, draftVersion: draft?.version || 0, savedAt: draft?.updated_at || null,
-      confirmed: showcase?.confirmed_label ? { exhibitId: showcase.confirmed_label.exhibit_id, content: await labelContent(showcase.confirmed_label.content), acknowledgedAt: showcase.confirmed_label.acknowledged_at } : null, history, operations: history };
+    const confirmed = showcase?.confirmed_label ? { exhibitId: showcase.confirmed_label.exhibit_id, content: await labelContent(showcase.confirmed_label.content), acknowledgedAt: showcase.confirmed_label.acknowledged_at } : null;
+    checkGeneration(expectedGeneration);
+    return { draft: normalized, draftVersion: draft?.version || 0, savedAt: draft?.updated_at || null, confirmed, history, operations: history };
   }
   async function saveLabelDraft(exhibitId, content) {
-    requirePermission("editExhibits"); identifier(exhibitId);
+    const { assertCurrent } = editContext();
+    assertCurrent(); identifier(exhibitId);
     const previous = drafts.get(exhibitId);
     const expected = content?.version;
     const body = wireLabel(content, previous?.content?.image_media_id);
-    const result = await request(`${PREFIX}/label-drafts/${encode(exhibitId)}`, { method: "PUT", headers: { "If-Match": version(expected, true) }, body });
-    drafts.set(exhibitId, clone(result.item)); void emit();
-    return { draft: await labelContent(result.item.content, { version: result.item.version }), draftVersion: result.item.version, savedAt: result.item.updated_at };
+    const path = `${PREFIX}/label-drafts/${encode(exhibitId)}`;
+    const result = await writeAssociation(path, { method: "PUT", headers: { "If-Match": version(expected, true) }, body }, path,
+      item => item?.exhibit_id === exhibitId && item.version === expected + 1 && matchesFields(item.content, body), assertCurrent);
+    rememberDraft(exhibitId, result.item); void emit();
+    const draft = await labelContent(result.item.content, { version: result.item.version });
+    assertCurrent();
+    return { draft, draftVersion: result.item.version, savedAt: result.item.updated_at };
   }
   async function sendLabel(exhibitId, content) {
     requirePermission("operate");
@@ -596,6 +666,9 @@ export function createLiveApi(auth) {
     const nextIdentity = identity();
     if (nextIdentity !== sessionIdentity) {
       sessionIdentity = nextIdentity; generation++;
+      const previousController = sessionController;
+      sessionController = new AbortController();
+      previousController.abort();
       stopPolling();
       media.clear(); mediaWarnings.clear(); drafts.clear(); scanEvidence = null; staffRecords.clear();
       pendingCreates.clear(); pendingCommands.clear(); snapshotRequests.clear(); inFlightReads.clear();
@@ -606,7 +679,7 @@ export function createLiveApi(auth) {
   });
   const unavailable = async () => { throw issue("Demo simulation is unavailable in live mode.", "live_only", 403); };
   return { getMode: () => "live", getDemoMode: () => "live", can, getSession: auth.getSession, subscribe, getSnapshot,
-    listExhibits, saveExhibit, assignExhibit: (exhibitId) => queue("assignment", { exhibit_id: identifier(exhibitId) }),
+    listExhibits, uploadImage, saveExhibit, assignExhibit: (exhibitId) => queue("assignment", { exhibit_id: identifier(exhibitId) }),
     getLabel, saveLabelDraft, sendLabel, setLighting: (mode) => { if (!["Auto", "On", "Off"].includes(mode)) return Promise.reject(issue("Choose Auto, On or Off lighting.")); return queue("lighting", { mode }); },
     scanAvailability, scanExhibitTag: (options) => waitForScan("exhibit", options), scanStaffCard: (options) => waitForScan("staff_card", options),
     listStaff, saveStaff, registerCard, setCardAccess, getAccessLog, listAccounts, updateAccount,
