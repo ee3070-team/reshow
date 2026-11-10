@@ -11,12 +11,13 @@ import {
 } from "../ui.js";
 
 const message = (error) =>
-  error?.status === 409 || error?.code === "version_conflict" ? "This record changed on the server. Your edits are preserved. Copy your changes, then reopen the editor to load the current version before retrying." : error?.message || "The label could not be updated. Please try again.";
+  error?.code === "version_conflict" || (error?.status === 409 && !error.code) ? "This record changed on the server. Your edits are preserved. Copy your changes, then reopen the editor to load the current version before retrying." : error?.message || "The label could not be updated. Please try again.";
 const same = (a, b) => {
   const normalized = value => value && typeof value === "object" ? Object.fromEntries(Object.keys(value).filter(key => key !== "version" && key !== "imageWarning" && !(key === "image" && Object.hasOwn(value, "imageMediaId"))).sort((left, right) => left.localeCompare(right)).map(key => [key, value[key]])) : value;
   return JSON.stringify(normalized(a)) === JSON.stringify(normalized(b));
 };
 const imageAttributes = (image) => (image ? `src="${esc(image)}"` : "hidden");
+const imageError = "Choose a non-empty PNG, JPEG, or WebP image up to 1 MiB.";
 
 export async function render(container, ctx) {
   const live = ctx.api.getMode?.() === "live";
@@ -30,7 +31,13 @@ export async function render(container, ctx) {
     exhibits[0]?.id ||
     null;
   let label = selectedId ? await ctx.api.getLabel(selectedId) : null;
-  let localPreview = "";
+  let selectedFile = null;
+  let previewUrl = "";
+  let removingImage = false;
+  let upload = null;
+  let editRevision = 0;
+  let previewRevision = 0;
+  let confirming = false;
   let editVersion = label?.draft?.version ?? label?.draftVersion ?? 0;
   let content,
     baseline,
@@ -56,8 +63,13 @@ export async function render(container, ctx) {
     defaultContent();
   content = { ...initialContent() };
   baseline = { ...content };
-  const dirty = () => canOperate && !same(content, baseline);
+  const imageChanged = () => Boolean(selectedFile || removingImage);
+  const dirty = () => canOperate && (imageChanged() || !same(content, baseline));
   const exhibit = () => exhibits.find((item) => item.id === selectedId);
+  const pendingLabel = () => snapshot.operations.find(
+    (operation) => operation.type === "label" && ["pending", "recovery_pending"].includes(operation.status),
+  );
+  const canSend = () => canOperate && !pendingLabel() && snapshot.showcase.online && snapshot.showcase.exhibitId === selectedId;
   const statusTone = (status) =>
     status === "acknowledged"
       ? "success"
@@ -75,7 +87,7 @@ export async function render(container, ctx) {
         .addEventListener("click", () => ctx.navigate("exhibits"));
       return;
     }
-    container.innerHTML = `<div data-page-device-status>${statusStrip(snapshot)}</div><div class="label-selector"><label for="label-exhibit">Linked exhibit</label><select id="label-exhibit">${exhibits.map((item) => `<option value="${esc(item.id)}" ${item.id === selectedId ? "selected" : ""}>${esc(item.name)} · ${esc(item.tagId)}</option>`).join("")}</select></div><div class="label-layout"><section class="card label-editor"><div class="card-head"><div class="heading-with-icon">${icon("tag")}<div><h2>Label content</h2><p class="muted">Linked exhibit: ${esc(exhibit().name)} · ${esc(exhibit().tagId)}</p></div></div></div><form><label class="field">Exhibit title<input name="title" maxlength="${live ? 100 : 90}" required value="${esc(content.title)}"></label><label class="field">Collection<input name="collection" maxlength="${live ? 120 : 100}" ${live ? "" : "required"} value="${esc(content.collection)}"></label><label class="field">Short description<textarea name="description" maxlength="${live ? 2000 : 400}" rows="3" required>${esc(content.description)}</textarea><small class="muted">${canOperate ? "Keep text short for the e-paper display." : "Saved content is shown for review."}</small></label><div class="label-image-control"><img data-editor-image ${imageAttributes(content.image)} alt="Current draft exhibit image"><label class="button image-upload">${icon("upload")} ${live ? "Local image preview" : "Replace image"}<input type="file" accept="image/png,image/jpeg,image/webp" data-image></label></div>${live ? '<p class="notice info">Preview only—not uploaded. Saving preserves the existing remote image reference.</p>' : ""}${content.imageWarning ? `<p class="notice warning">${esc(content.imageWarning)} The saved image reference is preserved.</p>` : ""}<div class="notice warning" data-form-error role="alert" hidden></div><div data-draft-status aria-live="polite"></div><div class="label-editor-actions"><button type="button" class="button" data-save>${icon("report")} Save draft</button><button type="submit" class="button primary" data-send>${icon("arrow")} Send to showcase</button></div><p class="muted small-text" data-send-help></p></form></section><section class="card label-preview-card"><div class="card-head"><h2 class="heading-with-icon">${icon("tag")} Label preview</h2>${badge("Draft", "info")}</div><div class="epaper-frame"><div class="epaper-screen"><img data-preview-image ${imageAttributes(content.image)} alt=""><div><h3 data-preview-title></h3><p data-preview-collection></p><hr><p data-preview-description></p></div></div></div><p class="muted small-text preview-caption">Illustrative preview · Final fit depends on display size</p><div class="device-label-section"><h2 class="heading-with-icon">${icon("cube")} Currently on the showcase</h2><div data-label-reconciliation aria-live="polite"></div><div data-device-label aria-live="polite"></div></div></section></div><section class="card label-history"><h2 class="heading-with-icon">${icon("activity")} Update history</h2><div data-label-history></div><p class="muted small-text">${live ? "An update" : "A mock update"} is confirmed only after the showcase acknowledges it.</p></section>`;
+    container.innerHTML = `<div data-page-device-status>${statusStrip(snapshot)}</div><div class="label-selector"><label for="label-exhibit">Linked exhibit</label><select id="label-exhibit">${exhibits.map((item) => `<option value="${esc(item.id)}" ${item.id === selectedId ? "selected" : ""}>${esc(item.name)} · ${esc(item.tagId)}</option>`).join("")}</select></div><div class="label-layout"><section class="card label-editor"><div class="card-head"><div class="heading-with-icon">${icon("tag")}<div><h2>Label content</h2><p class="muted">Linked exhibit: ${esc(exhibit().name)} · ${esc(exhibit().tagId)}</p></div></div></div><form><label class="field">Exhibit title<input name="title" maxlength="${live ? 100 : 90}" required value="${esc(content.title)}"></label><label class="field">Collection<input name="collection" maxlength="${live ? 120 : 100}" ${live ? "" : "required"} value="${esc(content.collection)}"></label><label class="field">Short description<textarea name="description" maxlength="${live ? 2000 : 400}" rows="3" required>${esc(content.description)}</textarea><small class="muted">${canOperate ? "Keep text short for the e-paper display." : "Saved content is shown for review."}</small></label><div class="label-image-control"><img data-editor-image ${imageAttributes(content.image)} alt="Current draft exhibit image"><label class="button image-upload">${icon("upload")} Replace image<input type="file" accept="image/png,image/jpeg,image/webp" data-image></label>${live && canOperate ? '<button class="button" type="button" data-remove-image hidden>Remove image</button>' : ""}</div>${canOperate ? '<p class="muted small-text">PNG, JPEG, or WebP up to 1 MiB.</p>' : ""}<p class="muted small-text" data-image-status role="status"></p><p class="notice warning" data-image-warning hidden></p><div class="notice warning" data-form-error role="alert" hidden></div><div data-draft-status aria-live="polite"></div><div class="label-editor-actions"><button type="button" class="button" data-save>${icon("report")} Save draft</button><button type="submit" class="button primary" data-send>${icon("arrow")} Send to showcase</button></div><p class="muted small-text" data-send-help></p></form></section><section class="card label-preview-card"><div class="card-head"><h2 class="heading-with-icon">${icon("tag")} Label preview</h2>${badge("Draft", "info")}</div><div class="epaper-frame"><div class="epaper-screen"><img data-preview-image ${imageAttributes(content.image)} alt=""><div><h3 data-preview-title></h3><p data-preview-collection></p><hr><p data-preview-description></p></div></div></div><p class="muted small-text preview-caption">Illustrative preview · Final fit depends on display size</p><div class="device-label-section"><h2 class="heading-with-icon">${icon("cube")} Currently on the showcase</h2><div data-label-reconciliation aria-live="polite"></div><div data-device-label aria-live="polite"></div></div></section></div><section class="card label-history"><h2 class="heading-with-icon">${icon("activity")} Update history</h2><div data-label-history></div><p class="muted small-text">${live ? "An update" : "A mock update"} is confirmed only after the showcase acknowledges it.</p></section>`;
     const form = container.querySelector("form");
     if (!canOperate) {
       container.insertAdjacentHTML("afterbegin", '<div class="notice info">Viewer access · Read-only label content, preview and delivery history.</div>');
@@ -86,7 +98,8 @@ export async function render(container, ctx) {
     }
     for (const name of ["title", "collection", "description"])
       form.elements[name].addEventListener("input", (event) => {
-        if (!ctx.api.can("operate")) return;
+        if (busy || !ctx.api.can("operate")) return;
+        editRevision++;
         content[name] = event.target.value;
         ctx.setDirty(dirty());
         drawPreview();
@@ -95,71 +108,109 @@ export async function render(container, ctx) {
     container
       .querySelector("[data-image]")
       .addEventListener("change", async (event) => {
-        if (!ctx.api.can("operate")) return;
+        if (busy || !ctx.api.can("operate")) return;
         const file = event.target.files[0];
-        if (!file) return;
-        const forId = selectedId;
-        try {
-          if (
-            !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
-            file.size > 1024 * 1024
-          )
-            throw new Error(
-              "Choose a PNG, JPG, or WebP image smaller than 1 MB.",
-            );
-          const image = await fileToDataUrl(file);
-          if (disposed || forId !== selectedId) return;
-          if (live) localPreview = image;
-          else content.image = image;
-          ctx.setDirty(dirty());
-          drawPreview();
-          drawStatus();
-        } catch (error) {
-          showError(error);
-        }
         event.target.value = "";
+        if (!file) return;
+        const current = ++previewRevision;
+        editRevision++;
+        if (file.size < 1 || file.size > 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+          showError(new Error(imageError));
+          return;
+        }
+        container.querySelector("[data-form-error]").hidden = true;
+        try {
+          if (live) {
+            const url = URL.createObjectURL(file);
+            resetImageChange();
+            previewUrl = url;
+            selectedFile = file;
+          } else {
+            const image = await fileToDataUrl(file);
+            if (disposed || current !== previewRevision || busy) return;
+            content.image = image;
+            editRevision++;
+          }
+          editorChanged();
+        } catch (error) {
+          if (!disposed && current === previewRevision) showError(error);
+        }
       });
+    if (live && canOperate) container.querySelector("[data-remove-image]").addEventListener("click", () => {
+      if (busy || !ctx.api.can("operate")) return;
+      const shouldRemove = Boolean(content.image || content.imageMediaId) && !removingImage;
+      resetImageChange();
+      removingImage = shouldRemove;
+      editRevision++;
+      container.querySelector("[data-form-error]").hidden = true;
+      editorChanged();
+    });
     container.querySelector("[data-save]").addEventListener("click", saveDraft);
     form.addEventListener("submit", sendLabel);
     container
       .querySelector("#label-exhibit")
       .addEventListener("change", async (event) => {
         const nextId = event.target.value;
-        if (
-          dirty() &&
-          !(await confirmAction(
+        event.target.value = selectedId;
+        if (busy || confirming || nextId === selectedId) return;
+        if (dirty()) {
+          confirming = true;
+          const discard = await confirmAction(
             "Discard unsaved label changes?",
             "The current edits have not been saved as a draft. Discard them and open the selected exhibit?",
             "Discard changes",
-          ))
-        ) {
-          event.target.value = selectedId;
-          return;
+          );
+          confirming = false;
+          if (!discard || disposed || busy) return;
         }
-        busy = true;
-        event.target.disabled = true;
+        setBusy(true);
         try {
           const nextLabel = await ctx.api.getLabel(nextId);
           if (disposed) return;
           selectedId = nextId;
           label = nextLabel;
           editVersion = label?.draft?.version ?? label?.draftVersion ?? 0;
-          localPreview = "";
-          revision++;
+          resetImageChange();
+          previewRevision++;
+          editRevision++;
           content = { ...initialContent() };
           baseline = { ...content };
           ctx.setDirty(false);
-          busy = false;
           draw();
         } catch (error) {
-          busy = false;
-          event.target.disabled = false;
-          event.target.value = selectedId;
-          showError(error);
+          if (!disposed) showError(error);
+        } finally {
+          if (!disposed) setBusy(false);
         }
       });
     drawPreview();
+    drawImageStatus();
     drawStatus();
+  }
+
+  function resetImageChange() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = "";
+    selectedFile = null;
+    removingImage = false;
+  }
+
+  function editorChanged() {
+    ctx.setDirty(dirty());
+    drawPreview();
+    drawImageStatus();
+    drawStatus();
+  }
+
+  function drawImageStatus(text) {
+    container.querySelector("[data-image-status]").textContent = text ?? (selectedFile
+      ? `${selectedFile.name} · Uploads when saved or sent`
+      : removingImage ? "Image will be removed when saved or sent." : "");
+    if (live && canOperate) {
+      const remove = container.querySelector("[data-remove-image]");
+      remove.hidden = !(selectedFile || content.image || content.imageMediaId);
+      remove.textContent = removingImage ? "Undo removal" : "Remove image";
+    }
   }
 
   function showError(error) {
@@ -176,12 +227,16 @@ export async function render(container, ctx) {
       content.collection || "Collection";
     container.querySelector("[data-preview-description]").textContent =
       content.description || "Short exhibit description";
+    const url = removingImage ? "" : previewUrl || content.image;
     for (const selector of ["[data-preview-image]", "[data-editor-image]"]) {
       const image = container.querySelector(selector);
-      if (localPreview || content.image) image.setAttribute("src", localPreview || content.image);
+      if (url) image.setAttribute("src", url);
       else image.removeAttribute("src");
-      image.hidden = !(localPreview || content.image);
+      image.hidden = !url;
     }
+    const warning = container.querySelector("[data-image-warning]");
+    warning.hidden = !content.imageWarning || imageChanged();
+    warning.textContent = content.imageWarning || "";
   }
 
   function drawStatus() {
@@ -196,23 +251,20 @@ export async function render(container, ctx) {
     const history = [...(label?.history || [])].sort((a, b) =>
       b.requestedAt.localeCompare(a.requestedAt),
     );
-    const pendingOperation = snapshot.operations.find(
-      (operation) =>
-        operation.type === "label" &&
-        ["pending", "recovery_pending"].includes(operation.status),
-    );
+    const pendingOperation = pendingLabel();
     const pending = Boolean(pendingOperation);
     const assigned = snapshot.showcase.exhibitId === selectedId;
-    const savedMatches = label?.draft && same(content, label.draft);
+    const savedMatches = !imageChanged() && label?.draft && same(content, label.draft);
     const deliveredMatches = Boolean(
+      !imageChanged() &&
       confirmed &&
         confirmed.exhibitId === selectedId &&
         same(content, confirmed.content),
     );
     const matchesPending =
-      pendingOperation && pendingOperation.targetId === selectedId && same(content, pendingOperation.payload.content);
+      !imageChanged() && pendingOperation && pendingOperation.targetId === selectedId && same(content, pendingOperation.payload.content);
     const matchesFailed =
-      history[0]?.status === "failed" &&
+      !imageChanged() && history[0]?.status === "failed" &&
       same(content, history[0].payload.content);
     const draftState = savedMatches
       ? `Draft saved${label.savedAt ? ` ${formatTime(label.savedAt)}` : ""}`
@@ -233,7 +285,7 @@ export async function render(container, ctx) {
         : deliveredMatches
           ? `${draftState} · Matches acknowledged content`
           : dirty()
-            ? "Unsaved changes · Preview only"
+            ? live ? "Unsaved changes" : "Unsaved changes · Preview only"
             : savedMatches
               ? `${draftState} · Not sent to showcase`
               : "Editing label content · Save a draft or send an update";
@@ -241,9 +293,12 @@ export async function render(container, ctx) {
       `<div class="notice ${matchesPending || matchesFailed ? "warning" : "info"}">${icon("report")}<span>${esc(editorStatus)}</span></div>`;
     const online = snapshot.showcase.online;
     container.querySelector("[data-save]").disabled = !canOperate || busy;
-    container.querySelector("[data-send]").disabled =
-      !canOperate || busy || pending || !assigned || !online;
+    container.querySelector("[data-send]").disabled = busy || !canSend();
     container.querySelector("#label-exhibit").disabled = busy;
+    const form = container.querySelector("form");
+    for (const name of ["title", "collection", "description"]) form.elements[name].disabled = busy;
+    container.querySelector("[data-image]").disabled = !canOperate || busy;
+    if (live && canOperate) container.querySelector("[data-remove-image]").disabled = busy;
     container.querySelector("[data-send-help]").textContent = !canOperate
       ? "An Operator or Administrator can edit drafts and send label updates."
       : !assigned
@@ -256,7 +311,9 @@ export async function render(container, ctx) {
             ? "The retained label needs a current send and device acknowledgement. Saving a draft does not reconcile it."
           : matchesFailed
             ? "The previous update failed. Review its error in the history, then resend when ready."
-            : `${live ? "Send creates a device request" : "Send creates a mock device request"}. Draft saving and device delivery are separate.`;
+            : live
+              ? "Send saves any changes to the draft and then requests device delivery."
+              : "Send creates a mock device request. Draft saving and device delivery are separate.";
     container.querySelector("[data-device-label]").innerHTML = confirmed
       ? `<div class="acknowledged-label">${icon("check")}<div><strong>Latest update acknowledged</strong><p class="muted">${esc(formatDate(confirmed.acknowledgedAt))}, ${esc(formatTime(confirmed.acknowledgedAt))}</p></div></div><div class="confirmed-label-summary"><img ${imageAttributes(confirmed.content.image)} alt=""><div><strong>${esc(confirmed.content.title)}</strong><p>${esc(confirmed.content.collection)}</p><p class="muted">${esc(confirmed.content.description)}</p></div></div><p class="muted small-text">${!online ? "Device offline · Last acknowledged state shown. " : ""}${deliveredMatches ? "The preview matches the acknowledged label." : "The preview above has not been acknowledged on the showcase."}</p>`
       : `<div class="empty">No label has been acknowledged on the showcase.</div>`;
@@ -265,7 +322,15 @@ export async function render(container, ctx) {
       : `<div class="empty compact-empty">No label requests for this exhibit yet.</div>`;
   }
 
-  async function refreshStatus() {
+  function setBusy(value) {
+    busy = value;
+    if (value) revision++;
+    ctx.setBusy?.(value);
+    drawStatus();
+  }
+
+  async function refreshStatus(afterSave = false) {
+    if (disposed || (busy && !afterSave)) return;
     const current = ++revision;
     const forId = selectedId;
     try {
@@ -298,47 +363,72 @@ export async function render(container, ctx) {
     };
     if (!next.title || (!live && !next.collection) || !next.description)
       throw new Error(live ? "Enter a title and description." : "Enter a title, collection, and short description.");
+    if (live && /^(data|blob):/i.test(next.image)) next.image = "";
     return next;
   }
+
+  async function saveCurrentDraft(saving) {
+    if (selectedFile) {
+      upload = new AbortController();
+      drawImageStatus("Uploading image…");
+      const uploaded = await ctx.api.uploadImage(selectedFile, {
+        signal: upload.signal,
+        onProgress: (progress) => { if (!disposed) drawImageStatus(progress); },
+      });
+      upload.signal.throwIfAborted();
+      saving.imageMediaId = uploaded.imageMediaId;
+    } else if (removingImage) {
+      saving.imageMediaId = null;
+      saving.image = "";
+    }
+    const changedImage = imageChanged();
+    drawImageStatus("Saving draft…");
+    const result = await ctx.api.saveLabelDraft(selectedId, live ? { ...saving, version: editVersion } : saving);
+    if (disposed) return;
+    content = {
+      ...saving,
+      ...(changedImage ? { image: "", imageWarning: null } : {}),
+      ...result?.draft,
+    };
+    if (live) {
+      editVersion = result?.draft?.version ?? result?.version ?? result?.draftVersion ?? editVersion + 1;
+      content.version = editVersion;
+    }
+    label = { ...label, ...result, draft: { ...content } };
+    baseline = { ...content };
+    resetImageChange();
+    const form = container.querySelector("form");
+    for (const name of ["title", "collection", "description"]) form.elements[name].value = content[name];
+    editorChanged();
+  }
+
   async function saveDraft() {
-    if (!ctx.api.can("operate")) return;
-    if (busy) return;
+    if (busy || confirming || !ctx.api.can("operate")) return;
     if (!container.querySelector("form").reportValidity()) return;
     container.querySelector("[data-form-error]").hidden = true;
-    busy = true;
-    drawStatus();
+    setBusy(true);
     try {
-      const beforeSave = { ...content };
-      const saving = validatedContent();
-      const result = await ctx.api.saveLabelDraft(selectedId, live ? { ...saving, version: editVersion } : saving);
-      if (live) editVersion = result?.draft?.version ?? result?.version ?? result?.draftVersion ?? editVersion + 1;
+      await saveCurrentDraft(validatedContent());
       if (disposed) return;
-      // Preserve edits made while the asynchronous save was running.
-      if (same(content, beforeSave)) {
-        content = { ...saving };
-        const form = container.querySelector("form");
-        for (const name of ["title", "collection", "description"])
-          form.elements[name].value = content[name];
-        drawPreview();
-      }
-      if (live) { saving.version = editVersion; content.version = editVersion; }
-      baseline = { ...saving };
-      ctx.setDirty(dirty());
-      await refreshStatus();
+      await refreshStatus(true);
+      if (disposed) return;
       toast("Label draft saved. It has not been sent.");
     } catch (error) {
-      showError(error);
+      if (!disposed) showError(error);
     } finally {
-      busy = false;
-      drawStatus();
+      upload = null;
+      if (!disposed) {
+        drawImageStatus();
+        setBusy(false);
+      }
     }
   }
   async function sendLabel(event) {
     event.preventDefault();
-    if (!ctx.api.can("operate")) return;
-    if (busy) return;
+    if (busy || confirming || !ctx.api.can("operate") || !canSend()) return;
     container.querySelector("[data-form-error]").hidden = true;
     const sendId = selectedId;
+    const sendRevision = editRevision;
     let sending;
     try {
       sending = validatedContent();
@@ -346,45 +436,59 @@ export async function render(container, ctx) {
       showError(error);
       return;
     }
-    if (
-      !(await confirmAction(
-        `Send label to ${caseName()}?`,
-        `Request delivery of “${sending.title}”? The current label remains until the ${live ? "showcase" : "mock showcase"} acknowledges the update.`,
-        "Send label",
-      ))
-    )
+    confirming = true;
+    const confirmed = await confirmAction(
+      `Send label to ${caseName()}?`,
+      `Request delivery of “${sending.title}”? The current label remains until the ${live ? "showcase" : "mock showcase"} acknowledges the update.`,
+      "Send label",
+    );
+    confirming = false;
+    if (!confirmed || disposed || busy || sendId !== selectedId || !ctx.api.can("operate") || !canSend()) return;
+    if (sendRevision !== editRevision) {
+      showError(new Error("The label changed while confirming. Review your changes and choose Send again."));
       return;
-    if (disposed || sendId !== selectedId) return;
-    busy = true;
-    drawStatus();
+    }
+    setBusy(true);
     try {
+      if (live && (imageChanged() || !same(sending, label?.draft))) {
+        await saveCurrentDraft(sending);
+        if (disposed) return;
+        sending = validatedContent();
+      }
+      drawImageStatus(live ? "Requesting device delivery…" : "Requesting mock delivery…");
       await ctx.api.sendLabel(sendId, live ? { ...sending, version: editVersion } : sending);
+      if (disposed) return;
       toast(
         live ? "Label update requested. Waiting for device acknowledgement." : "Mock label update requested. Waiting for acknowledgement.",
         "info",
       );
-      await refreshStatus();
-      if (live) { editVersion = label?.draft?.version ?? label?.draftVersion ?? editVersion; content.version = editVersion; }
+      await refreshStatus(true);
     } catch (error) {
-      showError(error);
+      if (!disposed) showError(error);
     } finally {
-      busy = false;
-      drawStatus();
+      upload = null;
+      if (!disposed) {
+        drawImageStatus();
+        setBusy(false);
+      }
     }
   }
   const beforeUnload = (event) => {
-    if (dirty()) {
+    if (dirty() || busy) {
       event.preventDefault();
       event.returnValue = "";
     }
   };
   window.addEventListener("beforeunload", beforeUnload);
   draw();
-  stopSubscription = ctx.api.subscribe(refreshStatus);
+  stopSubscription = ctx.api.subscribe(() => refreshStatus());
   return () => {
     disposed = true;
+    upload?.abort();
+    resetImageChange();
     stopSubscription();
     window.removeEventListener("beforeunload", beforeUnload);
+    ctx.setBusy?.(false);
     ctx.setDirty(false);
   };
 }

@@ -9,8 +9,9 @@ import {
 } from "../ui.js";
 
 const message = (error) =>
-  error?.status === 409 || error?.code === "version_conflict" ? "This record changed on the server. Your edits are preserved. Copy your changes, then reopen the editor to load the current version before retrying." : error?.message || "The change could not be completed. Please try again.";
+  error?.code === "version_conflict" || (error?.status === 409 && !error.code) ? "This record changed on the server. Your edits are preserved. Copy your changes, then reopen the editor to load the current version before retrying." : error?.message || "The change could not be completed. Please try again.";
 const exhibitImage = (exhibit) => exhibit.image || "assets/vase.svg";
+const imageError = "Choose a non-empty PNG, JPEG, or WebP image up to 1 MiB.";
 
 export async function render(container, ctx) {
   const live = ctx.api.getMode?.() === "live";
@@ -165,8 +166,8 @@ export async function render(container, ctx) {
   }
 
   function editProfile(exhibit = {}, scanned = false) {
-    if (!ctx.api.can("operate")) return;
-    let image = exhibit.image || "assets/vase.svg";
+    if (profileDialog || !ctx.api.can("operate")) return;
+    const savedImage = exhibit.image || "";
     const numberField = (name, label, fallback, step = "1") => {
       const [min, max] = name.startsWith("temperature")
         ? (live ? [-40, 125] : [-20, 80])
@@ -177,16 +178,20 @@ export async function render(container, ctx) {
     };
     showDialog(
       exhibit.id ? "Edit exhibit profile" : "Add exhibit",
-      `<form class="exhibit-profile-form"><div class="form-error notice warning" role="alert" hidden></div><label class="field">Exhibit ID<input name="stableId" readonly value="${esc(exhibit.id || "Generated when saved")}"></label><div class="form-grid"><label class="field">Exhibit name<input name="name" maxlength="${live ? 120 : 100}" required value="${esc(exhibit.name || "")}"></label><label class="field">Exhibit tag<input name="tagId" maxlength="${live ? 64 : 40}" pattern="${live ? '[A-Za-z0-9][A-Za-z0-9_-]{0,63}' : '[Ee][Xx]-[A-Za-z0-9-]+'}" required value="${esc(exhibit.tagId || "")}" placeholder="EX-017"></label><label class="field full-width">Description<textarea name="description" rows="3" maxlength="2000" ${live ? "" : "required"}>${esc(exhibit.description || "")}</textarea></label>${numberField("temperatureMin", "Minimum temperature (°C)", 20, "0.1")}${numberField("temperatureMax", "Maximum temperature (°C)", 26, "0.1")}${numberField("brightnessMin", "Minimum brightness (0–100)", 30)}${numberField("brightnessMax", "Maximum brightness (0–100)", 70)}${numberField("warningSeconds", "Warning delay (seconds)", 120)}<label class="field">${live ? "Local image preview" : "Profile image"}<input type="file" name="imageFile" accept="image/png,image/jpeg,image/webp"></label></div>${live ? '<p class="notice info">Preview only—not uploaded. Saving preserves the existing remote image reference.</p>' : ""}<img data-local-preview src="${esc(image)}" alt="Profile image preview" style="max-width:120px;max-height:100px;object-fit:contain"><p class="muted small-text">Brightness uses a relative sensor scale. Saving a profile does not send a label or change the showcase assignment.</p><div class="actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save profile</button></div></form>`,
+      `<form class="exhibit-profile-form"><div class="form-error notice warning" role="alert" hidden></div><label class="field">Exhibit ID<input name="stableId" readonly value="${esc(exhibit.id || "Generated when saved")}"></label><div class="form-grid"><label class="field">Exhibit name<input name="name" maxlength="${live ? 120 : 100}" required value="${esc(exhibit.name || "")}"></label><label class="field">Exhibit tag<input name="tagId" maxlength="${live ? 64 : 40}" pattern="${live ? '[A-Za-z0-9][A-Za-z0-9_-]{0,63}' : '[Ee][Xx]-[A-Za-z0-9-]+'}" required value="${esc(exhibit.tagId || "")}" placeholder="EX-017"></label><label class="field full-width">Description<textarea name="description" rows="3" maxlength="2000" ${live ? "" : "required"}>${esc(exhibit.description || "")}</textarea></label>${numberField("temperatureMin", "Minimum temperature (°C)", 20, "0.1")}${numberField("temperatureMax", "Maximum temperature (°C)", 26, "0.1")}${numberField("brightnessMin", "Minimum brightness (0–100)", 30)}${numberField("brightnessMax", "Maximum brightness (0–100)", 70)}${numberField("warningSeconds", "Warning delay (seconds)", 120)}<label class="field">Profile image<input type="file" name="imageFile" accept="image/png,image/jpeg,image/webp"><small class="muted">PNG, JPEG, or WebP up to 1 MiB.</small></label></div><img data-local-preview src="${esc(exhibitImage(exhibit))}" alt="Profile image preview" style="max-width:120px;max-height:100px;object-fit:contain">${live ? '<button class="button" type="button" data-remove-image hidden>Remove image</button>' : ""}<p class="muted small-text" data-image-status role="status"></p><p class="muted small-text">Brightness uses a relative sensor scale. Saving a profile does not send a label or change the showcase assignment.</p><div class="actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">Save profile</button></div></form>`,
       (dialog) => {
         const form = dialog.querySelector("form");
         const errorBox = form.querySelector(".form-error");
-        form.elements.imageFile.addEventListener("change", async (event) => {
-          const file = event.target.files[0];
-          if (!file || file.size > 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) return;
-          const preview = await fileToDataUrl(file);
-          if (dialog.isConnected) dialog.querySelector("[data-local-preview]").src = preview;
-        });
+        const imageInput = form.elements.imageFile;
+        const previewImage = dialog.querySelector("[data-local-preview]");
+        const removeImage = live ? form.querySelector("[data-remove-image]") : null;
+        const imageStatus = form.querySelector("[data-image-status]");
+        const controls = form.querySelectorAll("input, textarea, button");
+        let selectedFile = null;
+        let previewUrl = "";
+        let removingImage = false;
+        let upload = null;
+        let active = true;
         const fieldErrors = new Map();
         form.querySelectorAll("input,textarea").forEach((input) => {
           const error = document.createElement("span");
@@ -220,28 +225,59 @@ export async function render(container, ctx) {
         let changed = false,
           saving = false,
           asking = false;
-        const initialValues = JSON.stringify(
-          [...new FormData(form)].map(([key, value]) => [
-            key,
-            typeof value === "string" ? value : `${value.name}:${value.size}`,
-          ]),
-        );
+        const values = () => JSON.stringify([...new FormData(form)].filter(([key]) => key !== "imageFile"));
+        const initialValues = values();
         const updateDirty = () => {
-          changed =
-            JSON.stringify(
-              [...new FormData(form)].map(([key, value]) => [
-                key,
-                typeof value === "string"
-                  ? value
-                  : `${value.name}:${value.size}`,
-              ]),
-            ) !== initialValues;
+          if (saving) return;
+          changed = Boolean(selectedFile || removingImage || values() !== initialValues);
           ctx.setDirty(changed);
         };
+        const hasSavedImage = Boolean(savedImage || exhibit.imageMediaId);
+        function setPreview(url) {
+          if (previewUrl) URL.revokeObjectURL(previewUrl);
+          previewUrl = url;
+        }
+        function drawImage() {
+          previewImage.src = previewUrl || (removingImage ? "assets/vase.svg" : exhibitImage(exhibit));
+          if (removeImage) {
+            removeImage.hidden = !(hasSavedImage || selectedFile);
+            removeImage.textContent = removingImage ? "Undo removal" : "Remove image";
+          }
+          imageStatus.textContent = selectedFile
+            ? `${selectedFile.name} · ${live ? "Uploads when saved" : "Ready to save"}`
+            : removingImage ? "Image will be removed when saved." : "";
+        }
+        imageInput.addEventListener("change", (event) => {
+          if (!active || saving || asking || !ctx.api.can("operate")) return;
+          const file = event.target.files[0];
+          event.target.value = "";
+          if (!file) return;
+          if (file.size < 1 || file.size > 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+            showErrors(Object.assign(new Error(imageError), { fields: { imageFile: imageError } }));
+            return;
+          }
+          errorBox.hidden = true;
+          setPreview(URL.createObjectURL(file));
+          selectedFile = file;
+          removingImage = false;
+          updateDirty();
+          drawImage();
+        });
+        removeImage?.addEventListener("click", () => {
+          if (!active || saving || asking || !ctx.api.can("operate")) return;
+          setPreview("");
+          selectedFile = null;
+          removingImage = hasSavedImage && !removingImage;
+          errorBox.hidden = true;
+          updateDirty();
+          drawImage();
+        });
+        drawImage();
         form.addEventListener("input", updateDirty);
         form.addEventListener("change", updateDirty);
         const close = dialog.close.bind(dialog);
         dialog.close = async (reason) => {
+          if (!active) return;
           if (reason !== "force" && (saving || asking)) return;
           if (reason !== "force" && changed) {
             asking = true;
@@ -251,27 +287,27 @@ export async function render(container, ctx) {
               "Discard changes",
             );
             asking = false;
-            if (!discard) return;
+            if (!discard || !active) return;
           }
+          active = false;
+          upload?.abort();
+          setPreview("");
+          selectedFile = null;
+          if (profileDialog === dialog) profileDialog = null;
+          ctx.setBusy?.(false);
+          ctx.setDirty(false);
           close();
         };
         dialog.addEventListener("cancel", (event) => {
           event.preventDefault();
           dialog.close();
         });
-        dialog.addEventListener(
-          "close",
-          () => {
-            if (profileDialog === dialog) profileDialog = null;
-            ctx.setDirty(false);
-          },
-          { once: true },
-        );
         form
           .querySelector("[data-cancel]")
           .addEventListener("click", () => dialog.close());
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
+          if (!active || saving || asking || !ctx.api.can("operate")) return;
           errorBox.hidden = true;
           fieldErrors.forEach((error) => {
             error.textContent = "";
@@ -279,35 +315,17 @@ export async function render(container, ctx) {
           form
             .querySelectorAll("[aria-invalid]")
             .forEach((input) => input.removeAttribute("aria-invalid"));
-          const submit = form.querySelector("[type=submit]");
-          submit.disabled = true;
+          const data = new FormData(form);
           saving = true;
+          ctx.setBusy?.(true);
+          controls.forEach((control) => { control.disabled = true; });
+          dialog.querySelector(".dialog-close").disabled = true;
           try {
-            const data = new FormData(form);
-            const file = data.get("imageFile");
-            if (file?.size) {
-              if (
-                !["image/png", "image/jpeg", "image/webp"].includes(
-                  file.type,
-                ) ||
-                file.size > 1024 * 1024
-              )
-                throw Object.assign(
-                  new Error(
-                    "Choose a PNG, JPG, or WebP image smaller than 1 MB.",
-                  ),
-                  {
-                    fields: {
-                      imageFile:
-                        "Choose a PNG, JPG, or WebP image smaller than 1 MB.",
-                    },
-                  },
-                );
-              if (!live) image = await fileToDataUrl(file);
-            }
             const profile = {
               ...exhibit,
-              image,
+              image: live
+                ? (removingImage || /^(data|blob):/i.test(savedImage) ? "" : savedImage)
+                : exhibitImage(exhibit),
               name: String(data.get("name")).trim(),
               tagId: String(data.get("tagId")).trim(),
               description: String(data.get("description")).trim(),
@@ -336,19 +354,41 @@ export async function render(container, ctx) {
               throw Object.assign(new Error("Review the highlighted fields."), {
                 fields,
               });
+            if (removingImage) profile.imageMediaId = null;
+            if (selectedFile && live) {
+              upload = new AbortController();
+              imageStatus.textContent = "Uploading image…";
+              const uploaded = await ctx.api.uploadImage(selectedFile, {
+                signal: upload.signal,
+                onProgress: (progress) => { if (active) imageStatus.textContent = progress; },
+              });
+              upload.signal.throwIfAborted();
+              profile.imageMediaId = uploaded.imageMediaId;
+            } else if (selectedFile) {
+              profile.image = await fileToDataUrl(selectedFile);
+            }
+            if (!active) return;
+            imageStatus.textContent = "Saving profile…";
             const saved = await ctx.api.saveExhibit(profile);
+            if (!active) return;
             selectedId = saved.id;
-            changed = false;
-            ctx.setDirty(false);
             dialog.close("force");
             toast("Exhibit profile saved.");
             await reload();
-            if (scanned) await assign(saved);
+            if (!disposed && scanned) await assign(saved);
           } catch (error) {
-            showErrors(error);
+            if (active) {
+              controls.forEach((control) => { control.disabled = false; });
+              showErrors(error);
+            }
           } finally {
-            submit.disabled = false;
-            saving = false;
+            if (active) {
+              upload = null;
+              saving = false;
+              ctx.setBusy?.(false);
+              dialog.querySelector(".dialog-close").disabled = false;
+              drawImage();
+            }
           }
         });
       },

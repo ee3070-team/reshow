@@ -78,6 +78,7 @@ let current = "overview",
   params = {},
   cleanup = null,
   dirty = false,
+  pageBusy = false,
   renderId = 0;
 const content = document.querySelector("#page-content");
 const loginScreen = document.querySelector("#login-screen");
@@ -113,6 +114,7 @@ function showLogin(message = "") {
   accountCleanup = null;
   sessionUser = null;
   dirty = false;
+  pageBusy = false;
   content.replaceChildren();
   document.querySelectorAll("dialog").forEach(dialog => dialog.remove());
   document.querySelector("#toast-region").replaceChildren();
@@ -170,14 +172,17 @@ document.querySelector(".brand").onclick = (e) => {
   navigate("overview").catch(reportError);
 };
 async function canLeave() {
-  return (
-    !dirty ||
-    (await confirmAction(
+  if (pageBusy) {
+    toast("Please wait for the image and record to finish saving.", "info");
+    return false;
+  }
+  const accepted = !dirty || await confirmAction(
       "Discard unsaved changes?",
       "Your unsaved edits will be lost. Saved drafts and acknowledged device state will be kept.",
       "Discard changes",
-    ))
-  );
+    );
+  // A save can begin while the discard dialog is open.
+  return accepted && !pageBusy;
 }
 async function navigate(tab, nextParams = {}, replace = false) {
   if (!(await requireSession())) return;
@@ -205,6 +210,7 @@ async function refresh() {
   delete content.dataset.loadMs;
   cleanup?.();
   cleanup = null;
+  pageBusy = false;
   loginCleanup?.();
   loginCleanup = null;
   loginScreen.replaceChildren();
@@ -261,6 +267,9 @@ async function refresh() {
       refresh,
       setDirty: (value) => {
         if (id === renderId) dirty = value;
+      },
+      setBusy: (value) => {
+        if (id === renderId) pageBusy = Boolean(value);
       },
     });
     if (id === renderId) {
@@ -349,7 +358,7 @@ document.querySelector("#demo-controls").onclick = handleAction(async () => {
   );
 });
 window.addEventListener("beforeunload", (e) => {
-  if (dirty) {
+  if (dirty || pageBusy) {
     e.preventDefault();
     e.returnValue = "";
   }
