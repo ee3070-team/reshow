@@ -220,8 +220,8 @@ The unused duplicate OAuth implementation has been removed. Facade tests exercis
 the shared session, callback mode, identity invalidation and actual request headers.
 
 Both entry shells use one application script and matching complete import maps
-at revision `20261110-review-3`. The callback differs only by its root base URL.
-Local verification: syntax checks and 62 repository JavaScript tests; earlier
+at revision `20261110-review-4`. The callback differs only by its root base URL.
+Local verification: syntax checks and 63 repository JavaScript tests; earlier
 integration checks also covered the local dashboard suite and eight-tab navigation. Synthetic tests cover the
 shared callback/session, request versions, cancellation and sign-out; no live
 account changes or device operations were performed. Linux deployment and Python

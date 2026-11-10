@@ -72,6 +72,7 @@ const pages = {
     render: technologyShowcase,
   },
 };
+const canNavigate = tab => !api.isLive() || pages[tab]?.liveReady !== false;
 let current = "overview",
   params = {},
   cleanup = null,
@@ -85,7 +86,7 @@ function updateIdentity(user) {
   sessionUser = user;
   const initials = user.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
   document.querySelector("#session-identity").innerHTML = `<span class="avatar">${esc(initials)}</span><span>${esc(user.name)}<small>${esc(user.role)} · ${api.isLive() ? "Live" : "Demo"} session</small></span>`;
-  document.querySelector('[data-page="staff"]').hidden = false;
+  document.querySelectorAll("[data-page]").forEach(link => { link.hidden = !canNavigate(link.dataset.page); });
   document.querySelector("#demo-controls").hidden = !api.can("demo");
   document.querySelector("#workspace-mode").textContent = api.isLive() ? "Live backend" : "Demo data";
   document.querySelector("#workspace-note").textContent = api.isLive() ? "Connected staff workspace" : "Prototype · Case 01";
@@ -179,7 +180,7 @@ async function canLeave() {
 }
 async function navigate(tab, nextParams = {}, replace = false) {
   if (!(await requireSession())) return;
-  if (!pages[tab]) tab = "overview";
+  if (!pages[tab] || !canNavigate(tab)) tab = "overview";
   if (!(await canLeave())) return;
   dirty = false;
   current = tab;
@@ -219,7 +220,7 @@ async function refresh() {
   document.querySelector("#report-shortcut").hidden = ![
     "overview",
     "activity",
-  ].includes(current);
+  ].includes(current) || !canNavigate("reports");
   document.querySelectorAll("[data-page]").forEach((a) => {
     a.classList.toggle("active", a.dataset.page === current);
     if (a.dataset.page === current) a.setAttribute("aria-current", "page");
@@ -236,17 +237,25 @@ async function refresh() {
       `${formatDate(snap.now)} · ${api.isLive() ? "Live refresh" : "Demo clock"}`;
     updateBanner(snap);
     const stage = document.createElement("div");
-    stage.innerHTML = content.innerHTML;
-    content.replaceChildren(stage);
+    const loading = content.firstElementChild;
+    content.append(stage);
     if (current === "staff" && !api.can("staff")) {
       stage.innerHTML = '<div class="card empty"><h3>Staff access permission required</h3><p>Your current account cannot manage staff. Contact an administrator for access.</p></div>';
       content.dataset.loadMs = String(Math.round(performance.now() - loadStarted));
       content.dataset.loadState = "ready";
+      loading.remove();
+      return;
+    }
+    if (!canNavigate(current)) {
+      stage.innerHTML = '<div class="card empty"><h3>Live page not yet available</h3><p><a href="#overview">Return to Overview</a> to use the available Live features.</p></div>';
+      content.dataset.loadState = "ready";
+      loading.remove();
       return;
     }
     const off = await page.render(stage, {
       api,
       navigate,
+      canNavigate,
       params,
       refresh,
       setDirty: (value) => {
@@ -255,6 +264,7 @@ async function refresh() {
     });
     if (id === renderId) {
       cleanup = off;
+      loading.remove();
       content.dataset.loadMs = String(Math.round(performance.now() - loadStarted));
       content.dataset.loadState = "ready";
     }
