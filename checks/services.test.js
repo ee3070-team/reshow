@@ -1,7 +1,9 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateActivity, generateReport, saveStaff } from '../js/services.js';
+import { aggregateActivity, generateReport, saveStaff, signIn } from '../js/services.js';
 import { esc } from '../js/ui.js';
+
+before(() => signIn('sarah.chen@reshow.demo'));
 
 test('activity excludes missing/future observations from totals but counts missing coverage', () => {
   const result = aggregateActivity([

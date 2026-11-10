@@ -37,7 +37,7 @@ export async function renderLiveAccounts(container) {
   let disposed = false, sequence = 0, identity = "", staff = [], accounts = [], requestPlan = null;
   container.className = "card live-accounts";
   container.innerHTML = `<div class="card-head"><h2>Live website accounts</h2><span class="badge success">AWS account service</span></div>
-    <p>Staff sign-in and website permissions use the live backend. Open <a href="#live-demo">Live showcase</a> for AWS test data. The original showcase tabs and expandable card demo below use browser-local sample data.</p>
+    <p>Staff sign-in and website permissions use the live backend. Open <a href="#live-demo">Live showcase</a> for AWS test data. The dashboard uses the selected Demo or Live workspace. Website accounts and physical access cards are managed separately.</p>
     <div data-live-message class="notice info" role="status" aria-live="polite"></div>
     <div data-live-actions class="actions"></div><div data-live-account-content></div>`;
   const message = container.querySelector("[data-live-message]");
@@ -209,7 +209,7 @@ export async function renderLiveAccounts(container) {
     }));
     if (!session.user) return;
     if (!session.user.permissions.manage_accounts) {
-      content.innerHTML = '<p>Your live session can access the data permitted by your website role. Staff/account administration requires an Administrator. The showcase screens in this release remain a labelled local demo.</p>';
+      content.innerHTML = '<p>Your live session can access the data permitted by your website role. Staff/account administration requires an Administrator. Live dashboard reads follow the same signed-in account permissions.</p>';
     } else if (!content.childElementCount) {
       const reload = document.createElement("button");
       reload.className = "button";

@@ -10,22 +10,20 @@ import {
   showDialog,
 } from "../ui.js";
 
-import { renderLiveAccounts } from "../live-accounts.js";
-
 export async function render(container, ctx) {
-  container.innerHTML = '<div class="stack"><section data-live-accounts></section><details class="card local-staff-demo"><summary>Browser-local staff and physical-card demo</summary><p class="notice info">These sample staff, scans, roles and acknowledgements are stored only in this browser. They do not change live website accounts or physical card permissions.</p><div data-local-staff></div></details></div>';
-  const stopLive = await renderLiveAccounts(container.querySelector("[data-live-accounts]"));
-  const stopDemo = await renderDemo(container.querySelector("[data-local-staff]"), ctx);
-  return () => { stopLive(); stopDemo?.(); };
-}
-
-async function renderDemo(container, ctx) {
   const { api } = ctx;
-  let [staff, access, snapshot] = await Promise.all([
-    api.listStaff(),
+  const live = api.getMode?.() === "live";
+  if (!api.can("staff")) {
+    container.innerHTML = '<div class="notice info">Staff access is available to Administrators.</div>';
+    return () => {};
+  }
+  let [snapshot, access, accounts, session] = await Promise.all([
+    api.getSnapshot({ include: ["operations", "staff"] }),
     api.getAccessLog(),
-    api.getSnapshot(),
+    live && api.listAccounts ? api.listAccounts() : Promise.resolve([]),
+    api.getSession(),
   ]);
+  let staff = snapshot.staff;
   let disposed = false,
     refreshSequence = 0,
     scanning = false,
@@ -39,10 +37,10 @@ async function renderDemo(container, ctx) {
     (snapshot.operations || []).filter((op) => op.type === "card");
   const pendingFor = (id) =>
     cardOperations().find(
-      (op) => op.targetId === id && op.status === "pending",
+      (op) => op.targetId === id && ["pending", "recovery_pending"].includes(op.status),
     );
   const initials = (name) =>
-    name
+    String(name || "Staff")
       .trim()
       .split(/\s+/)
       .map((n) => n[0])
@@ -50,30 +48,32 @@ async function renderDemo(container, ctx) {
       .join("")
       .toUpperCase();
   container.innerHTML = `<div class="staff-page stack">
-    <div class="staff-status"><span class="staff-connection"></span><span>Case 01</span><span class="muted">Staff cards and exhibit tags are separate</span></div>
+    <div class="staff-status"><span class="staff-connection"></span><span>${live ? esc(snapshot.showcase.name || "Selected showcase") : "Case 01"}</span><span class="muted">Staff cards and exhibit tags are separate</span></div>
+    <div class="notice info"><div>${live ? "<strong>Website accounts and physical cards</strong><p>Staff directory roles describe staff duties. Website permissions are managed separately below. Invitations are prepared without sending email; physical card access remains separate.</p>" : "<strong>Demo website login</strong><p>Select a staff email to explore its local demo role without a password. Adding or editing a staff profile updates the available demo accounts. Physical access cards are separate.</p>"}</div></div>
     <div class="staff-columns">
       <section class="card staff-directory"><div class="card-head"><h2>${icon("users")} Staff directory</h2><div class="actions"><span class="muted staff-count"></span><button class="button primary small" data-add>${icon("plus")} Add staff</button></div></div>
         <div class="staff-filters"><label class="staff-search">${icon("search")}<input type="search" aria-label="Search staff or card" placeholder="Search staff or card…"></label><select aria-label="Filter staff"><option value="">All staff</option><option>Administrator</option><option>Operator</option><option>Viewer</option><option value="enabled">Card enabled</option><option value="revoked">Card revoked</option><option value="unassigned">No card assigned</option></select></div>
-        <div class="table-wrap"><table class="staff-table"><thead><tr><th>Staff</th><th>Website role</th><th>Access card</th><th>Card access</th><th>Action</th></tr></thead><tbody data-directory></tbody></table></div>
-        <p class="staff-footnote">${icon("info")} Card changes take effect after a simulated showcase acknowledgement.</p>
-        <div class="staff-roles"><h3>Website roles</h3><dl><div><dt>Administrator</dt><dd>Manage staff, cards and dashboard controls</dd></div><div><dt>Operator</dt><dd>Manage exhibits, labels and lighting</dd></div><div><dt>Viewer</dt><dd>View readings, activity and reports</dd></div></dl><p class="muted">Demonstration only: website roles are descriptive and do not enforce security. Physical card access is managed separately.</p></div>
+        <div class="table-wrap"><table class="staff-table"><thead><tr><th>Staff</th><th>${live ? "Directory role" : "Website role"}</th><th>Access card</th><th>Card access</th><th>Action</th></tr></thead><tbody data-directory></tbody></table></div>
+        <p class="staff-footnote">${icon("info")} Card changes take effect after ${live ? "a device" : "a simulated showcase"} acknowledgement.</p>
+        <div class="staff-roles"><h3>${live ? "Directory roles" : "Website roles"}</h3><dl><div><dt>Administrator</dt><dd>Manage staff, cards and dashboard controls</dd></div><div><dt>Operator</dt><dd>Manage exhibits, labels and lighting</dd></div><div><dt>Viewer</dt><dd>View readings, activity and reports</dd></div></dl><p class="muted">${live ? "Directory roles do not grant website account permissions. Manage the separate website accounts below. Physical card access is managed separately." : "Demo website controls follow these roles. This browser-only demo is not secure authentication. Physical card access is managed separately."}</p></div>
       </section>
       <section class="card staff-register"><div class="card-head"><h2>${icon("card")} Register access card</h2></div>
         <label class="staff-register-field"><span>Assign to staff</span><select data-assignee aria-label="Assign card to staff"></select></label>
-        <label class="staff-register-field"><span>Showcase</span><select aria-label="Showcase"><option>Case 01</option></select></label>
+        <label class="staff-register-field"><span>Showcase</span><select aria-label="Showcase"><option>${live ? esc(snapshot.showcase.name || "Selected showcase") : "Case 01"}</option></select></label>
         <div class="staff-scan"><div class="staff-scan-art" aria-hidden="true">${icon("scan")}${icon("card")}</div><h3 data-scan-title>Ready to scan</h3><p class="muted" data-scan-detail>No new card detected</p><div class="staff-detected" data-detected hidden></div><button class="button" data-scan>${icon("scan")} Start simulated scan</button><button class="button primary" data-register disabled>Confirm registration</button><p class="muted staff-scan-help">Scan a staff card, check its ID, then confirm.</p></div>
-        <div class="notice info">${icon("info")} Mock scans and acknowledgements only. Exhibit tags cannot grant access.</div><div data-card-status aria-live="polite"></div>
+        <div class="notice info">${icon("info")} ${live ? "Waits for a new hardware staff-card scan with the matching scan attempt. Commands wait for real device acknowledgement." : "Mock scans and acknowledgements only."} Exhibit tags cannot grant access.</div><div data-card-status aria-live="polite"></div>
       </section>
     </div>
-    <section class="card staff-access-log"><div class="card-head"><h2>${icon("report")} Access log</h2><select aria-label="Filter access log"><option value="">All results</option><option>Accepted</option><option>Denied</option></select></div><div class="table-wrap"><table><thead><tr><th>Time (HKT)</th><th>Card / staff</th><th>Result</th><th>Details</th></tr></thead><tbody data-log></tbody></table></div><p class="muted staff-log-note">Sample historical access records. This dashboard has no remote unlock control.</p></section>
+    <section class="card staff-access-log"><div class="card-head"><h2>${icon("report")} Access log</h2><select aria-label="Filter access log"><option value="">All results</option><option>Accepted</option><option>Denied</option></select></div><div class="table-wrap"><table><thead><tr><th>Time (HKT)</th><th>Card / staff</th><th>Result</th><th>Details</th></tr></thead><tbody data-log></tbody></table></div><p class="muted staff-log-note">${live ? "Recorded access attempts." : "Sample historical access records."} This dashboard has no remote unlock control.</p></section>
   </div>`;
+  if (live) container.querySelector(".staff-page").insertAdjacentHTML("beforeend", `<section class="card staff-accounts"><div class="card-head"><h2>Website accounts</h2></div><p class="muted">Account permissions are independent of directory roles and physical cards.</p><div data-accounts></div></section>`);
   const $ = (selector) => container.querySelector(selector);
   const assignee = $("[data-assignee]"),
     scanButton = $("[data-scan]"),
     registerButton = $("[data-register]");
   function message(error) {
     return (
-      error?.message ||
+      error?.status === 409 || error?.code === "version_conflict" ? "This record changed on the server. Your edits are preserved. Copy your changes and reopen this form to load the current version." : error?.message ||
       "The operation could not be completed. Please try again."
     );
   }
@@ -124,14 +124,50 @@ async function renderDemo(container, ctx) {
     $("[data-card-status]").innerHTML = latest
       .map(
         (op) =>
-          `<div class="staff-operation">${badge(op.status === "acknowledged" ? "Acknowledged" : op.status === "failed" ? "Failed" : "Pending", op.status === "acknowledged" ? "success" : op.status === "failed" ? "danger" : "warning")}<span>${esc(staff.find((person) => person.id === op.targetId)?.name || "Card change")} · ${esc(formatTime(op.requestedAt))}${op.error ? `<br>${esc(op.error)}` : ""}</span></div>`,
+          `<div class="staff-operation">${badge(op.status === "acknowledged" ? "Acknowledged" : op.status === "failed" ? "Failed" : op.status === "recovery_pending" ? "Recovery pending" : op.status === "recovered" ? "Recovered" : "Pending", op.status === "acknowledged" ? "success" : op.status === "failed" ? "danger" : op.status === "recovered" ? "info" : "warning")}<span>${esc(staff.find((person) => person.id === op.targetId)?.name || "Card change")} · ${esc(formatTime(op.requestedAt))}${op.error ? `<br>${esc(op.error)}` : ""}${op.status === "recovery_pending" ? "<br>Command locked until device recovery confirmation." : live && op.status === "pending" && op.executeBefore && Date.parse(op.executeBefore) <= Date.now() ? "<br>Execution deadline passed; review recovery in Activity. Command remains locked." : ""}</span></div>`,
       )
       .join("");
     $(".staff-connection").innerHTML = badge(
-      snapshot.showcase.online ? "Online · demo" : "Offline · demo",
+      snapshot.showcase.online ? (live ? "Online" : "Online · demo") : (live ? "Offline" : "Offline · demo"),
       snapshot.showcase.online ? "success" : "warning",
     );
+    drawAccounts();
     updateScan();
+  }
+  function drawAccounts() {
+    if (!live) return;
+    $("[data-accounts]").innerHTML = staff.length ? `<div class="table-wrap"><table><thead><tr><th>Staff</th><th>Account role</th><th>Status</th><th>Action</th></tr></thead><tbody>${staff.map(person => {
+      const account = accounts.find(item => (item.staffId || item.id) === person.id);
+      return `<tr><td>${esc(person.name)}</td><td>${esc(account?.role || "No account")}</td><td>${esc(account?.status || "Not provisioned")}</td><td><button class="button small" data-account="${esc(person.id)}">${account ? "Manage account" : "Prepare invitation"}</button></td></tr>`;
+    }).join("")}</tbody></table></div>` : '<div class="empty">Add a directory profile before preparing a website account.</div>';
+    $("[data-accounts]").querySelectorAll("[data-account]").forEach(button => button.addEventListener("click", () => openAccount(staff.find(person => person.id === button.dataset.account))));
+  }
+  function openAccount(person) {
+    const account = accounts.find(item => (item.staffId || item.id) === person.id);
+    const own = person.id === session?.id || person.id === session?.staffId;
+    showDialog(account ? "Manage website account" : "Prepare website invitation", `<form class="staff-account-form"><p>${esc(person.name)} · ${esc(person.email)}</p><p class="notice info">${account ? "Website permissions affect sign-in and dashboard controls. Physical cards and directory roles are separate." : "Prepare account provisioning with invitation email suppressed. This action does not send an invitation email."}</p><label class="field">Account role<select name="role" ${own ? "disabled" : ""}>${["Administrator","Operator","Viewer"].map(role => `<option ${role === (account?.role || "Viewer") ? "selected" : ""}>${role}</option>`).join("")}</select></label>${account ? `<label class="field">Account access<select name="status" ${own ? "disabled" : ""}><option value="unchanged">Keep current (${esc(account.status)})</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label>` : ""}<p role="alert" class="staff-form-error"></p><div class="actions"><button type="button" class="button" data-cancel>Cancel</button><button type="submit" class="button primary" ${own ? "disabled" : ""}>${account ? "Save account" : "Prepare without email"}</button></div></form>`, dialog => {
+      const form = dialog.querySelector("form"), close = dialog.close.bind(dialog);
+      const original = JSON.stringify([...new FormData(form)]);
+      let changed = false, saving = false, asking = false;
+      form.addEventListener("change", () => { changed = JSON.stringify([...new FormData(form)]) !== original; ctx.setDirty(changed); });
+      dialog.close = async () => { if (saving || asking) return; asking = true; const discard = !changed || await confirmAction("Discard account changes?", "Your unsaved account changes will be lost.", "Discard changes"); asking = false; if (discard) close(); };
+      dialog.addEventListener("cancel", event => { event.preventDefault(); dialog.close(); });
+      dialog.addEventListener("close", () => { ctx.setDirty(false); if (activeProfile?.dialog === dialog) activeProfile = null; }, { once:true });
+      activeProfile = { dialog, forceClose:close };
+      form.querySelector("[data-cancel]").addEventListener("click", () => dialog.close());
+      form.addEventListener("submit", async event => {
+        event.preventDefault(); if (saving || own) return;
+        const values = new FormData(form), role = values.get("role"), status = values.get("status");
+        if (!(await confirmAction(account ? "Change website permissions?" : "Prepare account without email?", `${person.name} · ${role}${status && status !== "unchanged" ? ` · ${status}` : ""}. ${account ? "This affects website access." : "No invitation email will be sent."}`, account ? "Save account" : "Prepare account"))) return;
+        saving = true; form.querySelector('[type="submit"]').disabled = true;
+        try {
+          if (account) await api.updateAccount(account.id || person.id, { role, ...(status === "unchanged" ? {} : { status }), version:account.version });
+          else await api.prepareAccountInvitation(person.id, role);
+          close(); toast(account ? "Website account updated." : "Account prepared without sending email."); await reload();
+        } catch (error) { form.querySelector('[role="alert"]').textContent = message(error); }
+        finally { saving = false; if (form.isConnected) form.querySelector('[type="submit"]').disabled = false; }
+      });
+    });
   }
   function drawLog() {
     const rows = access
@@ -159,7 +195,7 @@ async function renderDemo(container, ctx) {
       ? "Requesting registration…"
       : "Confirm registration";
     scanButton.disabled = scanning || registering;
-    scanButton.innerHTML = `${icon("scan")} ${scanning ? "Scanning…" : detected ? "Scan another card" : "Start simulated scan"}`;
+    scanButton.innerHTML = `${icon("scan")} ${scanning ? "Scanning…" : detected ? "Scan another card" : live ? "Start hardware scan wait" : "Start simulated scan"}`;
     $("[data-detected]").hidden = !detected;
     $("[data-detected]").textContent = detected || "";
   }
@@ -167,12 +203,13 @@ async function renderDemo(container, ctx) {
     const sequence = ++refreshSequence;
     try {
       const values = await Promise.all([
-        api.listStaff(),
+        api.getSnapshot({ include: ["operations", "staff"] }),
         api.getAccessLog(),
-        api.getSnapshot(),
+        live && api.listAccounts ? api.listAccounts() : Promise.resolve([]),
       ]);
       if (disposed || sequence !== refreshSequence) return;
-      [staff, access, snapshot] = values;
+      [snapshot, access, accounts] = values;
+      staff = snapshot.staff;
       drawDirectory();
       drawLog();
     } catch (error) {
@@ -180,9 +217,11 @@ async function renderDemo(container, ctx) {
     }
   }
   function openProfile(person = null) {
+    if (!api.can("staff")) return;
+    const ownProfile = person?.id === session?.id;
     showDialog(
       person ? "Manage staff" : "Add staff",
-      `<form class="staff-profile-form"><div class="form-grid"><label class="field">Full name<input name="name" value="${esc(person?.name || "")}" maxlength="80" required></label><label class="field">Email<input type="email" name="email" value="${esc(person?.email || "")}" maxlength="150" required></label><label class="field">Website role<select name="role">${["Administrator", "Operator", "Viewer"].map((role) => `<option${role === (person?.role || "Viewer") ? " selected" : ""}>${role}</option>`).join("")}</select></label></div><p class="notice info">Roles are descriptive in this demo; real authorization must be enforced by the backend.</p><p class="staff-form-error" role="alert"></p><div class="actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${person ? "Save profile" : "Add staff"}</button></div></form>${person ? `<div class="staff-manage-card"><h3>Physical access card</h3><p>${esc(person.cardId || "No card assigned")} · ${esc(person.cardId ? (person.cardEnabled ? "Enabled" : "Revoked") : "Use the registration panel to assign a card.")}</p>${person.cardId ? `<button class="button ${person.cardEnabled ? "danger" : ""}" data-access ${pendingFor(person.id) ? "disabled" : ""}>${person.cardEnabled ? "Revoke card access" : "Restore card access"}</button>` : ""}${pendingFor(person.id) ? '<p class="muted">A card change is awaiting acknowledgement.</p>' : ""}</div>` : ""}`,
+      `<form class="staff-profile-form"><div class="form-grid"><label class="field">Full name<input name="name" value="${esc(person?.name || "")}" maxlength="80" required></label><label class="field">Email<input type="email" name="email" value="${esc(person?.email || "")}" maxlength="150" required></label><label class="field">${live ? "Directory role" : "Website role"}<select name="role" ${ownProfile ? "disabled" : ""}>${["Administrator", "Operator", "Viewer"].map((role) => `<option${role === (person?.role || "Viewer") ? " selected" : ""}>${role}</option>`).join("")}</select></label></div><p class="notice info">${ownProfile ? "Your own website role cannot be changed here. " : ""}${live ? "This changes directory metadata only. Website permissions are managed in Website accounts; physical card permissions remain separate." : "Website controls follow the selected demo role. Demo account selection requires no password; changing this email changes the selectable demo address. Secure authentication and authorization require a backend."}</p><p class="staff-form-error" role="alert"></p><div class="actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${person ? "Save profile" : "Add staff"}</button></div></form>${person ? `<div class="staff-manage-card"><h3>Physical access card</h3><p>${esc(person.cardId || "No card assigned")} · ${esc(person.cardId ? (person.cardEnabled ? "Enabled" : "Revoked") : "Use the registration panel to assign a card.")}</p>${person.cardId ? `<button class="button ${person.cardEnabled ? "danger" : ""}" data-access ${pendingFor(person.id) ? "disabled" : ""}>${person.cardEnabled ? "Revoke card access" : "Restore card access"}</button>` : ""}${pendingFor(person.id) ? '<p class="muted">A card change is awaiting acknowledgement.</p>' : ""}</div>` : ""}`,
       (dialog) => {
         const form = dialog.querySelector("form");
         const originalClose = dialog.close.bind(dialog);
@@ -259,11 +298,11 @@ async function renderDemo(container, ctx) {
                 ...(person || {}),
                 name,
                 email,
-                role: values.get("role"),
+                role: ownProfile ? person.role : values.get("role"),
               });
               originalClose();
               if (!disposed) {
-                toast("Staff profile saved locally.");
+                toast(live ? "Staff directory profile saved." : "Staff profile saved locally.");
                 await reload();
               }
             } catch (error) {
@@ -303,15 +342,15 @@ async function renderDemo(container, ctx) {
             if (
               !(await confirmAction(
                 enabled ? "Restore card access?" : "Revoke card access?",
-                `${person.name} · ${person.cardId}. This simulated change takes effect only after showcase acknowledgement.`,
+                `${person.name} · ${person.cardId}. ${live ? "This change" : "This simulated change"} takes effect only after showcase acknowledgement.`,
                 enabled ? "Restore access" : "Revoke access",
               ))
             )
               return;
             try {
-              await api.setCardAccess(person.id, enabled);
+              await api.setCardAccess(person.id, enabled, live ? { expectedCardId: person.cardId } : undefined);
               toast(
-                "Card access change requested; awaiting mock acknowledgement.",
+                live ? "Card access change requested; awaiting device acknowledgement." : "Card access change requested; awaiting mock acknowledgement.",
                 "info",
               );
               await reload();
@@ -345,10 +384,10 @@ async function renderDemo(container, ctx) {
     scanning = true;
     detected = null;
     updateScan();
-    $("[data-scan-title]").textContent = "Simulated scan in progress";
-    $("[data-scan-detail]").textContent = "Waiting for a mock staff card…";
+    $("[data-scan-title]").textContent = live ? "Checking hardware scan" : "Simulated scan in progress";
+    $("[data-scan-detail]").textContent = live ? "Waiting for new staff-card evidence…" : "Waiting for a mock staff card…";
     try {
-      const scan = await api.scanStaffCard();
+      const scan = await api.scanStaffCard(live ? { onWaiting: ({ scanAttemptId }) => { if (!disposed) $("[data-scan-detail]").textContent = `Waiting for hardware registration scan. Scan attempt: ${scanAttemptId}`; } } : undefined);
       if (disposed) return;
       if (!scan || !/^CARD-[A-Z0-9-]+$/i.test(scan.id || ""))
         throw new Error(
@@ -380,10 +419,9 @@ async function renderDemo(container, ctx) {
     if (!person || !detected || pendingFor(person.id) || registering) return;
     const cardId = detected;
     if (
-      person.cardId &&
       !(await confirmAction(
-        "Replace assigned card?",
-        `Register ${cardId} for ${person.name}? The previous card ${person.cardId} will be replaced after mock acknowledgement.`,
+        person.cardId ? "Replace assigned card?" : "Register access card?",
+        `Register ${cardId} for ${person.name}? ${person.cardId ? `The previous card ${person.cardId} will be replaced. ` : ""}Access changes after ${live ? "device" : "mock"} acknowledgement.`,
         "Register card",
       ))
     )
@@ -395,8 +433,8 @@ async function renderDemo(container, ctx) {
       detected = null;
       $("[data-scan-title]").textContent = "Registration requested";
       $("[data-scan-detail]").textContent =
-        "Awaiting simulated showcase acknowledgement.";
-      toast("Registration pending mock acknowledgement.", "info");
+        live ? "Awaiting device acknowledgement." : "Awaiting simulated showcase acknowledgement.";
+      toast(live ? "Registration pending device acknowledgement." : "Registration pending mock acknowledgement.", "info");
       await reload();
     } catch (error) {
       $("[data-scan-title]").textContent = "Registration unsuccessful";
