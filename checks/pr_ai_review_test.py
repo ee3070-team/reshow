@@ -119,6 +119,9 @@ class PrReviewTests(unittest.TestCase):
         self.assertEqual(set(schema['required']), {'decision', 'blockers', 'review'})
         self.assertEqual(set(schema['properties']), set(schema['required']))
         self.assertEqual(schema['properties']['decision']['enum'], ['pass', 'block'])
+        self.assertEqual(schema['properties']['review']['maxLength'], 4000)
+        self.assertEqual(schema['properties']['blockers']['maxItems'], 20)
+        self.assertEqual(schema['properties']['blockers']['items']['maxLength'], 2000)
         evidence = json.loads(payload['messages'][1]['content'])
         self.assertEqual(evidence['files'][0]['patch'], FILE['patch'])
         self.assertNotIn('tools', payload)
@@ -243,6 +246,53 @@ class PrReviewTests(unittest.TestCase):
         self.assertEqual(evidence['files'][0]['patch'], FILE['patch'])
         self.assertEqual(evidence['base_context']['base_commit'], BASE_COMMIT)
         self.assertEqual(len(evidence['base_context']['files']), len(review.BASE_CONTEXT_PATHS))
+
+    def test_one_format_correction_can_preserve_a_block_or_return_a_valid_pass(self):
+        block = {'decision': 'block', 'blockers': ['js/example.js: data validation removed'], 'review': 'Concrete defect.'}
+        for corrected in (PASS, block):
+            with self.subTest(corrected=corrected):
+                invalid = completion(dict(PASS, blockers=['remote-private-text']))
+                with patch.object(review, 'request_json', side_effect=[invalid, completion(corrected)]) as gateway:
+                    result = review.ai_review([FILE], 'model', 'key', {'base_commit': BASE_COMMIT, 'files': []})
+                self.assertEqual(result, corrected)
+                self.assertEqual(gateway.call_count, 2)
+                first, second = [call.args[2] for call in gateway.call_args_list]
+                self.assertEqual(first['messages'], second['messages'][:-1])
+                correction = second['messages'][-1]['content']
+                self.assertIn('AI PASS cannot include blockers', correction)
+                self.assertIn('do not change a block to pass', correction)
+                self.assertNotIn('remote-private-text', correction)
+
+    def test_valid_block_refusal_and_truncation_are_not_retried(self):
+        block = {'decision': 'block', 'blockers': ['js/example.js: concrete defect'], 'review': 'Blocked.'}
+        responses = [completion(block), completion(reason='length'), completion(reason='content_filter'),
+                     {'choices': [{'finish_reason': 'stop', 'message': {'refusal': 'private refusal text'}}]}]
+        for response in responses:
+            with self.subTest(response=response):
+                github = FakeGitHub()
+                result, gateway, _ = self.execute(github, response)
+                self.assertEqual(result, 1)
+                gateway.assert_called_once()
+                self.assertNotIn('private refusal text', github.body())
+
+    def test_repeated_format_failure_stays_failed_after_exactly_two_attempts(self):
+        github = FakeGitHub()
+        invalid = completion(dict(PASS, blockers=['private model note']))
+        result, gateway, _ = self.execute(github, invalid)
+        self.assertEqual(result, 1)
+        self.assertEqual(gateway.call_count, 2)
+        self.assertIn('AI PASS cannot include blockers', github.body())
+        self.assertNotIn('private model note', github.body())
+        self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+
+    def test_format_diagnostics_identify_limits_without_remote_values(self):
+        cases = [(dict(PASS, review='x' * 4001), 'AI summary must contain'),
+                 (dict(PASS, blockers=['x' * 2001]), 'Each AI blocker must contain'),
+                 (dict(PASS, decision='block'), 'AI BLOCK requires a concrete blocker')]
+        for decision, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(review.ReviewFormatError, message):
+                    review.parse_decision(completion(decision))
 
     def test_unsupported_structured_output_fails_closed_without_fallback(self):
         github = FakeGitHub()

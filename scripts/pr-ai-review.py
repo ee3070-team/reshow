@@ -30,6 +30,10 @@ class ReviewError(Exception):
     """Only fixed/sanitized diagnostics belong in this exception."""
 
 
+class ReviewFormatError(ReviewError):
+    """A malformed verdict may be corrected once; it is never accepted as-is."""
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None  # Never forward either API credential to another location.
@@ -249,29 +253,38 @@ def parse_decision(result):
     try:
         choices = result['choices']
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-            raise ReviewError('AI response must contain exactly one completion object; no AI verdict was accepted')
+            raise ReviewFormatError('AI response must contain exactly one completion object; no AI verdict was accepted')
         if choices[0].get('finish_reason') != 'stop':
-            raise ReviewError('AI completion is incomplete; no AI verdict was accepted')
-        decision = json.loads(choices[0]['message']['content'])
+            raise ReviewError('AI completion is incomplete or refused; no AI verdict was accepted')
+        message = choices[0]['message']
+        if isinstance(message, dict) and message.get('refusal'):
+            raise ReviewError('AI review was refused; no AI verdict was accepted')
+        decision = json.loads(message['content'])
         if not isinstance(decision, dict):
-            raise ReviewError('AI verdict must be a JSON object; no AI verdict was accepted')
+            raise ReviewFormatError('AI verdict must be a JSON object; no AI verdict was accepted')
         expected = {'decision', 'blockers', 'review'}
         if set(decision) != expected:
             # Report only fixed field names and a count, never arbitrary model data.
             missing = ', '.join(sorted(expected - set(decision))) or 'none'
             extra_count = len(set(decision) - expected)
-            raise ReviewError(f'AI verdict fields are invalid (missing: {missing}; extra fields: {extra_count}); '
+            raise ReviewFormatError(f'AI verdict fields are invalid (missing: {missing}; extra fields: {extra_count}); '
                               'no AI verdict was accepted')
         blockers, review = decision['blockers'], decision['review']
-        if (decision['decision'] not in ('pass', 'block') or not isinstance(blockers, list)
-                or len(blockers) > 20 or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 2000 for item in blockers)
-                or not isinstance(review, str) or not 1 <= len(review.strip()) <= 4000
-                or (decision['decision'] == 'pass' and blockers)
-                or (decision['decision'] == 'block' and not blockers)):
-            raise ReviewError('AI verdict is invalid or contradictory; no AI verdict was accepted')
+        if decision['decision'] not in ('pass', 'block'):
+            raise ReviewFormatError('AI decision must be pass or block; no AI verdict was accepted')
+        if not isinstance(blockers, list) or len(blockers) > 20:
+            raise ReviewFormatError('AI blockers must be a list of at most 20 items; no AI verdict was accepted')
+        if any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 2000 for item in blockers):
+            raise ReviewFormatError('Each AI blocker must contain 1 to 2000 characters; no AI verdict was accepted')
+        if not isinstance(review, str) or not 1 <= len(review.strip()) <= 4000:
+            raise ReviewFormatError('AI summary must contain 1 to 4000 characters; no AI verdict was accepted')
+        if decision['decision'] == 'pass' and blockers:
+            raise ReviewFormatError('AI PASS cannot include blockers; no AI verdict was accepted')
+        if decision['decision'] == 'block' and not blockers:
+            raise ReviewFormatError('AI BLOCK requires a concrete blocker; no AI verdict was accepted')
         return decision
     except (KeyError, TypeError, ValueError, IndexError):
-        raise ReviewError('AI response is malformed or empty; no AI verdict was accepted') from None
+        raise ReviewFormatError('AI response is malformed or empty; no AI verdict was accepted') from None
 
 
 def ai_review(files, model, key, context):
@@ -286,8 +299,9 @@ def ai_review(files, model, key, context):
                     'required': ['decision', 'blockers', 'review'],
                     'properties': {
                         'decision': {'type': 'string', 'enum': ['pass', 'block']},
-                        'blockers': {'type': 'array', 'items': {'type': 'string'}},
-                        'review': {'type': 'string'},
+                        'blockers': {'type': 'array', 'maxItems': 20,
+                                     'items': {'type': 'string', 'minLength': 1, 'maxLength': 2000}},
+                        'review': {'type': 'string', 'minLength': 1, 'maxLength': 4000},
                     },
                 },
             },
@@ -312,7 +326,21 @@ def ai_review(files, model, key, context):
             {'role': 'user', 'content': json.dumps({'files': files, 'base_context': context}, ensure_ascii=False)},
         ],
     }
-    return parse_decision(request_json(AI_BASE + '/chat/completions', key, payload))
+    for attempt in range(2):
+        # Transport failures, refusals and valid BLOCK verdicts are never retried.
+        result = request_json(AI_BASE + '/chat/completions', key, payload)
+        try:
+            return parse_decision(result)
+        except ReviewFormatError as error:
+            if attempt:
+                raise
+            # Only fixed validator diagnostics are echoed, not remote prose or keys.
+            correction = ('The previous response failed output validation: ' + str(error)
+                          + ' Return one valid JSON verdict under the existing schema. Preserve the substantive '
+                          'judgment and concrete blockers; do not change a block to pass just to satisfy formatting. '
+                          'Put non-blocking observations in review. Keep within the specified length limits.')
+            payload = {**payload, 'messages': [*payload['messages'], {'role': 'user', 'content': correction}]}
+
 
 
 def safe_text(value, secrets=()):
