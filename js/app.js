@@ -12,6 +12,7 @@ import {
   toast,
   reportError,
   handleAction,
+  staffIdentity,
 } from "./ui.js";
 import { render as overview } from "./pages/overview.js";
 import { render as exhibits } from "./pages/exhibits.js";
@@ -88,8 +89,8 @@ let sessionUser = null, loginCleanup = null, accountCleanup = null;
 
 function updateIdentity(user) {
   sessionUser = user;
-  const initials = user.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
-  document.querySelector("#session-identity").innerHTML = `<span class="avatar">${esc(initials)}</span><span>${esc(user.name)}<small>${esc(user.role)} · ${api.isLive() ? "Live" : "Demo"} session</small></span>`;
+  const { name, initials } = staffIdentity(user);
+  document.querySelector("#session-identity").innerHTML = `<span class="avatar">${esc(initials)}</span><span>${esc(name)}<small>${esc(user.role)} · ${api.isLive() ? "Live" : "Demo"} session</small></span>`;
   document.querySelectorAll("[data-page]").forEach(link => { link.hidden = !canNavigate(link.dataset.page); });
   document.querySelector("#demo-controls").hidden = !api.can("demo");
   document.querySelector("#workspace-mode").textContent = api.isLive() ? "Live backend" : "Demo data";
