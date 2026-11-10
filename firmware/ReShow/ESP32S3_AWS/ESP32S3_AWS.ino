@@ -3,7 +3,7 @@
   Board: ESP32S3 Dev Module, Espressif Arduino core 3.x (tested with 3.3.12).
   All libraries below ship with that core. See ../SETUP.txt before uploading.
 
-  CONFIGURE the four placeholders below. The deployed API v0.4.1 currently
+  UPLOADS ARE DISABLED BY DEFAULT. Configure local credentials and the IDs below. The deployed API v0.4.1 currently
   only documents a DEMO producer credential. A backend change is required
   to authorize this hardware device and source="device" on the same routes.
   Do NOT use a staff Cognito token or relabel real measurements as "demo".
@@ -29,6 +29,8 @@
 #endif
 
 
+// Enable only after the backend provisions a source=device producer for these IDs.
+constexpr bool HARDWARE_UPLOADS_ENABLED = false;
 const char EXHIBIT_ID[] = "demo-artifact-01";
 const char DEVICE_ID[] = "reshow-mega-01";  // Backend must authorize this ID.
 const char API_ORIGIN[] = "https://urauw4ckw1.execute-api.us-east-1.amazonaws.com";
@@ -249,6 +251,39 @@ void finishStage() {
   nextAttempt = millis() + 1100;  // Under one POST/sec, including backlog draining.
 }
 
+void handleUploadResult(int code, const String &retryAfter) {
+  if (code == 200 || code == 201) {
+    Serial.println("AWS accepted record (created or identical duplicate).");
+    finishStage();
+  } else if (code == 400 || code == 413 || code == 415 || code == 422) {
+    Serial.println("Record rejected: check schema. Dropping this endpoint record, not reporting success.");
+    finishStage();
+  } else if (code == 409) {
+    // Preserve this exact stage and its paired reading. A conflict is not an ack.
+    retryDelayMs = 60000;
+    nextAttempt = millis() + retryDelayMs;
+    Serial.println("ID CONFLICT: pending payload and paired reading retained in RAM. Reconcile backend record; retry in 60 s. New samples may overflow the bounded queue.");
+  } else {
+    uint32_t waitMs = retryDelayMs;
+    retryDelayMs = retryDelayMs < 30000 ? retryDelayMs * 2 : 60000;
+    if (code == 401 || code == 403 || code == 404 || (code >= 300 && code < 400)) {
+      waitMs = 60000;
+      Serial.println("Check hardware producer permission, device/exhibit provisioning and route. Retrying in 60 s.");
+    }
+    // Honor Retry-After delta seconds; HTTP-date form falls back to exponential backoff.
+    if (code == 429 && retryAfter.length()) {
+      char *end = nullptr;
+      unsigned long seconds = strtoul(retryAfter.c_str(), &end, 10);
+      if (end != retryAfter.c_str() && *end == '\0' && seconds <= 86400UL) {
+        uint32_t requested = (uint32_t)seconds * 1000UL;
+        if (requested > waitMs) waitMs = requested;
+      }
+    }
+    nextAttempt = millis() + waitMs;
+    Serial.printf("Pending payload retained; retry after %lu ms.\n", (unsigned long)waitMs);
+  }
+}
+
 void uploadPending() {
   const char *path = pendingStage == 0 ? "/api/device-status" : "/api/readings";
   WiFiClientSecure tls;
@@ -272,31 +307,14 @@ void uploadPending() {
   String retryAfter = http.header("Retry-After");
   http.end();
   Serial.printf("POST %s -> %d; record %s\n", path, code, pending.id);
-  if (code == 200 || code == 201) {
-    Serial.println("AWS accepted record (created or identical duplicate).");
-    finishStage();
-  } else if (code == 400 || code == 409 || code == 413 || code == 415 || code == 422) {
-    Serial.println("Record rejected: check schema/ID conflict. Dropping this endpoint record, not reporting success.");
-    finishStage();
-  } else {
-    uint32_t waitMs = retryDelayMs;
-    retryDelayMs = retryDelayMs < 30000 ? retryDelayMs * 2 : 60000;
-    if (code == 401 || code == 403 || code == 404 || (code >= 300 && code < 400)) {
-      waitMs = 60000;
-      Serial.println("Check hardware producer permission, device/exhibit provisioning and route. Retrying in 60 s.");
-    }
-    // Honor Retry-After delta seconds; HTTP-date form falls back to exponential backoff.
-    if (code == 429 && retryAfter.length()) {
-      char *end = nullptr;
-      unsigned long seconds = strtoul(retryAfter.c_str(), &end, 10);
-      if (end != retryAfter.c_str() && *end == '\0' && seconds <= 86400UL) {
-        uint32_t requested = (uint32_t)seconds * 1000UL;
-        if (requested > waitMs) waitMs = requested;
-      }
-    }
-    nextAttempt = millis() + waitMs;
-    Serial.printf("Pending payload retained; retry after %lu ms.\n", (unsigned long)waitMs);
-  }
+  handleUploadResult(code, retryAfter);
+}
+
+bool uploadConfigurationReady() {
+  return HARDWARE_UPLOADS_ENABLED && strncmp(WIFI_SSID, "REPLACE_", 8) != 0 &&
+    strncmp(WIFI_PASSWORD, "REPLACE_", 8) != 0 &&
+    strncmp(DEVICE_BEARER_TOKEN, "REPLACE_", 8) != 0 && strlen(DEVICE_BEARER_TOKEN) > 0 &&
+    strncmp(EXHIBIT_ID, "REPLACE_", 8) != 0 && validIdentifier(DEVICE_ID) && validIdentifier(EXHIBIT_ID);
 }
 
 void setup() {
@@ -308,10 +326,7 @@ void setup() {
   }
   MegaLink.setRxBufferSize(2048);
   MegaLink.begin(9600, SERIAL_8N1, MEGA_RX_PIN, MEGA_TX_PIN);
-  configurationReady = strncmp(WIFI_SSID, "REPLACE_", 8) != 0 &&
-    strncmp(WIFI_PASSWORD, "REPLACE_", 8) != 0 &&
-    strncmp(DEVICE_BEARER_TOKEN, "REPLACE_", 8) != 0 && strlen(DEVICE_BEARER_TOKEN) > 0 &&
-    strncmp(EXHIBIT_ID, "REPLACE_", 8) != 0 && validIdentifier(DEVICE_ID) && validIdentifier(EXHIBIT_ID);
+  configurationReady = uploadConfigurationReady();
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   if (configurationReady) WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -333,7 +348,7 @@ void loop() {
   if (!configurationReady) {
     if ((uint32_t)(now - lastNotice) >= 10000) {
       lastNotice = now;
-      Serial.println("SETUP REQUIRED: edit Wi-Fi, hardware token and exhibit ID. UART reception is running.");
+      Serial.println("UPLOADS DISABLED: provision a hardware producer and configure credentials/IDs before explicitly enabling HARDWARE_UPLOADS_ENABLED. UART reception is running.");
     }
     delay(10);
     return;
