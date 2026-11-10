@@ -1,0 +1,328 @@
+ReShow: sensors -> Mega 2560 -> ESP32-S3 -> existing AWS API
+Prepared 4 November 2026; review update 10 November 2026, Hong Kong time
+
+FILES
+
+  Mega2560_Sensors/Mega2560_Sensors.ino
+  ESP32S3_AWS/ESP32S3_AWS.ino
+
+Open each .ino in its matching folder in Arduino IDE. Upload one sketch to
+each board. These are a matching pair; the UART format differs from the old
+sketches. No third-party libraries are needed.
+
+DEFAULT MODE: UART DIAGNOSTIC ONLY
+
+HARDWARE_UPLOADS_ENABLED is false in the shared sketch. Even with valid local
+credentials, this default does not start Wi-Fi or make API requests. Leave it
+false until the backend teammate has provisioned and confirmed the hardware
+producer, source=device scope, device and exhibit IDs described below. Only then
+explicitly set HARDWARE_UPLOADS_ENABLED=true in the sketch and flash it.
+This is integration firmware, not a ready-to-use production uploader.
+
+IMPORTANT: AWS BACKEND REQUIREMENT
+
+The live public API was checked on 4 November 2026 and reports v0.4.1:
+https://urauw4ckw1.execute-api.us-east-1.amazonaws.com/openapi.json
+
+Its current /api Bearer credential is documented as a synthetic DEMO producer
+credential, restricted to source=demo and configured demo device/exhibit IDs.
+It is NOT a documented credential for physical hardware. Both new payloads
+correctly use source=device. They will not become accepted hardware uploads
+just by inserting the old demo token. Do not change source to demo to bypass
+this restriction, and do not use a staff Cognito access token for /api.
+
+Ask the backend teammate to:
+  1. Provide a hardware producer authentication mechanism for the existing
+     POST /api/device-status and POST /api/readings routes. This sketch assumes
+     an Authorization: Bearer device credential. If the agreed mechanism is
+     different, update uploadPending() accordingly.
+  2. Scope that producer to the physical DEVICE_ID and allow source=device.
+  3. Provision its showcase/device and the existing exhibit referenced by
+     EXHIBIT_ID. /api/readings requires an already-created exhibit record;
+     a management profile alone may not satisfy that requirement.
+  4. Confirm the returned 200/201 records appear in the intended showcase and
+     historical reading views. This firmware does not create backend resources.
+
+No AWS write, device provisioning, or board flashing was performed during
+development. The firmware is compiled and locally tested; real hardware and
+authenticated uploads still require the configuration above.
+
+WIRING (POWER OFF WHILE CONNECTING)
+
+Mega signal                    Connection
+-----------                    ----------
+A1                             LM35 output
+A0                             Existing light sensor analog output
+D3                             Ultrasonic TRIG
+D2                             Ultrasonic ECHO
+D13/D12/D11                     Existing RGB LED 1 R/G/B
+D48/D46/D44                     Existing RGB LED 2 R/G/B
+D16 / TX2                      Through voltage divider/shifter -> ESP GPIO18/RX
+GND                            ESP32-S3 GND and all sensor grounds
+D17 / RX2                      Not used; leave disconnected
+ESP GPIO17 / TX                Not used; leave disconnected
+
+IMPORTANT: Mega TX2 is 5 V logic; do not connect it directly to ESP GPIO18.
+Use a suitable UART level shifter or this divider:
+
+  Mega D16/TX2 ---- 1 kohm ----+---- ESP32-S3 GPIO18/RX
+                              |
+                            2 kohm
+                              |
+                         common GND
+
+This gives about 3.33 V from a 5 V TX signal. Use the actual GPIO labels on
+your ESP32-S3 board; check that GPIO18/17 are available on that board variant.
+The tested default target is ESP32S3 Dev Module, not an Arduino Nano ESP32 pin map.
+Power the boards through their appropriate USB/power inputs. Do not connect
+the Mega's 5 V to the ESP32's 3V3 pin. The grounds must be connected.
+
+Keep the LM35 and 5 V ultrasonic signals on the Mega side. Check your LM35
+package pinout in its datasheet. Use current-limiting resistors for RGB LEDs;
+use drivers for lighting loads that exceed the Mega GPIO current rating.
+Default LED logic assumes active-high/common-cathode wiring, as in the original
+code. Set LED_ACTIVE_HIGH=false for common-anode wiring with suitable drivers.
+
+ARDUINO IDE SETTINGS
+
+Mega:
+  Board package: Arduino AVR Boards (compiled with 1.8.8)
+  Board: Arduino Mega or Mega 2560
+  Processor: ATmega2560 (Mega 2560)
+  Select the Mega's serial port, then upload Mega2560_Sensors.ino.
+
+ESP32-S3:
+  Board package: esp32 by Espressif Systems (compiled with 3.3.12)
+  Board: ESP32S3 Dev Module, or the correct variant for your actual board
+  Select flash/PSRAM settings matching the board. Default sketch partition
+  must have at least about 1.01 MB of application space.
+  If using the native USB connector for Serial Monitor, enable USB CDC On Boot
+  as appropriate for the board. For a USB-UART bridge, use its UART console.
+  Select the ESP32's serial port, then upload ESP32S3_AWS.ino.
+
+Both USB serial monitors use 115200 baud. The board-to-board UART uses 9600,
+8 data bits, no parity, 1 stop bit. Do not change only one end's UART baud rate.
+
+ESP32 CONFIGURATION
+
+For the repository source, copy ESP32S3_AWS/local_config.example.h to
+ESP32S3_AWS/local_config.h and set WIFI_SSID, WIFI_PASSWORD, and
+DEVICE_BEARER_TOKEN there. local_config.h is ignored by Git. The diagnostic
+sketch uses its own local_config.h in the same way. If the local file is absent,
+the sketches use safe placeholders from local_config.example.h.
+
+EXHIBIT_ID and DEVICE_ID remain near the top of ESP32S3_AWS.ino.
+The local ZIP is an older convenience bundle and is not published. Use the tracked
+source and example headers for the reviewed version.
+
+Configuration fields:
+  WIFI_SSID            Your 2.4 GHz Wi-Fi network
+  WIFI_PASSWORD        Its password (empty is allowed for an open test network)
+  DEVICE_BEARER_TOKEN  Hardware credential supplied by the backend teammate
+  EXHIBIT_ID           Existing backend exhibit ID for this physical setup
+  DEVICE_ID            Device ID authorized by the backend; default reshow-mega-01
+
+Shared source intentionally contains credential placeholders. The sketch receives
+and logs UART frames; uploads require both real provisioned credentials and the
+explicit HARDWARE_UPLOADS_ENABLED gate.
+Do not commit or distribute a configured sketch containing a real credential.
+The original sketches' Wi-Fi passwords have not been copied into this package.
+
+The existing HTTPS origin and a public Amazon Root CA 1 are included. TLS
+verifies the certificate and hostname; redirects are disabled. The exact CA
+was verified against the live endpoint during development. If the service's
+certificate chain changes, update the trust anchor from its official issuer;
+do not disable certificate validation.
+
+HOW IT WORKS
+
+Mega:
+  - Samples averaged LM35/light readings every second and immediately before
+    transmitting. No external LM35IC library is needed.
+  - Uses the LM35's 10 mV/degree C slope. ADC_REFERENCE_MV defaults to 5000;
+    measure the Mega supply/reference voltage and change this for accuracy.
+    Averaging reduces noise but does not create extra ADC resolution.
+  - Rejects rail/out-of-range temperature readings. This simple single-supply
+    LM35 circuit is intended for positive room temperatures. A disconnected
+    analog sensor can still produce plausible values: this is not a full
+    electrical fault detector. Light readings are relative ADC values, not lux.
+  - Measures ultrasonic distance about every 100 ms, with a 25 ms timeout.
+    Valid assumed range is approximately 2..400 cm. Adjust for your sensor.
+  - Detects occupancy below 15 cm; requires one second of continuous valid
+    far readings before clearing occupancy. No echo reports unknown occupancy
+    and distance, not a made-up zero or confirmed empty zone.
+  - Auto lights turn OFF during unknown proximity. O forces ON; F forces OFF;
+    A restores Auto. Send these characters to the MEGA USB Serial Monitor.
+    LEDs reflect commanded pin outputs; there is no independent optical feedback.
+  - Retains the original local temperature/light limits as serial warnings.
+    Temperature swing is evaluated over 24 elapsed hours, not the original
+    test value of 60 seconds. These warnings are not uploaded as warning events.
+  - Sends one checksummed snapshot every 10 seconds. Local eventCount counts
+    zone entries, not unique visitors, and resets when the Mega restarts.
+
+ESP32-S3:
+  - A dedicated receive task drains the UART during blocking HTTPS requests.
+  - Rejects bad CRCs, oversized lines, partial-line timeouts, invalid fields
+    and inconsistent unknown values. No UART acknowledgement/retransmission
+    protocol is implemented; damaged frames are dropped and the next sample
+    arrives 10 seconds later.
+  - Gets UTC from NTP after Wi-Fi connects. Samples arriving before a valid
+    clock are logged but dropped rather than assigned invented timestamps.
+  - recorded_at is ESP reception time, approximately the Mega sampling time
+    plus serial transit/scheduling latency. It is NOT a timestamp measured by
+    a Mega RTC. HTTPS retries keep this original reception timestamp.
+  - Stores up to 24 queued snapshots plus one in-flight snapshot in RAM. After
+    initial time synchronization, Wi-Fi outages can be buffered for about four
+    minutes. A full queue drops NEW snapshots with a log message. Reset/power
+    loss discards all pending data. This is not a lossless archival logger.
+  - Builds fixed, bounded JSON payloads with stable record IDs. Retry bodies
+    and IDs do not change. Only HTTP 200 or 201 counts as acceptance.
+  - Paces requests at least 1.1 seconds apart. Timeouts, network failures and
+    server failures retain the payload with exponential backoff (up to 60 s).
+    HTTP 429 also honors Retry-After delta seconds up to one day; date-form
+    Retry-After falls back to backoff. 401/403/404/redirects retry after 60 s.
+    400/413/415/422 explicitly discard that endpoint's rejected record and
+    log the failure. It does not pretend that those requests succeeded.
+  - HTTP 409 retains the exact pending payload, ID, endpoint stage and paired
+    reading; it retries after 60 seconds and logs an explicit conflict. Backend
+    reconciliation is required. Conflicts never count as acceptance. Pending
+    data is RAM-only: a long conflict can fill the queue and drop new samples;
+    reboot/power loss still discards the queue. This is not durable storage.
+
+AWS FIELD MAPPING
+
+POST /api/device-status, once per received snapshot:
+  status_id          Stable unique s-... ID
+  device_id          Configured device ID
+  recorded_at        UTC reception timestamp
+  source             "device"
+  temperature_c      LM35 Celsius, or null if invalid
+  brightness_percent Light ADC * 100 / 1023, rounded to two decimal places
+  occupied           Boolean, or null on missing/invalid echo
+  distance_cm        Ultrasonic distance, or null
+  lighting_mode      "Auto", "On", or "Off"
+  lighting_output    "On" or "Off" based on commanded Mega outputs
+  latch              null (there is no latch sensor in the supplied code)
+  local_control      true for local forced On/Off, false for Auto
+
+POST /api/readings, after status, when temperature AND occupancy are valid:
+  reading_id         Stable unique r-... ID
+  device_id          Configured device ID
+  exhibit_id         Configured existing exhibit ID
+  recorded_at        Same timestamp as the status observation
+  temperature_c      LM35 Celsius
+  brightness_raw     Actual Mega ADC value, 0..1023
+  occupied           Boolean
+  distance_cm        Ultrasonic distance
+  source             "device"
+
+The API permits brightness_raw from 0..4095, so the Mega's native 0..1023
+readings fit without inventing resolution or scaling the raw data. Consumers
+must use a 1023 full-scale value for this device when converting raw history
+to relative brightness. The status route already provides the correct 0..100
+value. If your backend assumes all raw readings use 12-bit ADCs, its device
+metadata/normalization must account for the Mega's 10-bit ADC.
+
+The current ReadingInput schema cannot store null temperature/occupancy.
+Such samples still go to nullable DeviceStatusInput but skip /api/readings.
+Unknown fields are rejected by the API, so the original eventCount/lighting
+JSON is not posted directly to /api/readings. Event count is visible on UART
+and both serial monitors; lighting is uploaded via /api/device-status.
+
+This request covers sensor telemetry. It does not implement cloud lighting
+commands, command acknowledgements, RFID, latch control, labels, completed
+proximity intervals, exhibit display history, or analytics coverage. Sampled
+occupancy alone must not be treated as complete visitor/event analytics.
+EXHIBIT_ID is a fixed local configuration; update it when the physical exhibit
+changes. There is no assignment command synchronization in these sketches.
+
+UART PROTOCOL (NO EXTRA LIBRARY)
+
+  V1,seq,uptime_ms,temp_centi_c,light_adc,distance_mm,occupied,events,mode,output*HHHH\r\n
+
+  CRC: CRC-16/CCITT-FALSE, polynomial 0x1021, initial value 0xFFFF, no final XOR.
+  Checksum covers ASCII bytes from V through the last digit before '*'.
+  Invalid temperature: -32768. Unknown distance/occupancy: -1/-1.
+  Lighting mode: 0=Auto, 1=On, 2=Off. Output: 0=Off, 1=On.
+  This replaces the old JSON UART payload to add corruption detection without
+  adding any third-party libraries. The AWS requests are still application/json.
+
+REVIEW OF ORIGINAL FOUR SKETCHES
+
+Mega_ESP_Network/MegaConnection/MegaConnection.ino:
+  Sends a text counter on Serial2 every two seconds; no sensor acquisition.
+
+Mega_ESP_Network/WIFI/WIFI.ino:
+  Receives GPIO18/GPIO17 UART and sends text/plain to http://httpbin.org/post.
+  This verifies a serial/Wi-Fi path, not AWS authentication, TLS or persistence.
+
+Teammate code/hardware_updated.ino:
+  Provides the sensor/LED pins and local A/O/F behavior reused above.
+  A missing echo leaves the interrupt state waiting forever, preventing a new
+  trigger. Reading multi-byte ISR timestamps without an atomic snapshot can
+  also race on an 8-bit Mega. The new bounded pulseIn removes that shared state.
+  Environmental reads were 30 seconds apart despite sending every 10 seconds.
+  The "daily" period was a 60-second test value. No LM35IC.h implementation was
+  present in the supplied folder; direct ADC conversion removes that dependency.
+
+Teammate code/wifi_updated.ino:
+  Sends JSON to the same HTTP echo server. It retains only the latest message,
+  reposts stale data indefinitely, and does not distinguish successful HTTP
+  acceptance from positive error statuses such as 400/401. The backend expects
+  a different field set, UTC timestamps, stable IDs and producer authentication.
+
+Both old ESP sketches block UART draining during HTTP requests. They have a
+200-character line limit and contain hard-coded local Wi-Fi credentials.
+The new pair uses bounded buffers, explicit failure handling and placeholders.
+The four original files remain unchanged in the Desktop/ESP32 folder.
+
+BENCH TEST ORDER
+
+1. Upload the Mega sketch. In its 115200-baud monitor, verify a "To ESP32: V1,..."
+   line every 10 seconds. Check LM35 temperature against a known thermometer.
+   Cover/uncover the light sensor and verify whether higher ADC means brighter
+   in your actual circuit; the original code assumes it does.
+2. Move an object inside/outside 15 cm. Verify occupied state and the one-second
+   clear delay. Remove the echo connection and confirm measurements recover
+   after reconnecting; unknown distance/occupancy must be -1.
+3. Connect TX2 through the voltage divider and connect common GND. Upload the
+   ESP sketch. Verify "Mega seq=..." appears in its 115200-baud monitor.
+4. With backend device authentication ready, fill the ESP constants and upload.
+   Wait for Wi-Fi/NTP. Expect POST /api/device-status -> 201 (or 200 for duplicate)
+   and POST /api/readings -> 201 when required measurements are valid.
+5. Have the backend teammate read back those exact IDs and check the values,
+   source=device and device/showcase association. A serial log alone does not
+   prove that the intended frontend view displays the record correctly.
+6. Briefly disconnect Wi-Fi and reconnect. Watch the queue drain and confirm
+   retained IDs/timestamps. Test a longer outage only with the understanding
+   that the finite RAM queue explicitly drops samples.
+
+VERIFICATION PERFORMED
+
+  - Compiled for arduino:avr:mega:cpu=atmega2560, AVR core 1.8.8.
+  - Compiled for esp32:esp32:esp32s3, Espressif core 3.3.12.
+  - Executed the actual Mega sensor/lighting functions with mocked pins/time:
+    known ADC conversion, missing-echo recovery, hysteresis across millis wrap,
+    forced lighting modes, invalid temperatures and Mega-to-ESP frame parsing.
+  - Executed actual ESP CRC/parser/payload functions on the host: corruption,
+    overflow, bad fields, unknown values, small output buffers and JSON shape.
+  - Checked generated payload field sets/types/nullability/enums/bounds against
+    the fetched v0.4.1 schema. Its published timestamp regex double-escapes \d;
+    validation checked the intended UTC date format.
+  - Verified a read-only HTTPS fetch of the live public contract using exactly
+    the public CA embedded in the sketch.
+  - Not verified on physical boards or with authenticated AWS POST requests.
+    Host tests do not simulate Wi-Fi/FreeRTOS scheduling or physical sensors.
+
+REFERENCES
+
+Existing AWS contract:
+https://urauw4ckw1.execute-api.us-east-1.amazonaws.com/openapi.json
+Espressif Arduino UART API:
+https://docs.espressif.com/projects/arduino-esp32/en/latest/api/serial.html
+Arduino Mega hardware:
+https://docs.arduino.cc/hardware/mega-2560/
+Texas Instruments LM35 datasheet (10 mV/degree C):
+https://www.ti.com/lit/ds/symlink/lm35.pdf
+Amazon Root CA 1:
+https://www.amazontrust.com/repository/AmazonRootCA1.pem
