@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import { createStaffSession, safeReturnHash, base64url } from "../js/auth-session.js";
+import { createSessionAuth } from "../js/session-auth.js";
+import { createApi } from "../js/api.js";
 const ORIGIN = "https://dkbznu9f5nh9n.cloudfront.net";
 const CONFIG = {
   client_id: "publicclient123", issuer: "https://cognito-idp.us-east-1.amazonaws.com/unit",
@@ -372,4 +374,142 @@ test("base64url preserves binary bytes and trims padding in a single linear pass
     const bytes = Uint8Array.from({ length }, (_, index) => index % 256);
     assert.equal(base64url(bytes), Buffer.from(bytes).toString("base64url"));
   }
+});
+
+
+test("merged dashboard and live showcase share one callback, identity and request credential", async () => {
+  const h = harness({ location: { hash: "#live-demo" } });
+  const auth = createSessionAuth(h.session, h.location);
+  await auth.startLogin();
+  const transaction = JSON.parse([...h.persisted.values()][0]);
+  assert.equal(transaction.returnHash, "#live-demo");
+  h.location.pathname = "/auth/callback.html";
+  h.location.search = "?" + new URLSearchParams({ state: transaction.state, code: "synthetic-code" });
+  await auth.initialize();
+  assert.equal(auth.getSession().id, h.session.snapshot().user.staff_id);
+  assert.equal(auth.can("view"), true);
+  assert.equal(auth.can("manage_accounts"), false);
+  await auth.request("/staff-api/exhibit-profiles/item", { method: "PATCH", headers: { "If-Match": "7" }, body: { name: "Updated" } });
+  const dashboard = h.calls.at(-1);
+  assert.ok(dashboard.url.endsWith("/staff-api/exhibit-profiles/item"));
+  assert.equal(dashboard.init.headers["if-match"], "7");
+  assert.equal(dashboard.init.body, JSON.stringify({ name: "Updated" }));
+  await h.session.request("/showcases");
+  assert.equal(dashboard.init.headers.authorization, h.calls.at(-1).init.headers.authorization);
+  h.session.dispose();
+});
+
+test("merged session subscriptions invalidate on identity changes, not routine permission checks", async () => {
+  const h = harness();
+  await h.authenticate();
+  const auth = createSessionAuth(h.session, h.location);
+  let changes = 0;
+  const off = auth.subscribe(() => changes++);
+  await auth.refreshSession();
+  assert.equal(changes, 0);
+  h.setHandler(url => url.endsWith("/session") ? response({ user: { ...USER, role: "Operator" } }) : null);
+  assert.equal((await auth.refreshSession()).role, "Operator");
+  assert.equal(changes, 1);
+  await auth.signOut();
+  assert.equal(auth.getSession(), null);
+  assert.ok(changes >= 2);
+  assert.ok(h.moves.at(-1).startsWith(CONFIG.logout_endpoint));
+  off(); h.session.dispose();
+});
+
+test("merged dashboard forwards read cancellation and preserves unknown mutation outcomes", async () => {
+  const h = harness();
+  await h.authenticate();
+  const auth = createSessionAuth(h.session, h.location);
+  const controller = new AbortController(); controller.abort();
+  const calls = h.calls.length;
+  await assert.rejects(auth.request("/staff-api/showcases", { signal: controller.signal }), error => error.code === "request_cancelled");
+  assert.equal(h.calls.length, calls);
+  h.setHandler(() => { throw new TypeError("Disconnected"); });
+  await assert.rejects(auth.request("/staff-api/exhibit-profiles/item", { method: "PATCH", body: {} }), /may already have happened/);
+  assert.equal(h.calls.length, calls + 1, "No mutation retries");
+  h.session.dispose();
+});
+
+test("dashboard versions reach fetch once and conflicting versions fail before sending", async () => {
+  const h = harness();
+  await h.authenticate();
+  const auth = createSessionAuth(h.session, h.location);
+  for (const options of [
+    { headers: { "If-Match": "7" } },
+    { headers: new Headers({ "if-match": "7" }), version: 7 },
+    { version: 7 },
+  ]) {
+    await auth.request("/staff-api/exhibit-profiles/item", { method: "PATCH", body: { name: "Updated" }, ...options });
+    const sent = h.calls.at(-1).init;
+    assert.equal(new Headers(sent.headers).get("if-match"), "7");
+    assert.equal(Object.keys(sent.headers).filter(key => key.toLowerCase() === "if-match").length, 1);
+    assert.equal(sent.headers.authorization, "Bearer " + TOKENS.access_token);
+  }
+  const before = h.calls.length;
+  await assert.rejects(auth.request("/staff-api/exhibit-profiles/item", {
+    method: "PATCH", headers: { "If-Match": "6" }, version: 7, body: {},
+  }), { code: "version_mismatch" });
+  assert.equal(h.calls.length, before);
+  h.session.dispose();
+});
+
+test("real facade selects Live on callback and routes reads through the shared credential", async () => {
+  const h = harness({ location: { origin: "http://localhost:8000", hostname: "localhost" } });
+  const target = { dataset: { loadId: "test-load", loadState: "loading" } };
+  const facade = createApi(h.session, { location: h.location, document: {
+    documentElement: { setAttribute() {} }, querySelector: () => target,
+  } });
+  assert.equal(facade.getMode(), "demo");
+  await facade.startLiveLogin();
+  const transaction = JSON.parse([...h.persisted.values()][0]);
+  h.location.pathname = "/auth/callback.html";
+  h.location.search = "?" + new URLSearchParams({ state: transaction.state, code: "synthetic-code" });
+  // A callback loads a fresh facade while keeping the provider transaction.
+  const callback = createApi(h.session, { location: h.location, document: {
+    documentElement: { setAttribute() {} }, querySelector: () => target,
+  } });
+  let notifications = 0;
+  const off = callback.subscribe(() => notifications++);
+  await callback.initialize();
+  assert.equal(callback.getMode(), "live");
+  assert.equal(callback.getSession().id, USER.staff_id);
+  assert.ok(notifications > 0, "Identity changes travel through the live adapter to facade subscribers");
+  assert.equal(callback.can("view"), true);
+  assert.deepEqual(await callback.getShowcases(), []);
+  const sent = h.calls.at(-1);
+  assert.match(sent.url, /\/staff-api\/showcases\?limit=100$/);
+  assert.equal(sent.init.headers.authorization, "Bearer " + TOKENS.access_token);
+  const timings = JSON.parse(target.dataset.requestTimings);
+  assert.deepEqual(Object.keys(timings[0]).sort(), ["milliseconds", "outcome", "resource"]);
+  assert.equal(timings[0].resource, "showcases");
+  assert.equal(timings[0].outcome, "ok");
+  off(); h.session.dispose();
+});
+
+test("real facade propagates identity changes and rejects a read crossing sign-out", async () => {
+  const h = harness();
+  const facade = createApi(h.session, { location: h.location });
+  await facade.startLiveLogin();
+  await h.authenticate();
+  let notifications = 0;
+  const off = facade.subscribe(() => notifications++);
+  await facade.refreshSession();
+  assert.equal(notifications, 0, "An unchanged session must not invalidate reads");
+  h.setHandler(url => url.endsWith("/session") ? response({ user: { ...USER, role: "Operator" } }) : null);
+  await facade.refreshSession();
+  assert.equal(facade.getSession().role, "Operator");
+  assert.equal(notifications, 1);
+  let release, started;
+  const reading = new Promise(resolve => { started = resolve; });
+  h.setHandler(() => new Promise(resolve => { release = resolve; started(); }));
+  const pending = facade.getShowcases();
+  await reading;
+  h.channel.onmessage({ data: { type: "signout" } });
+  assert.equal(facade.getSession(), null);
+  assert.equal(facade.can("view"), false);
+  assert.equal(notifications, 2);
+  release(response({ items: [], next_cursor: null }));
+  await assert.rejects(pending, error => error.code === "session_changed");
+  off(); h.session.dispose();
 });
