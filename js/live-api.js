@@ -3,7 +3,10 @@
 const PREFIX = "/staff-api";
 const SNAPSHOT_COLLECTIONS = ["exhibits", "operations", "staff", "reports", "events"];
 const clone = (value) => value == null ? value : JSON.parse(JSON.stringify(value));
-const uid = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+const uid = (prefix) => {
+  if (!globalThis.crypto?.randomUUID) throw issue("Use HTTPS or localhost to generate safe request identifiers.");
+  return `${prefix}-${globalThis.crypto.randomUUID()}`;
+};
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const encode = (value) => encodeURIComponent(String(value));
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object || {}, key);
@@ -23,7 +26,7 @@ function identifier(value, field = "id") {
   return result;
 }
 function number(value, field, min, max, integer = false) {
-  const result = typeof value === "string" && value.trim() === "" ? NaN : Number(value);
+  const result = typeof value === "string" && value.trim() === "" ? Number.NaN : Number(value);
   if (value == null || !Number.isFinite(result) || result < min || result > max || (integer && !Number.isInteger(result)))
     throw issue(`${field} must be ${integer ? "a whole number " : ""}between ${min} and ${max}.`, "validation", 400, { [field]: `Enter ${min}–${max}` });
   return result;
@@ -68,6 +71,8 @@ export function createLiveApi(auth) {
     if (!auth.getSession?.()) throw issue("Sign in to continue.", "unauthorized", 401);
     if (!can(permission)) throw issue("Your current account does not permit this action.", "forbidden", 403);
   }
+  // Mutation notifications run independently: a delayed view must not delay an
+  // accepted write. allSettled observes subscriber failures; polling awaits it.
   function emit(event) {
     // Only a poll's awaited notification may reuse its reads. A mutation or
     // identity change invalidates them before subscribers reload current state.
@@ -301,7 +306,7 @@ export function createLiveApi(auth) {
     const key = `exhibit:${tagId}`;
     const result = profile.id ? await request(`${PREFIX}/exhibit-profiles/${encode(identifier(profile.id))}`, { method: "PATCH", headers: { "If-Match": version(profile.version) }, body })
       : await request(`${PREFIX}/exhibit-profiles`, { method: "POST", body: { exhibit_id: createId(key, "ex"), ...body } });
-    pendingCreates.delete(key); emit();
+    pendingCreates.delete(key); void emit();
     return exhibitRecord(result.item, selectedShowcase ? [selectedShowcase] : []);
   }
   async function queue(type, payload, requestId) {
@@ -311,7 +316,7 @@ export function createLiveApi(auth) {
     const commandId = requestId || pendingCommands.get(key) || uid("cmd");
     pendingCommands.set(key, commandId);
     const result = await request(`${PREFIX}/commands`, { method: "POST", body: { command_id: commandId, showcase_id: showcase.showcase_id, type, payload } });
-    pendingCommands.delete(key); emit();
+    pendingCommands.delete(key); void emit();
     return commandRecord(result.item);
   }
   async function getLabel(exhibitId) {
@@ -331,7 +336,7 @@ export function createLiveApi(auth) {
     const expected = content?.version;
     const body = wireLabel(content, previous?.content?.image_media_id);
     const result = await request(`${PREFIX}/label-drafts/${encode(exhibitId)}`, { method: "PUT", headers: { "If-Match": version(expected, true) }, body });
-    drafts.set(exhibitId, clone(result.item)); emit();
+    drafts.set(exhibitId, clone(result.item)); void emit();
     return { draft: await labelContent(result.item.content, { version: result.item.version }), draftVersion: result.item.version, savedAt: result.item.updated_at };
   }
   async function sendLabel(exhibitId, content) {
@@ -356,11 +361,13 @@ export function createLiveApi(auth) {
   async function saveStaff(profile) {
     requirePermission("staff");
     const email = text(profile.email, "email", 160).toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw issue("Enter a valid email address.", "validation", 400, { email: "Invalid email" });
+    const parts = email.split("@"), domain = parts[1] || "", dot = domain.lastIndexOf(".");
+    if (parts.length !== 2 || !parts[0] || /\s/.test(email) || dot <= 0 || dot === domain.length - 1)
+      throw issue("Enter a valid email address.", "validation", 400, { email: "Invalid email" });
     const body = { name: text(profile.name, "name", 100), email, role: role(profile.role) }, key = `staff:${email}`;
     const result = profile.id ? await request(`${PREFIX}/staff/${encode(identifier(profile.id))}`, { method: "PATCH", headers: { "If-Match": version(profile.version) }, body })
       : await request(`${PREFIX}/staff`, { method: "POST", body: { staff_id: createId(key, "staff"), ...body } });
-    staffRecords.set(result.item.staff_id, clone(result.item)); pendingCreates.delete(key); emit();
+    staffRecords.set(result.item.staff_id, clone(result.item)); pendingCreates.delete(key); void emit();
     return staffRecord(result.item);
   }
   function scanAvailability() {
@@ -437,14 +444,14 @@ export function createLiveApi(auth) {
     }
     if (!Object.keys(body).length) throw issue("Choose a website account role or status change.");
     const result = await request(`${PREFIX}/accounts/${encode(identifier(staffId))}`, { method: "PATCH", headers: { "If-Match": version(patch.version) }, body });
-    emit(); return accountRecord(result.item);
+    void emit(); return accountRecord(result.item);
   }
   async function prepareAccountInvitation(staffId, accountRole) {
     requirePermission("accounts");
     if (staffId && typeof staffId === "object") { accountRole = staffId.role; staffId = staffId.staffId || staffId.id; }
     const key = `invite:${identifier(staffId)}`;
     const result = await request(`${PREFIX}/accounts/invitations`, { method: "POST", body: { invitation_id: createId(key, "invite"), staff_id: staffId, role: role(accountRole), delivery: "suppress" } });
-    pendingCreates.delete(key); emit(); return { ...accountRecord(result.item), note: result.note || "Account prepared without sending an invitation email." };
+    pendingCreates.delete(key); void emit(); return { ...accountRecord(result.item), note: result.note || "Account prepared without sending an invitation email." };
   }
   function filtersFor(raw, showcaseId) {
     return { showcaseId: showcaseId || selectedShowcaseId || "", start: raw.date_selection?.start_date || date(raw.start), end: raw.date_selection?.end_date || endDate(raw.end), exhibitId: raw.filter?.exhibit_id || raw.exhibit_id || "" };
@@ -541,7 +548,7 @@ export function createLiveApi(auth) {
       timezone: "Asia/Hong_Kong", interval_minutes: 60, sections: sectionsFor(preview.sections), ...(preview.filters.exhibitId ? { exhibit_id: identifier(preview.filters.exhibitId) } : {}) });
     const result = await request(`${PREFIX}/report-snapshots`, { method: "POST", body: clone(snapshotRequests.get(key)) });
     // Keep the capture ID even if hydration fails; retry is idempotent.
-    const report = await getReport(result.item.report_id); emit(); return report;
+    const report = await getReport(result.item.report_id); void emit(); return report;
   }
   function stopPolling() {
     clearTimeout(pollTimer); pollTimer = null;
@@ -594,7 +601,7 @@ export function createLiveApi(auth) {
       pendingCreates.clear(); pendingCommands.clear(); snapshotRequests.clear(); inFlightReads.clear();
       selectedShowcaseId = null; selectedShowcase = null; snapshotPending.clear();
     }
-    emit();
+    void emit();
     schedulePoll();
   });
   const unavailable = async () => { throw issue("Demo simulation is unavailable in live mode.", "live_only", 403); };
@@ -608,7 +615,7 @@ export function createLiveApi(auth) {
     selectShowcase: async (id) => {
       const nextId = identifier(id);
       stopPolling(); selectedShowcaseId = nextId;
-      try { const result = await currentShowcase(); emit(); return showcaseRecord(result); }
+      try { const result = await currentShowcase(); void emit(); return showcaseRecord(result); }
       finally { schedulePoll(); }
     },
     getShowcases: async () => Promise.all((await collect("/showcases")).map(showcaseRecord)),

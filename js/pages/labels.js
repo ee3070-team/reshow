@@ -13,7 +13,7 @@ import {
 const message = (error) =>
   error?.status === 409 || error?.code === "version_conflict" ? "This record changed on the server. Your edits are preserved. Copy your changes, then reopen the editor to load the current version before retrying." : error?.message || "The label could not be updated. Please try again.";
 const same = (a, b) => {
-  const normalized = value => value && typeof value === "object" ? Object.fromEntries(Object.keys(value).filter(key => key !== "version" && key !== "imageWarning" && !(key === "image" && Object.hasOwn(value, "imageMediaId"))).sort().map(key => [key, value[key]])) : value;
+  const normalized = value => value && typeof value === "object" ? Object.fromEntries(Object.keys(value).filter(key => key !== "version" && key !== "imageWarning" && !(key === "image" && Object.hasOwn(value, "imageMediaId"))).sort((left, right) => left.localeCompare(right)).map(key => [key, value[key]])) : value;
   return JSON.stringify(normalized(a)) === JSON.stringify(normalized(b));
 };
 const imageAttributes = (image) => (image ? `src="${esc(image)}"` : "hidden");

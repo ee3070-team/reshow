@@ -28,7 +28,7 @@ const live = createLiveApi({ request: timedLiveRequest, getSession: auth.getSess
 let mode = "demo";
 const listeners = new Set();
 const emit = (event) => Promise.allSettled([...listeners].map(async listener => listener(event)));
-demo.subscribe(() => { if (mode === "demo") emit(); });
+demo.subscribe(() => { if (mode === "demo") void emit(); });
 const liveChanges = (event) => { if (mode === "live") return emit(event); };
 if (live.subscribe) live.subscribe(liveChanges);
 else auth.subscribe(liveChanges);
@@ -46,16 +46,16 @@ const controls = {
     if (mode === "live" && auth.getSession()) throw new Error("Sign out of the live workspace before switching modes.");
     await demo.signOut();
     mode = next;
-    emit();
+    await emit();
   },
   async startLiveLogin() { mode = "live"; return auth.startLogin(); },
   getSession: () => mode === "live" ? auth.getSession() : demo.getSession(),
   refreshSession: () => mode === "live" ? auth.refreshSession() : demo.getSession(),
   can: (permission) => mode === "live" ? live.can(permission) : demo.can(permission),
   getDemoMode: () => mode === "live" ? "normal" : demo.getDemoMode(),
-  async signIn(email, password) {
+  async signIn(email) {
     if (mode !== "demo") throw new Error("Use the secure provider button for live sign in.");
-    return demo.signIn(email, password);
+    return demo.signIn(email);
   },
   signOut: () => mode === "live" ? auth.signOut() : demo.signOut(),
   subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },

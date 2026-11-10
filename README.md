@@ -48,7 +48,7 @@ Public CORS OPTIONS was checked without credentials or writes: localhost:8000 is
 
 ## Demo staff sign in
 
-The Demo workspace uses an email-and-password sample login screen. Expand **Demo accounts** to select a sample email. All demo staff use the public password **`DemoOnly!3070`**; never enter a personal password.
+The Demo workspace is a local role simulation. Expand **Demo accounts**, select a sample email, then choose **Open demo**. No password is required or accepted. Use **Live** for authenticated staff access.
 
 | Role | Sample email | Available actions |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ The Demo workspace uses an email-and-password sample login screen. Expand **Demo
 | Operator | `james.wong@reshow.demo` | Edit exhibits, labels and lighting; browse activity and generate/export reports |
 | Viewer | `emily.lau@reshow.demo` | Read-only dashboard, exhibits and labels; browse activity and generate/export reports |
 
-All six tabs remain visible; Staff access explains its Administrator requirement for other roles. Adding a staff profile enables its demo login with the shared password; changing its email or role changes its login details or permissions. Website login is independent of physical card access. Administrators cannot demote themselves or remove the last administrator role.
+All six tabs remain visible; Staff access explains its Administrator requirement for other roles. Adding a staff profile enables its demo login without a password; changing its email or role changes its login details or permissions. Website login is independent of physical card access. Administrators cannot demote themselves or remove the last administrator role.
 
 **Sign out** clears the session and prompts before discarding unsaved edits. Sessions expire after eight hours of real time and survive refresh in the same tab through `sessionStorage`. If session storage is blocked, sign-in works in memory until reload. The exhibition demo clock does not affect expiry.
 
@@ -133,7 +133,7 @@ tools/demo-showcase/     Synthetic seed, immutable updater and GET-only report
 
 The facade in `js/api.js` selects existing demo services or `js/live-api.js`. `js/auth.js` implements provider login/session handling, and `auth/callback.html` loads the same app shell with a root base URL. Keep callback shell markup aligned when changing `index.html`. Telemetry, command execution, durable evidence, permissions and hardware integration remain backend/producer responsibilities.
 
-The authentication boundary in `js/services.js` exposes async `signIn(email, password)`, `signOut()`, and `getSession()`, plus synchronous `can(permission)` for the UI. A session read returns `{ id, name, email, role }` or `null`. Permission keys are `view`, `operate`, `staff`, `demo`, and `reports`. Client permission checks guide the interface; a real API must independently authorize every request.
+The authentication boundary in `js/services.js` exposes async `signIn(email)`, `signOut()`, and `getSession()`, plus synchronous `can(permission)` for the UI. A session read returns `{ id, name, email, role }` or `null`. Permission keys are `view`, `operate`, `staff`, `demo`, and `reports`. Client permission checks guide the interface; a real API must independently authorize every request.
 
 ## Files needed to run
 
@@ -228,3 +228,17 @@ local dashboard suite, and eight-tab browser navigation. Synthetic tests cover t
 shared callback/session, request versions, cancellation and sign-out; no live
 account changes or device operations were performed. Linux deployment and Python
 3.14 checks run in GitHub CI, since this workstation has Windows and Python 3.10.
+
+
+## PR review fixes (10 November 2026)
+
+Removed the hard-coded demo credential and the password field from Demo entry.
+Local persona selection still applies role-based demo controls and never grants a
+Live session. Provider-backed Live authentication is unchanged. Live request IDs
+now require cryptographic UUIDs, email/base64 handling avoids backtracking regexes,
+and background notifications explicitly observe subscriber settlement without
+holding up accepted writes. Overview refresh still coalesces reads and stops after
+its view is disposed. Both entry shells use revision `20261110-review-1`.
+
+The firmware ZIP is a local convenience bundle and is not tracked; review and use
+the source under `firmware/ReShow/`.

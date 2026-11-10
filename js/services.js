@@ -10,8 +10,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
 const timers = new Map();
 let state = restore();
-// Public demo credentials only. A backend must replace this entire auth adapter.
-const DEMO_PASSWORD = "DemoOnly!3070";
+// Demo persona selection is local and deliberately requires no password.
+// Live authentication is handled separately by the provider-backed session.
 const SESSION_KEY = "reshow-demo-session-v1";
 const SESSION_LIFETIME = 8 * 60 * 60 * 1000;
 const ROLES = ["Administrator", "Operator", "Viewer"];
@@ -58,12 +58,12 @@ function requirePermission(permission) {
   if (!currentStaff()) error("Sign in to continue.");
   if (!can(permission)) error("Your role does not have permission to perform this action.");
 }
-export async function signIn(email, password) {
+export async function signIn(email) {
   await delay(65);
   const address = typeof email === "string" ? email.trim().toLowerCase() : "";
   const person = state.staff.find((p) => p.email.toLowerCase() === address);
-  if (!person || !ROLES.includes(person.role) || password !== DEMO_PASSWORD)
-    error("Email or demo password is incorrect.");
+  if (!person || !ROLES.includes(person.role))
+    error("Demo account is incorrect. Choose an available demo staff email.");
   session = { staffId: person.id, expiresAt: Date.now() + SESSION_LIFETIME };
   storeSession(session);
   notifyListeners();

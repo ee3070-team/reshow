@@ -38,7 +38,8 @@ export async function render(container, ctx) {
       do {
         queued = false;
         await readAndPaint();
-      } while (queued && !disposed);
+        if (disposed) break;
+      } while (queued);
     })().finally(() => { drawing = null; });
     return drawing;
   }

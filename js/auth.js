@@ -82,7 +82,9 @@ export function createAuth(options = {}) {
     return desired;
   }
   function base64url(bytes) {
-    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const encoded = btoa(String.fromCharCode(...bytes));
+    const padding = encoded.indexOf("=");
+    return (padding === -1 ? encoded : encoded.slice(0, padding)).replaceAll("+", "-").replaceAll("/", "_");
   }
   async function startLogin() {
     const cfg = await loadConfig();
