@@ -46,6 +46,36 @@ function disposeModel(THREE, model) {
   });
 }
 
+async function loadThreeGroupModule(file, THREE) {
+  if (file.size > 1024 * 1024) {
+    throw new Error("Choose a Three.js Group module smaller than 1 MB.");
+  }
+  const source = await file.text();
+  const fileUrl = URL.createObjectURL(
+    new Blob([source], { type: "text/javascript" }),
+  );
+  try {
+    const module = await import(/* webpackIgnore: true */ fileUrl);
+    const factory =
+      module.createModel ||
+      module.createGroup ||
+      module.default ||
+      module.model;
+    const candidate =
+      typeof factory === "function"
+        ? await factory(THREE)
+        : factory;
+    if (!candidate?.isObject3D && !candidate?.isScene) {
+      throw new Error(
+        "The module must export a THREE.Group, THREE.Object3D, or THREE.Scene.",
+      );
+    }
+    return candidate;
+  } finally {
+    URL.revokeObjectURL(fileUrl);
+  }
+}
+
 function addBunny(THREE, group) {
   const materials = {
     fur: new THREE.MeshStandardMaterial({ color: 0xffe9f0, roughness: 0.82 }),
@@ -95,10 +125,10 @@ export async function render(container) {
         <div class="technology-viewer" data-viewer aria-label="Interactive 3D model preview"></div>
         <p class="technology-status" data-model-status role="status" aria-live="polite">Loading the 3D viewer…</p>
         <div class="technology-import">
-          <label class="technology-field">Import a GLB model
-            <input data-model-file type="file" accept=".glb,model/gltf-binary">
+          <label class="technology-field">Import a GLB or Three.js Group module
+            <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
           </label>
-          <span class="muted small-text">Choose a .glb file that includes the model and textures.</span>
+          <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
         </div>
         <div class="technology-controls">
           <label>Zoom <output data-zoom-value>5.6</output>
@@ -143,6 +173,35 @@ export async function render(container) {
         <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
         <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
       </section>
+      <section class="card technology-ai technology-image-3d">
+        <div class="card-head"><h2>Image-to-3D assistant</h2><span class="badge info">Preview</span></div>
+        <p>Prepare one or four exhibit images for a future 3D-generation backend. This local preview does not send images to an external API.</p>
+        <label class="technology-drop">
+          <span>${icon("upload")}Choose an exhibit image or GLB preview input</span>
+          <input data-image-3d-file type="file" accept="image/jpeg,image/png,image/webp">
+        </label>
+        <div class="technology-image-preview" data-image-3d-preview role="img" aria-label="Image-to-3D input preview">No image selected</div>
+        <button class="button primary" data-generate-3d type="button" disabled>Generate 3D model</button>
+        <p class="technology-status" data-image-3d-status role="status" aria-live="polite">No image-to-3D API connected.</p>
+        <a class="button small" href="https://huggingface.co/spaces/tencent/Hunyuan3D-2mv" target="_blank" rel="noopener noreferrer">Open Hunyuan3D preview Space</a>
+      </section>
+      <section class="card technology-ai technology-rfid">
+        <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
+        <pre class="technology-json" data-rfid-status aria-live="polite">Loading RFID workflow…</pre>
+        <dl class="rfid-phase-guide">
+          <div><dt>idle</dt><dd>No manual update is in progress. ESP32 is waiting for the first scan.</dd></div>
+          <div><dt>pending_edit</dt><dd>The first scan was accepted. The employee manually updates the exhibit.</dd></div>
+          <div><dt>ready_to_confirm</dt><dd>The employee marked the manual update finished. ESP32 waits for a matching second scan.</dd></div>
+        </dl>
+        <label class="technology-credential">Exhibit ID
+          <output data-rfid-exhibit>Waiting for ESP32 scan</output>
+        </label>
+        <div class="actions">
+          <button class="button" type="button" data-rfid-refresh>Refresh</button>
+          <button class="button primary" type="button" data-rfid-ready>Mark manual update finished</button>
+        </div>
+        <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
+      </section>
     </div>
   </div>`;
 
@@ -172,6 +231,8 @@ export async function render(container) {
   let previousPointer = null;
   let loadedImage = null;
   let selectedImage = null;
+  let selectedImage3D = null;
+  let image3DPreviewUrl = null;
 
   const updateCamera = () => {
     if (!camera || !THREE) return;
@@ -335,12 +396,14 @@ export async function render(container) {
     });
     container.querySelector("[data-model-file]").addEventListener(
       "change",
-      (event) => {
+      async (event) => {
         const file = event.currentTarget.files?.[0];
         event.currentTarget.value = "";
         if (!file) return;
-        if (!file.name.toLowerCase().endsWith(".glb")) {
-          modelStatus.textContent = "Choose a .glb model file.";
+        const fileName = file.name.toLowerCase();
+        const groupModule = fileName.endsWith(".js") || fileName.endsWith(".mjs");
+        if (!fileName.endsWith(".glb") && !groupModule) {
+          modelStatus.textContent = "Choose a .glb file or a .js/.mjs Three.js Group module.";
           return;
         }
         if (!THREE.GLTFLoader) {
@@ -348,6 +411,43 @@ export async function render(container) {
           return;
         }
         modelStatus.textContent = `Loading ${file.name}…`;
+        if (groupModule) {
+          try {
+            const imported = await loadThreeGroupModule(file, THREE);
+            imported.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(imported);
+            const size = bounds.getSize(new THREE.Vector3());
+            const largest = Math.max(size.x, size.y, size.z);
+            if (!Number.isFinite(largest) || largest <= 0) {
+              disposeModel(THREE, imported);
+              modelStatus.textContent = "This model has no displayable geometry.";
+              return;
+            }
+            imported.scale.multiplyScalar(2.8 / largest);
+            imported.updateMatrixWorld(true);
+            imported.position.sub(
+              new THREE.Box3()
+                .setFromObject(imported)
+                .getCenter(new THREE.Vector3()),
+            );
+            model.remove(modelContent);
+            disposeModel(THREE, modelContent);
+            modelContent = imported;
+            model.add(modelContent);
+            model.rotation.set(0, 0, 0);
+            targetY = 0;
+            cameraAngle = 0;
+            updateCamera();
+            modelStatus.textContent =
+              `Loaded ${file.name}. The model has been centered and resized.`;
+          } catch (error) {
+            modelStatus.textContent =
+              error instanceof Error && error.message
+                ? error.message
+                : "This Three.js Group module could not be loaded.";
+          }
+          return;
+        }
         if (file.size > 25 * 1024 * 1024) {
           modelStatus.textContent = "Choose a GLB model smaller than 25 MB.";
           return;
@@ -640,9 +740,109 @@ export async function render(container) {
     { signal },
   );
 
+  const image3DInput = container.querySelector("[data-image-3d-file]");
+  const image3DPreview = container.querySelector("[data-image-3d-preview]");
+  const image3DGenerate = container.querySelector("[data-generate-3d]");
+  const image3DStatus = container.querySelector("[data-image-3d-status]");
+
+  image3DInput.addEventListener(
+    "change",
+    () => {
+      selectedImage3D = image3DInput.files?.[0] || null;
+      if (image3DPreviewUrl) URL.revokeObjectURL(image3DPreviewUrl);
+      image3DPreviewUrl = null;
+      image3DGenerate.disabled = true;
+
+      if (!selectedImage3D) {
+        image3DPreview.textContent = "No image selected";
+        image3DStatus.textContent = "No image-to-3D API connected.";
+        return;
+      }
+      if (!["image/jpeg", "image/png", "image/webp"].includes(selectedImage3D.type)) {
+        selectedImage3D = null;
+        image3DInput.value = "";
+        image3DPreview.textContent = "No image selected";
+        image3DStatus.textContent = "Choose a JPEG, PNG, or WebP image.";
+        return;
+      }
+
+      image3DPreviewUrl = URL.createObjectURL(selectedImage3D);
+      image3DPreview.replaceChildren();
+      const image = document.createElement("img");
+      image.src = image3DPreviewUrl;
+      image.alt = "Image-to-3D input preview";
+      image3DPreview.append(image);
+      image3DStatus.textContent = "Input ready. 3D generation API is not connected.";
+      image3DGenerate.disabled = false;
+    },
+    { signal },
+  );
+
+  image3DGenerate.addEventListener(
+    "click",
+    () => {
+      image3DStatus.textContent =
+        "Preview only: connect Stable Fast 3D or Hunyuan3D-2mv on the backend before generation.";
+    },
+    { signal },
+  );
+
+  const rfidStatus = container.querySelector("[data-rfid-status]");
+  const rfidMessage = container.querySelector("[data-rfid-message]");
+  const rfidRefresh = container.querySelector("[data-rfid-refresh]");
+  const rfidReady = container.querySelector("[data-rfid-ready]");
+  const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
+  let rfidPolling;
+
+  const refreshRfidStatus = async () => {
+    try {
+      const response = await fetch("/api/rfid/status", { signal });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+      const workflow = result.data || {};
+      rfidStatus.textContent = JSON.stringify(workflow, null, 2);
+      rfidExhibit.textContent = workflow.exhibit_id || "Waiting for ESP32 scan";
+      rfidMessage.textContent = "ESP32 workflow status is available.";
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      rfidStatus.textContent = '{"phase":"unavailable"}';
+      rfidMessage.textContent = error.message;
+    }
+  };
+
+  rfidRefresh.addEventListener("click", refreshRfidStatus, { signal });
+  rfidReady.addEventListener(
+    "click",
+    async () => {
+    rfidReady.disabled = true;
+    try {
+      const response = await fetch("/api/rfid/staff-ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        signal,
+      });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidStatus.textContent = JSON.stringify(result.data || {}, null, 2);
+        rfidMessage.textContent = "Manual update marked finished; ESP32 now waits for the matching second scan.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidMessage.textContent = error.message;
+      } finally {
+        if (active) rfidReady.disabled = false;
+      }
+    },
+    { signal },
+  );
+
+  refreshRfidStatus();
+  rfidPolling = window.setInterval(refreshRfidStatus, 3000);
+
   return () => {
     active = false;
     controller.abort();
+    if (rfidPolling) window.clearInterval(rfidPolling);
+    if (image3DPreviewUrl) URL.revokeObjectURL(image3DPreviewUrl);
     cancelAnimationFrame(animationFrame);
     if (modelContent) disposeModel(THREE, modelContent);
     if (renderer) {

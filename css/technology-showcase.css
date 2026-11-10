@@ -193,6 +193,45 @@
   max-height: 220px;
   object-fit: contain;
 }
+.technology-rfid .technology-json {
+  min-height: 150px;
+  max-height: 210px;
+}
+.technology-rfid .actions {
+  flex-wrap: wrap;
+}
+.rfid-phase-guide {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+.rfid-phase-guide div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #f8fafc;
+}
+.rfid-phase-guide dt {
+  color: var(--navy);
+  font: 700 12px/1.4 "Cascadia Code", Consolas, monospace;
+}
+.rfid-phase-guide dd {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.technology-rfid output {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--navy);
+  font-weight: 600;
+}
 .technology-json {
   min-height: 230px;
   max-height: 360px;
@@ -206,6 +245,15 @@
   font: 12px/1.6 "Cascadia Code", Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.technology-credential select {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #9caac0;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--navy);
+  font-size: 13px;
 }
 @media (max-width: 1350px) {
   .technology-grid {

@@ -12,6 +12,196 @@
 			"problemMatcher": [
 				"$tsc-watch"
 			]
+		},
+		{
+			"label": "ReShow Local HTTP Server",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"server.py",
+				"--bind",
+				"127.0.0.1",
+				"--port",
+				"8001"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Stable Fast 3D Prerequisites",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/c",
+				"py -0p && where git && systeminfo | findstr /C:\"Total Physical Memory\" && wmic cpu get NumberOfLogicalProcessors && wmic path win32_VideoController get name && wmic logicaldisk get size,freespace,caption"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Python Installations",
+			"type": "shell",
+			"command": "py",
+			"args": [
+				"-0p"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Git",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"--version"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check System Resources",
+			"type": "shell",
+			"command": "Get-ComputerInfo",
+			"args": [
+				"|",
+				"Select-Object",
+				"WindowsProductName,OsTotalVisibleMemorySize"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check GPU",
+			"type": "shell",
+			"command": "Get-CimInstance",
+			"args": [
+				"Win32_VideoController",
+				"|",
+				"Select-Object",
+				"Name,AdapterRAM"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Find Git and Python",
+			"type": "shell",
+			"command": "Get-ChildItem",
+			"args": [
+				"C:\\Program Files\\Git\\cmd\\git.exe,C:\\Windows\\py.exe,C:\\Program Files\\Python312\\python.exe,C:\\Users\\tcqji\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+				"-ErrorAction",
+				"SilentlyContinue",
+				"|",
+				"Select-Object",
+				"FullName,Exists"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Disk Space",
+			"type": "shell",
+			"command": "Get-CimInstance",
+			"args": [
+				"Win32_LogicalDisk",
+				"-Filter",
+				"DriveType=3",
+				"|",
+				"Select-Object",
+				"DeviceID,FreeSpace,Size"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Git Path",
+			"type": "shell",
+			"command": "Test-Path",
+			"args": [
+				"C:\\Program Files\\Git\\cmd\\git.exe"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "List Python Commands",
+			"type": "shell",
+			"command": "Get-Command",
+			"args": [
+				"python,python3,py,git",
+				"-ErrorAction",
+				"SilentlyContinue",
+				"|",
+				"Select-Object",
+				"Name,Source"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Technology JavaScript Syntax",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"--check",
+				"js/pages/technology-showcase.js"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Technology CSS",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"\"const fs=require('fs'); const css=fs.readFileSync('css/technology-showcase.css','utf8'); let n=0; for(const c of css)n+=c==='{'?1:c==='}'?-1:0; if(n!==0)throw new Error('Unbalanced CSS braces: '+n); console.log('CSS braces balanced')\""
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "ReShow Immutable RFID HTTP Server",
+			"type": "shell",
+			"command": "c:\\Coding\\EE3070\\cloned😊\\reshow\\.venv\\bin\\python.exe",
+			"args": [
+				"server.py",
+				"--bind",
+				"127.0.0.1",
+				"--port",
+				"8002"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify ReShow RFID server",
+			"type": "shell",
+			"command": "c:\\Coding\\EE3070\\cloned😊\\reshow\\.venv\\bin\\python.exe",
+			"args": [
+				"-m",
+				"py_compile",
+				"server.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "ReShow Manual RFID Server 8003",
+			"type": "shell",
+			"command": "c:\\Coding\\EE3070\\cloned😊\\reshow\\.venv\\bin\\python.exe",
+			"args": [
+				"server.py",
+				"--bind",
+				"127.0.0.1",
+				"--port",
+				"8003"
+			],
+			"isBackground": true,
+			"problemMatcher": []
 		}
 	]
 }

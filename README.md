@@ -7,10 +7,10 @@ A desktop demonstration dashboard for a reusable smart exhibition showcase. Buil
 Use Python 3.14 or later. Open PowerShell in this project directory and run:
 
 ```powershell
-python server.py --cert-file path/to/trusted-local-cert.pem --key-file path/to/local-key.pem
+python server.py
 ```
 
-Stop any previously running local web server first, then open **https://127.0.0.1:8000** in a desktop browser. If port 8000 is occupied by another application, use `python server.py --cert-file path/to/trusted-local-cert.pem --key-file path/to/local-key.pem --port 8001` and open **https://127.0.0.1:8001**. Use a certificate trusted by your browser whose subject alternative names include the chosen hostname (`127.0.0.1` or `localhost`). The server requires both TLS files and has no plaintext fallback. The server hosts the dashboard and its local showcase API together; do not open `index.html` directly because browsers restrict ES modules on `file:` URLs. Press Ctrl+C in the server terminal to stop it.
+Stop any previously running local web server first, then open **http://127.0.0.1:8000** in a desktop browser. If port 8000 is occupied by another application, use `python server.py --port 8001` and open **http://127.0.0.1:8001**. The default mode is plaintext HTTP for local development and does not show a self-signed certificate warning. For optional local HTTPS, provide both `--cert-file` and `--key-file`; use a certificate trusted by the browser and whose subject alternative names include `127.0.0.1` or `localhost`. The server hosts the dashboard and its local showcase API together; do not open `index.html` directly because browsers restrict ES modules on `file:` URLs. Press Ctrl+C in the server terminal to stop it.
 
 Staff sign-in is configured for the production website using the exact `/auth/callback.html` path. The previous HTTP localhost callback is retained in the account configuration, but the local server now requires HTTPS; a trusted HTTPS local callback must be explicitly configured in Cognito and the client allowlist before local staff sign-in can work. PKCE state/verifier expire after ten minutes in sessionStorage; access and refresh tokens remain in memory and are cleared on logout or expiry. Other demo origins can use the local showcase without staff sign-in.
 
@@ -24,11 +24,176 @@ Use the same origin/port to keep saved demo records. Data is stored in that brow
 - **Activity:** filter by Hong Kong dates and exhibit, switch heatmap measures, inspect cells with mouse or keyboard, and filter the event log.
 - **Reports:** choose sections and filters, generate a stored preview, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
 - **Staff access:** sign in through Cognito for live website account administration. An Administrator can manage live invitations, roles and account status. The separate expandable browser-local demo edits sample staff/cards and historical accepted/denied attempts; these sample roles and cards do not grant live website access.
-- **3D & AI studio:** explore and adjust the 3D model, import a `.glb`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
+- **3D & AI studio:** explore and adjust the 3D model, import a `.glb` or a trusted JavaScript module exporting a `THREE.Group`, `THREE.Object3D`, or `THREE.Scene`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
+
+Three.js module imports use this ES module contract:
+
+```js
+export default function createModel(THREE) {
+  const group = new THREE.Group();
+  // Add meshes and materials to group.
+  return group;
+}
+```
+
+Alternatively, export the object as `createModel`, `createGroup`, `default`, or
+`model`. Only import `.js` or `.mjs` modules from trusted sources because the
+module executes in the browser. `.ts` files are not directly executed by the
+canvas; compile TypeScript to JavaScript first.
 
 Image-to-JSON generation requires Cloudflare Workers AI access. Enter your 32-character Cloudflare Account ID and API token in the **3D & AI studio** tab when generating. Credentials are sent to the Python API for that request only; they are not stored in browser storage or written to disk. Production forwards them through CloudFront HTTPS to Lambda without API caching or application request-body logging. Enable the model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. The image is processed in memory and is not saved.
 
 There is no Settings tab or remote unlock action. Layouts target desktop widths of 1280, 1440 and 1920 pixels. Exhibit illustrations are local editable SVG assets; model metadata in the Exhibits tab is illustrative.
+
+## RFID two-scan exhibit-change workflow
+
+The RFID hardware is implemented in [hardware/hardware.ino](hardware/hardware.ino).
+ESP32 reads the card UID directly. With Wi-Fi enabled, it does not need a computer
+or USB serial bridge. The simple data flow is:
+
+```text
+RFID card -> ESP32 -> Wi-Fi -> server
+                           -> database
+```
+
+The ESP32 currently needs four configuration values:
+
+```cpp
+const char wifiSsid[] = "YOUR_WIFI_NAME";
+const char wifiPassword[] = "YOUR_WIFI_PASSWORD";
+const char serverUrl[] = "https://server.example/api/rfid/access-event";
+const char rfidStatusUrl[] = "https://server.example/api/rfid/status";
+```
+
+`allowedRfidUid` contains the card allowed to open and confirm the change. The
+remaining relay pins and reader pins are defined near the top of the Arduino sketch.
+
+For local testing, ESP32 and the computer running `server.py` can be on the same
+ordinary Wi-Fi or phone hotspot:
+
+```text
+ESP32 -> http://computer-ip:8000 -> server.py -> rfid-events.jsonl
+```
+
+For cloud testing, ESP32 should call HTTPS CloudFront/Lambda APIs. `server.py` is
+only a local development server; it is not the production database.
+
+GET and POST have different jobs:
+
+| Method | Meaning | ReShow RFID use |
+|---|---|---|
+| GET | Read current status | ESP32 polls `/api/rfid/status` |
+| POST | Submit a new event or command | ESP32 posts scans; staff posts staff-ready confirmation |
+
+A GET request should not itself change an exhibit. A POST request should validate
+the card, phase, exhibit and revision before changing server state.
+
+The school network may use enterprise or captive-portal authentication that ESP32
+cannot use directly. A phone hotspot or normal router is easier for local testing.
+Do not commit Wi-Fi passwords or device secrets to GitHub.
+
+See the simple illustrated walkthrough in
+[NO-PUSH-explaination.md](NO-PUSH-explaination/NO-PUSH-explaination.md), and its
+flow diagram at [rfid-two-scan.svg](NO-PUSH-explaination/rfid-two-scan.svg).
+
+The ESP32 RFID sketch can protect exhibit changes with two card scans:
+
+```text
+First accepted scan
+  -> ESP32 opens the door
+  -> server state: pending_edit
+
+Staff member manually edits and confirms the exhibit
+  -> POST /api/rfid/staff-ready
+  -> server state: ready_to_confirm
+
+Second accepted scan
+  -> ESP32 checks server state
+  -> ESP32 closes the door
+  -> server state: idle / confirmed
+```
+
+ESP32 events are sent to `POST /api/rfid/access-event`. The ESP32 polls `GET /api/rfid/status` once per second for staff confirmation. The staff-ready request identifies the exhibit and revision:
+
+```json
+{
+  "exhibit_id": "ex-014",
+  "revision": 12
+}
+```
+
+The allowed RFID UID is defined in [hardware/hardware.ino](hardware/hardware.ino). The first scan is not confirmation: the server remains in `pending_edit` until staff sends `/api/rfid/staff-ready`, and the second scan is required to close the door and finish confirmation. The local workflow is stored in server memory and is reset when the server restarts. It is not yet a staff-authenticated production API, and it must not be exposed without real authorization.
+
+For cloud testing, the ESP32 constants use:
+
+```text
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/access-event
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/status
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/staff-ready
+```
+
+These RFID routes are not yet implemented by the deployed Cloud Lambda. `/api/health`
+and the Cloudflare AI generator are the currently known active cloud routes.
+
+### Cloud Lambda implementation checklist
+
+The backend team should implement the following before allowing ESP32 to use the cloud routes:
+
+1. Add `GET /api/rfid/status` and return the current workflow state.
+2. Add `POST /api/rfid/access-event` and validate the RFID UID, scan phase, card permission and device identity.
+3. Add `POST /api/rfid/staff-ready` only for authenticated staff with permission to edit the exhibit.
+4. Store `pending_edit`, `ready_to_confirm`, exhibit ID, revision and card UID in a database such as DynamoDB.
+5. Use the database for confirmation instead of a Python process-local variable, so Lambda and server restarts do not lose the workflow.
+6. Require staff authentication for staff-ready actions; plain RFID UID alone must not change an exhibit or grant website access.
+7. Verify the ESP32 as a registered device. Do not keep a shared device secret in public browser JavaScript or GitHub.
+8. Add an unsigned or signed short-lived device token before production. Reject repeated, stale and conflicting scan messages.
+9. Connect the staff confirmation to the real exhibit update API. Confirmation must validate the current revision so an old edit cannot confirm a different change.
+10. Record accepted and denied scans with UTC time for the activity log.
+11. Store exhibit revision asset references for the `.glb` model and four view pictures; store the binary files in object storage instead of the database JSON.
+
+Minimum workflow response:
+
+```json
+{
+  "phase": "ready_to_confirm",
+  "uid": "FC6AB516",
+  "exhibit_id": "ex-014",
+  "revision": 12
+}
+```
+
+### Exhibit model and view-image storage
+
+The database must store more than RFID workflow state. Each exhibit revision should
+also record asset references for one `.glb` 3D model and four view pictures
+(front, back, left and right). Use private object storage such as S3 for the binary
+files; store stable paths and asset metadata on the exhibit entity:
+
+```json
+{
+  "exhibit_id": "ex-014",
+  "revision": 12,
+  "assets": {
+    "model_glb": "assets/exhibits/ex-014/model.glb",
+    "view_front": "assets/exhibits/ex-014/view-front.jpg",
+    "view_back": "assets/exhibits/ex-014/view-back.jpg",
+    "view_left": "assets/exhibits/ex-014/view-left.jpg",
+    "view_right": "assets/exhibits/ex-014/view-right.jpg"
+  }
+}
+```
+
+Asset database metadata should include media ID, logical path, content type, size
+and completion status. Do not place raw `.glb` bytes, base64 data or permanent
+storage URLs in exhibit JSON. Serving and replacement should use authenticated,
+short-lived download URLs and versioned completed assets. See
+[BACKEND_ASSET_UPLOAD.md](BACKEND_ASSET_UPLOAD.md) for the staged upload contract.
+
+Do not enable public access to staff-ready until the route is authenticated. Do not use
+`setInsecure()` for a production TLS connection. The CloudFront distribution should route
+these RFID APIs to Lambda with POST and GET support, caching disabled and a suitable
+request size limit. The current deployed `/api/rfid/*` routes are missing and should not
+be used as production access-control endpoints yet.
 
 ## Demo controls
 
@@ -69,6 +234,9 @@ js/pages/technology-showcase.js  3D studio and image-to-JSON generator
 css/technology-showcase.css      Showcase-tab components
 js/vendor/              Included Three.js r128 and GLTFLoader
 assets/                 Local SVG illustrations, image and GLB model
+hardware/hardware.ino    ESP32/Mega RFID and local door-relay integration
+NO-PUSH-explaination/    Simple team notes, GET/POST explanation and RFID SVG
+NO-PUSH-explaination/   Simple local team explanations
 ```
 
 The original project under `C:\Coding\EE3070\php` is not modified or removed.

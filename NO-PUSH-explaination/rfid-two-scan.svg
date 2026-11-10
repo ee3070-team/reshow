@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title description">
+  <title id="title">Two-card RFID exhibit confirmation workflow</title>
+  <desc id="description">First RFID scan opens the door and marks the exhibit pending. Staff edits the exhibit. The second RFID scan closes the door and confirms the exhibit.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eef6ff"/>
+      <stop offset="1" stop-color="#f7fbff"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#1e293b" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .title { font: 700 34px sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 18px sans-serif; fill: #475569; }
+      .step { font: 700 17px sans-serif; fill: #1e3a8a; }
+      .text { font: 500 20px sans-serif; fill: #0f172a; }
+      .small { font: 400 16px sans-serif; fill: #475569; }
+      .state { font: 700 18px sans-serif; fill: #fff; }
+      .arrow { fill: none; stroke: #2563eb; stroke-width: 4; marker-end: url(#arrow); }
+      .card { fill: #fff; stroke: #bfdbfe; stroke-width: 2; filter: url(#shadow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#background)"/>
+  <text x="600" y="58" text-anchor="middle" class="title">RFID Two-card Confirmation</text>
+  <text x="600" y="92" text-anchor="middle" class="subtitle">Two scans protect the exhibit change from start to finish</text>
+
+  <rect x="40" y="150" width="300" height="170" rx="20" class="card"/>
+  <rect x="40" y="150" width="300" height="48" rx="20" fill="#2563eb"/>
+  <rect x="40" y="180" width="300" height="18" fill="#2563eb"/>
+  <text x="190" y="181" text-anchor="middle" class="state">1. First scan</text>
+  <text x="190" y="238" text-anchor="middle" class="text">Read card UID</text>
+  <text x="190" y="276" text-anchor="middle" class="small">ESP32 opens the door</text>
+
+  <path d="M340 235 H430" class="arrow"/>
+
+  <rect x="430" y="150" width="300" height="170" rx="20" class="card"/>
+  <rect x="430" y="150" width="300" height="48" rx="20" fill="#d97706"/>
+  <rect x="430" y="180" width="300" height="18" fill="#d97706"/>
+  <text x="580" y="181" text-anchor="middle" class="state">2. Server pending</text>
+  <text x="580" y="238" text-anchor="middle" class="text">Exhibit = pending_edit</text>
+  <text x="580" y="276" text-anchor="middle" class="small">Staff edits and saves the update</text>
+
+  <path d="M730 235 H820" class="arrow"/>
+
+  <rect x="820" y="150" width="340" height="170" rx="20" class="card"/>
+  <rect x="820" y="150" width="340" height="48" rx="20" fill="#059669"/>
+  <rect x="820" y="180" width="340" height="18" fill="#059669"/>
+  <text x="990" y="181" text-anchor="middle" class="state">3. Staff ready</text>
+  <text x="990" y="238" text-anchor="middle" class="text">Exhibit = ready_to_confirm</text>
+  <text x="990" y="276" text-anchor="middle" class="small">Server waits for the second scan</text>
+
+  <path d="M990 320 V390" class="arrow"/>
+
+  <rect x="820" y="390" width="340" height="170" rx="20" class="card"/>
+  <rect x="820" y="390" width="340" height="48" rx="20" fill="#7c3aed"/>
+  <rect x="820" y="420" width="340" height="18" fill="#7c3aed"/>
+  <text x="990" y="421" text-anchor="middle" class="state">4. Second scan</text>
+  <text x="990" y="478" text-anchor="middle" class="text">Close the door</text>
+  <text x="990" y="516" text-anchor="middle" class="small">Server confirms the saved revision</text>
+
+  <path d="M820 475 H730" class="arrow"/>
+
+  <rect x="430" y="390" width="300" height="170" rx="20" class="card"/>
+  <rect x="430" y="390" width="300" height="48" rx="20" fill="#0891b2"/>
+  <rect x="430" y="420" width="300" height="18" fill="#0891b2"/>
+  <text x="580" y="421" text-anchor="middle" class="state">5. Final state</text>
+  <text x="580" y="478" text-anchor="middle" class="text">Exhibit = confirmed</text>
+  <text x="580" y="516" text-anchor="middle" class="small">Door is closed; workflow is idle</text>
+
+  <path d="M430 475 H340" class="arrow"/>
+
+  <rect x="40" y="390" width="300" height="170" rx="20" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <text x="190" y="426" text-anchor="middle" class="step">Safety rule</text>
+  <text x="190" y="470" text-anchor="middle" class="text">First scan is not</text>
+  <text x="190" y="502" text-anchor="middle" class="text">confirmation</text>
+  <text x="190" y="540" text-anchor="middle" class="small">The second scan completes the change</text>
+
+  <text x="600" y="634" text-anchor="middle" class="step">ESP32</text>
+  <text x="600" y="663" text-anchor="middle" class="small">POST first scan / GET status / POST second confirmation</text>
+  <text x="600" y="694" text-anchor="middle" class="small">Cloud server stores the real pending and confirmed state</text>
+</svg>

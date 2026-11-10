@@ -19,26 +19,34 @@ The backend validates and normalizes these paths, associates each with a
 completed asset record, and resolves them when serving asset downloads. Object
 storage can remain private; the entity does not expose a bucket URL.
 
-## Existing OpenAPI contract
+## Existing OpenAPI contract (v0.4.0)
 
-The supplied `openapi (1).json` describes ReShow Backend API version `0.3.0`.
-It already provides a staged private-media upload:
+The supplied `openapi (2).json` describes ReShow Backend API version `0.4.0`.
+It provides staged private-media upload under the staff API:
 
-1. `POST /api/media/upload-requests` creates upload metadata and returns a
-   temporary S3 form.
+1. `POST /staff-api/media/upload-requests` creates upload metadata and returns
+   a temporary S3 form.
 2. The client posts the form fields and the file to the returned S3 URL. The
    file must be the last multipart field; do not send the API bearer token to
    S3.
-3. `POST /api/media/{media_id}/complete` validates and finalizes the upload.
-4. `GET /api/media/{media_id}` returns media metadata and, for ready media, a
-   short-lived download URL.
+3. `POST /staff-api/media/{media_id}/complete` validates and finalizes the
+   upload.
+4. `GET /staff-api/media/{media_id}` returns media metadata and, for ready
+   media, a short-lived download URL.
 
 The contract currently accepts JPEG, PNG, and WebP only, limits uploads to
 1 MiB, and exposes `image_media_id` on exhibit profiles. It does **not** accept
 `model/gltf-binary`, does not expose a model association, and does not expose
 logical relative asset paths. Therefore, GLB support and the relative-path
 entity design below require an OpenAPI/backend update before clients can rely
-on them.
+on them. The old `/api/media/...` and `/api/exhibit-profiles...` routes are
+retired for staff access and return `403`; use the `/staff-api/...` routes.
+
+Staff API calls require a Cognito **access token** obtained through the
+browser authorization-code + PKCE flow with the `reshow/staff` scope. Do not
+use an ID token or the shared demo-producer credential. The contract says
+Administrator or Operator roles can upload and change profiles; all staff
+roles may read. Do not send the staff token to the presigned S3 upload URL.
 
 ## Recommended entity shape
 
@@ -92,8 +100,8 @@ file content.
 Example request for a GLB file:
 
 ```http
-POST /api/media/upload-requests
-Authorization: Bearer <api-token>
+POST /staff-api/media/upload-requests
+Authorization: Bearer <cognito-staff-access-token>
 Content-Type: application/json
 ```
 
@@ -175,8 +183,8 @@ them.
 After storage confirms the upload, finalize it through the API:
 
 ```http
-POST /api/media/ex-014-model-v1/complete
-Authorization: Bearer <api-token>
+POST /staff-api/media/ex-014-model-v1/complete
+Authorization: Bearer <cognito-staff-access-token>
 Content-Type: application/json
 ```
 
@@ -193,8 +201,8 @@ After both media items are ready, create or patch the exhibit profile with
 logical relative paths:
 
 ```http
-PATCH /api/exhibit-profiles/ex-014
-Authorization: Bearer <api-token>
+PATCH /staff-api/exhibit-profiles/ex-014
+Authorization: Bearer <cognito-staff-access-token>
 Content-Type: application/json
 If-Match: <current-profile-version>
 ```
@@ -264,10 +272,11 @@ backend's relative asset URL and pass the resolved model URL to the GLB loader.
 For example:
 
 ```js
-const imageUrl = `/api/${exhibit.assets.image_path}`;
-const modelUrl = `/api/${exhibit.assets.model_path}`;
+const imageUrl = await resolveAssetUrl(exhibit.assets.image_path);
+const modelUrl = await resolveAssetUrl(exhibit.assets.model_path);
 ```
 
-The exact serving route must be defined by the backend and OpenAPI. If the
-route returns a redirect or signed URL, use it at load time and do not write
-that temporary URL back to the exhibit profile.
+`resolveAssetUrl` represents the backend's asset-serving route, which is not
+defined in OpenAPI v0.4.0. If that route returns a redirect or signed URL, use
+it at load time and do not write the temporary URL back to the exhibit
+profile.

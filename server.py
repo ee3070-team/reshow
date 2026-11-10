@@ -2,6 +2,7 @@ import argparse
 import json
 import re
 import ssl
+import threading
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -17,6 +18,14 @@ ROOT = Path(__file__).resolve().parent
 MAX_IMAGE_SIZE = 4 * 1024 * 1024
 MAX_REQUEST_SIZE = MAX_IMAGE_SIZE + 32 * 1024
 MAX_RESPONSE_SIZE = 256 * 1024
+MAX_RFID_EVENT_SIZE = 4096
+RFID_EVENT_FILE = ROOT / "hardware" / "rfid-events.jsonl"
+RFID_EVENT_LOCK = threading.Lock()
+RFID_WORKFLOW = {
+    "phase": "idle",
+    "uid": None,
+    "exhibit_id": None,
+}
 PROMPT = """Analyze the attached image and identify the visible artifact. Return exactly one valid JSON object and no Markdown or extra text, using precisely these two keys:
 {
   "name": "A short, specific title for the visible image",
@@ -269,8 +278,105 @@ class StudioHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        if urlsplit(self.path).path == "/api/rfid/status":
+            with RFID_EVENT_LOCK:
+                status = dict(RFID_WORKFLOW)
+            self.send_json(200, {"data": status})
+            return
+        super().do_GET()
+
     def do_POST(self):
-        if self.path != "/api/technology/generate-exhibit":
+        path = urlsplit(self.path).path
+        if path == "/api/rfid/access-event":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(400, {"error": "Invalid request length."})
+                return
+            if content_length <= 0 or content_length > MAX_RFID_EVENT_SIZE:
+                self.send_json(400, {"error": "Invalid RFID event."})
+                return
+            try:
+                event = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Invalid RFID event JSON."})
+                return
+            uid = event.get("uid") if isinstance(event, dict) else None
+            result = event.get("result") if isinstance(event, dict) else None
+            door = event.get("door") if isinstance(event, dict) else None
+            phase = event.get("phase") if isinstance(event, dict) else None
+            exhibit_id = event.get("exhibit_id") if isinstance(event, dict) else None
+            if not isinstance(uid, str) or not re.fullmatch(r"[A-Fa-f0-9]{4,20}", uid):
+                self.send_json(400, {"error": "Invalid RFID UID."})
+                return
+            if result not in ("accepted", "denied") or door not in ("opened", "closed"):
+                self.send_json(400, {"error": "Invalid RFID event result."})
+                return
+            if phase not in ("first_scan_pending", "second_scan_confirmed", "pending_edit_waiting", "denied"):
+                self.send_json(400, {"error": "Invalid RFID workflow phase."})
+                return
+            with RFID_EVENT_LOCK:
+                if phase == "first_scan_pending":
+                    if RFID_WORKFLOW["phase"] != "idle":
+                        self.send_json(409, {"error": "An exhibit edit is already pending."})
+                        return
+                    if not isinstance(exhibit_id, str) or not exhibit_id.strip():
+                        self.send_json(400, {"error": "ESP32 must provide the exhibit ID for the first scan."})
+                        return
+                    RFID_WORKFLOW.update({
+                        "phase": "pending_edit",
+                        "uid": uid.upper(),
+                        "exhibit_id": exhibit_id.strip(),
+                    })
+                elif phase == "second_scan_confirmed":
+                    if (
+                        RFID_WORKFLOW["phase"] != "ready_to_confirm"
+                        or RFID_WORKFLOW["uid"] != uid.upper()
+                    ):
+                        self.send_json(409, {"error": "The second scan is not confirmed by staff."})
+                        return
+                    RFID_WORKFLOW.update({
+                        "phase": "idle",
+                        "uid": uid.upper(),
+                    })
+                    RFID_WORKFLOW["exhibit_id"] = None
+                record = {
+                    "uid": uid.upper(),
+                    "result": result,
+                    "door": door,
+                    "phase": phase,
+                    "exhibit_id": exhibit_id.strip() if isinstance(exhibit_id, str) else RFID_WORKFLOW["exhibit_id"],
+                }
+                with RFID_EVENT_FILE.open("a", encoding="utf-8") as event_file:
+                    event_file.write(json.dumps(record, separators=(",", ":")) + "\n")
+            with RFID_EVENT_LOCK:
+                workflow = dict(RFID_WORKFLOW)
+            self.send_json(200, {"data": {"recorded": True, **workflow}})
+            return
+
+        if path == "/api/rfid/staff-ready":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Invalid staff confirmation message."})
+                return
+            with RFID_EVENT_LOCK:
+                if RFID_WORKFLOW["phase"] != "pending_edit":
+                    self.send_json(409, {"error": "No RFID exhibit edit is pending."})
+                    return
+                if not isinstance(RFID_WORKFLOW["exhibit_id"], str) or not RFID_WORKFLOW["exhibit_id"]:
+                    self.send_json(409, {"error": "The ESP32 has not assigned an exhibit ID."})
+                    return
+                RFID_WORKFLOW.update({
+                    "phase": "ready_to_confirm",
+                })
+                workflow = dict(RFID_WORKFLOW)
+            self.send_json(200, {"data": workflow})
+            return
+
+        if path != "/api/technology/generate-exhibit":
             self.send_json(404, {"error": "Not found."})
             return
 
@@ -308,23 +414,34 @@ def main():
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--directory", default=str(ROOT))
-    parser.add_argument("--cert-file", required=True, help="PEM certificate chain for local HTTPS")
-    parser.add_argument("--key-file", required=True, help="PEM private key for the certificate")
+    parser.add_argument("--cert-file", help="PEM certificate chain for local HTTPS")
+    parser.add_argument("--key-file", help="PEM private key for the certificate")
     args = parser.parse_args()
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certfile=args.cert_file, keyfile=args.key_file)
-    try:
-        from http.server import ThreadingHTTPSServer
-    except ImportError as error:
-        raise SystemExit("Local HTTPS hosting requires Python 3.14 or later; the Lambda API supports Python 3.12.") from error
-    server = ThreadingHTTPSServer(
-        (args.bind, args.port), partial(StudioHandler, directory=args.directory),
-        certfile=args.cert_file, keyfile=args.key_file,
-    )
+    if bool(args.cert_file) != bool(args.key_file):
+        raise SystemExit("Both --cert-file and --key-file are required for HTTPS.")
+
+    if args.cert_file:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(certfile=args.cert_file, keyfile=args.key_file)
+        try:
+            from http.server import ThreadingHTTPSServer
+        except ImportError as error:
+            raise SystemExit("Local HTTPS hosting requires Python 3.14 or later; the Lambda API supports Python 3.12.") from error
+        server = ThreadingHTTPSServer(
+            (args.bind, args.port), partial(StudioHandler, directory=args.directory),
+            certfile=args.cert_file, keyfile=args.key_file,
+        )
+        protocol = "HTTPS"
+    else:
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(
+            (args.bind, args.port), partial(StudioHandler, directory=args.directory)
+        )
+        protocol = "HTTP"
     try:
         print(
-            "ReShow HTTPS is listening on " + args.bind + ":" + str(server.server_port),
+            "ReShow " + protocol + " is listening on " + args.bind + ":" + str(server.server_port),
             flush=True,
         )
         server.serve_forever()
