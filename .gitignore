@@ -13,12 +13,7 @@ __pycache__/
 Thumbs.db
 
 # Local development material; not required to run the website
-/Reference Picture/
-/AGENT.md
-/AGENTS.md
-/BACKEND_HANDOFF.md
-/CONTRACT.md
-/PROJECT_CHECKPOINT.md
-/VERIFICATION.md
-/tests/
-/verification/
+/project-materials/
+
+# Per-device firmware credentials
+/firmware/**/local_config.h

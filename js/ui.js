@@ -152,7 +152,7 @@ export function statusStrip(snapshot) {
       : s.localControl
         ? "Local control active"
         : "Local control unavailable";
-  return `<div class="status-strip"><span class="${s.online ? "teal" : "amber"}"><i class="status-dot ${s.online ? "" : "offline"}"></i><strong>${connection}</strong></span><span>${esc(s.name)}</span><span>Last received: ${esc(formatTime(s.lastReceivedAt))}</span><span>${localControl}</span></div>`;
+  return `<div class="status-strip"><span class="${s.online ? "teal" : "amber"}"><i class="status-dot ${s.online ? "" : "offline"}"></i><strong>${connection}</strong></span><span>${esc(s.name)}</span><span>Last received: ${esc(formatTime(s.lastReceivedAt))}</span><span>${localControl}</span>${s.source ? `<span>Reported source: ${esc(s.source)}</span>` : ""}${s.freshness ? `<span>Measurements: ${s.measurementStale == null ? "unavailable" : s.measurementStale ? "stale" : "fresh"} · Contact age ${esc(s.freshness.contact_age_seconds ?? "unknown")} s</span>` : ""}</div>`;
 }
 export function metric(label, value, caption, ico = "activity", tone = "") {
   return `<div class="card metric"><span class="${tone}">${icon(ico)}</span><div><p class="metric-label">${esc(label)}</p><div class="metric-value ${tone}">${esc(value)}</div><p class="metric-caption">${esc(caption)}</p></div></div>`;
@@ -165,24 +165,26 @@ export function heatmap(
   if (!intervals.length)
     return '<div class="empty">No activity intervals match these filters.</div>';
   const days = [...new Set(intervals.map((i) => dateKey(i.start)))];
+  const hourOf = (i) => Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Hong_Kong", hour: "2-digit", hourCycle: "h23" }).format(new Date(i.start)));
+  const hours = [...new Set(intervals.map(hourOf))].sort((a, b) => a - b);
   const map = new Map(
     intervals.map((i) => [
       `${dateKey(i.start)}-${new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Hong_Kong", hour: "2-digit", hourCycle: "h23" }).format(new Date(i.start))}`,
       i,
     ]),
   );
-  let html = `<div class="heatmap ${compact ? "compact" : ""}">`;
+  let html = `<div class="heatmap-scroll"><div class="heatmap ${compact ? "compact" : ""}" style="grid-template-columns:${compact ? "" : "64px "}repeat(${hours.length}, minmax(25px, 1fr))">`;
   if (!compact)
     html +=
       "<span></span>" +
       Array.from(
-        { length: 8 },
-        (_, x) => `<span class="heatmap-label">${x + 9}:00</span>`,
+        { length: hours.length },
+        (_, x) => `<span class="heatmap-label">${hours[x]}:00</span>`,
       ).join("");
   for (const day of days) {
     if (!compact)
       html += `<span class="heatmap-label">${esc(new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Asia/Hong_Kong" }).format(new Date(day + "T00:00:00+08:00")))}</span>`;
-    for (let h = 9; h < 17; h++) {
+    for (const h of hours) {
       const i = map.get(`${day}-${String(h).padStart(2, "0")}`);
       if (!i) {
         html += "<span></span>";
@@ -190,20 +192,21 @@ export function heatmap(
       }
       const val = i[metricName];
       const cls =
-        i.availability === "recorded"
+        i.availability === "recorded" && val != null
           ? `level-${val === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(val / (metricName === "events" ? 3 : 420))))}`
-          : i.availability;
-      const info = `${formatDate(i.start)}, ${formatTime(i.start)}–${formatTime(i.end)} · ${i.availability === "recorded" ? (metricName === "events" ? val + " proximity events" : (val / 60).toFixed(1) + " occupied minutes (" + val + " s)") + " · Recorded data" : i.availability === "missing" ? "Missing data · Activity unknown" : "Open / future interval · No completed readings yet"}`;
+          : esc(i.availability || "missing");
+      const quantity = val == null ? "Activity unknown" : metricName === "events" ? val + " proximity events" : (val / 60).toFixed(1) + " occupied minutes (" + val + " s)";
+      const info = `${formatDate(i.start)}, ${formatTime(i.start)}–${formatTime(i.end)} · ${quantity} · ${(i.status || i.availability).replaceAll("_", " ")}${i.availability === "partial" ? " (recorded lower bound)" : ""}`;
       html += `<button type="button" class="heatmap-cell ${cls}" title="${esc(info)}" aria-label="${esc(info)}" data-interval-detail="${esc(info)}"></button>`;
     }
   }
   if (compact)
     html += Array.from(
-      { length: 8 },
-      (_, x) => `<span class="heatmap-label">${x + 9}:00</span>`,
+      { length: hours.length },
+      (_, x) => `<span class="heatmap-label">${hours[x]}:00</span>`,
     ).join("");
   html +=
-    '</div><div class="heatmap-legend"><span><i class="legend-swatch zero"></i>Zero</span><span><i class="legend-swatch"></i>Low</span><span><i class="legend-swatch high"></i>High</span><span><i class="legend-swatch missing"></i>Missing</span><span><i class="legend-swatch future"></i>Future</span></div>';
+    '</div></div><div class="heatmap-legend"><span><i class="legend-swatch zero"></i>Confirmed zero</span><span><i class="legend-swatch"></i>Low</span><span><i class="legend-swatch high"></i>High</span><span><i class="legend-swatch missing"></i>Missing / partial</span><span><i class="legend-swatch future"></i>Future / outside scope</span></div>';
   return html;
 }
 export function bindHeatmap(container) {
@@ -219,19 +222,28 @@ export function bindHeatmap(container) {
     );
 }
 export function filterFields(exhibits, filters) {
-  return `<label class="field">Showcase<select name="showcaseId" aria-label="Showcase"><option value="case-01">Case 01</option></select></label><label class="field">From<input name="start" type="date" value="${esc(filters.start)}" required></label><label class="field">To<input name="end" type="date" value="${esc(filters.end)}" required></label><label class="field">Exhibit<select name="exhibitId" aria-label="Exhibit"><option value="">All exhibits</option>${exhibits.map((e) => `<option value="${esc(e.id)}" ${filters.exhibitId === e.id ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></label>`;
+  return `<label class="field">Showcase<select name="showcaseId" aria-label="Showcase"><option value="${esc(filters.showcaseId || "case-01")}">${esc(filters.showcaseName || filters.showcaseId || "Case 01")}</option></select></label><label class="field">From<input name="start" type="date" value="${esc(filters.start)}" required></label><label class="field">To<input name="end" type="date" value="${esc(filters.end)}" required></label><label class="field">Exhibit<select name="exhibitId" aria-label="Exhibit"><option value="">All exhibits</option>${exhibits.map((e) => `<option value="${esc(e.id)}" ${filters.exhibitId === e.id ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select></label>`;
 }
 export function readFilters(form) {
   const f = Object.fromEntries(new FormData(form));
   if (!f.start || !f.end) throw new Error("Choose a start and end date.");
   if (f.start > f.end)
     throw new Error("The end date must be on or after the start date.");
-  if ((new Date(f.end) - new Date(f.start)) / 86400000 > 90)
-    throw new Error("Choose a demo range of 90 days or less.");
+  if ((new Date(f.end) - new Date(f.start)) / 86400000 >= 31)
+    throw new Error("Choose at most 31 inclusive calendar days.");
   return {
     showcaseId: f.showcaseId,
     start: f.start,
     end: f.end,
     exhibitId: f.exhibitId || "",
   };
+}
+
+// Shared evidence notes keep Activity, Overview, reports and print truthful.
+export function activityNotes(data) {
+  if (!data.raw) return "";
+  const r = data.raw;
+  const evaluation = data.evaluation || r.evaluation;
+  const completeness = data.completeness || r.data_completeness || {};
+  return `<div class="notice info evidence-notes"><div><strong>API evidence · ${esc((data.provenance?.sources || r.provenance?.sources || []).join(", ") || "source unspecified")}</strong>${(data.provenance?.contains_demo_data || r.provenance?.contains_demo_data) ? " · Contains synthetic producer data" : ""}<p>Totals: ${esc((r.summary?.totals_interpretation || "unavailable").replaceAll("_", " "))}. Missing observations remain unknown.</p>${evaluation ? `<p>Evaluated through ${esc(formatDate(evaluation.effective_end))}, ${esc(formatTime(evaluation.effective_end))} · ${esc(evaluation.status)}</p>` : ""}${Object.entries(completeness).map(([stream, c]) => `<p>${esc(stream)} coverage: ${c.coverage_fraction == null ? "unavailable" : (c.coverage_fraction * 100).toFixed(1) + "%"} · ${esc(c.missing_seconds)} s missing${c.denominator_note ? " · " + esc(c.denominator_note) : ""}</p>`).join("")}${Object.entries(data.missingData || r.missing_data || {}).map(([stream, periods]) => periods.length ? `<details><summary>${esc(stream)}: ${periods.length} missing periods</summary>${periods.map(p => `<p>${esc(formatDate(p.start))}, ${esc(formatTime(p.start))} – ${esc(formatDate(p.end))}, ${esc(formatTime(p.end))}</p>`).join("")}</details>` : "").join("")}${r.summary?.unknown_assignment_seconds != null ? `<p>Unknown assignment: ${esc(r.summary.unknown_assignment_seconds)} s · Ambiguous assignment: ${esc(r.summary.ambiguous_assignment_seconds ?? 0)} s · Known other-exhibit time: ${esc(r.summary.outside_scope_seconds ?? 0)} s (excluded)</p>` : ""}${[...(data.limitations || r.limitations || []), ...(data.notices || []), r.data_quality?.display_history_note].filter(Boolean).map(note => `<p>${esc(note)}</p>`).join("")}</div></div>`;
 }

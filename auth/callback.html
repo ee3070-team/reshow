@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <base href="/" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#008b8d" />
+    <meta name="reshow-api-origin" content="https://urauw4ckw1.execute-api.us-east-1.amazonaws.com" />
+    <meta
+      name="description"
+      content="ReShow reusable smart exhibition showcase — desktop demonstration dashboard."
+    />
+    <title>ReShow · Showcase overview</title>
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="css/exhibits.css" />
+    <link rel="stylesheet" href="css/staff.css" />
+    <link rel="stylesheet" href="css/login.css" />
+    <script type="importmap">
+{
+  "imports": {
+    "./js/api.js": "./js/api.js?v=20261104-liveperf-2",
+    "./js/app.js": "./js/app.js?v=20261104-liveperf-2",
+    "./js/auth.js": "./js/auth.js?v=20261104-liveperf-2",
+    "./js/data.js": "./js/data.js?v=20261104-liveperf-2",
+    "./js/live-api.js": "./js/live-api.js?v=20261104-liveperf-2",
+    "./js/login.js": "./js/login.js?v=20261104-liveperf-2",
+    "./js/pages/activity.js": "./js/pages/activity.js?v=20261104-liveperf-2",
+    "./js/pages/exhibits.js": "./js/pages/exhibits.js?v=20261104-liveperf-2",
+    "./js/pages/labels.js": "./js/pages/labels.js?v=20261104-liveperf-2",
+    "./js/pages/overview.js": "./js/pages/overview.js?v=20261104-liveperf-2",
+    "./js/pages/reports.js": "./js/pages/reports.js?v=20261104-liveperf-2",
+    "./js/pages/staff.js": "./js/pages/staff.js?v=20261104-liveperf-2",
+    "./js/services.js": "./js/services.js?v=20261104-liveperf-2",
+    "./js/ui.js": "./js/ui.js?v=20261104-liveperf-2"
+  }
+}
+    </script>
+    <script type="module" src="js/app.js?v=20261104-liveperf-2"></script>
+  </head>
+  <body class="signed-out">
+    <section id="login-screen" aria-label="Staff sign in"><p class="login-loading" role="status">Loading ReShow…</p></section>
+    <a href="#main" class="skip-link">Skip to content</a>
+    <aside class="sidebar" aria-label="Main navigation" hidden>
+      <a class="brand" href="#overview"
+        ><img src="assets/logo.svg" alt="" /><span
+          >ReShow<small>Smart showcase</small></span
+        ></a
+      >
+      <nav id="navigation" aria-label="Dashboard tabs"></nav>
+      <div class="sidebar-bottom">
+        <span class="muted" id="workspace-note">Prototype · Case 01</span
+        ><button class="demo-button" id="demo-controls">
+          Demo controls <span aria-hidden="true">↗</span>
+        </button>
+        <div class="staff-identity" id="session-identity"></div>
+        <button class="demo-button" id="sign-out">Sign out <span aria-hidden="true">↗</span></button>
+      </div>
+    </aside>
+    <main id="main" tabindex="-1" hidden>
+      <header class="page-header">
+        <div>
+          <div class="title-line">
+            <h1 id="page-title">Showcase overview</h1>
+            <span class="badge demo" id="workspace-mode">Demo data</span>
+          </div>
+          <p id="page-subtitle">Case 01 / School exhibition</p>
+        </div>
+        <div class="header-actions">
+          <span id="demo-date"></span
+          ><button id="live-refresh" class="button" hidden>Refresh live data</button><button id="report-shortcut" class="button">Generate report</button>
+        </div>
+      </header>
+      <div id="scenario-banner" hidden></div>
+      <div id="page-content" aria-live="off"></div>
+      <footer class="page-footer">
+        ReShow prototype
+        <span id="mode-footer"
+          >Simulated devices & acknowledgements · All times HKT (UTC+8)</span
+        >
+      </footer>
+    </main>
+    <div
+      id="toast-region"
+      class="toast-region"
+      role="status"
+      aria-live="polite"
+    ></div>
+  </body>
+</html>

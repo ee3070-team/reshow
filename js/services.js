@@ -10,6 +10,74 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
 const timers = new Map();
 let state = restore();
+// Public demo credentials only. A backend must replace this entire auth adapter.
+const DEMO_PASSWORD = "DemoOnly!3070";
+const SESSION_KEY = "reshow-demo-session-v1";
+const SESSION_LIFETIME = 8 * 60 * 60 * 1000;
+const ROLES = ["Administrator", "Operator", "Viewer"];
+let session = restoreSession();
+
+function restoreSession() {
+  try {
+    const stored = JSON.parse(globalThis.sessionStorage?.getItem(SESSION_KEY) || "null");
+    if (stored?.version === 1 && typeof stored.staffId === "string" &&
+        Number.isFinite(stored.expiresAt) && stored.expiresAt > Date.now() &&
+        stored.expiresAt <= Date.now() + SESSION_LIFETIME) {
+      const person = state.staff.find((p) => p.id === stored.staffId);
+      if (person && ROLES.includes(person.role))
+        return { staffId: person.id, expiresAt: stored.expiresAt };
+    }
+  } catch { /* Storage may be blocked or contain invalid JSON. */ }
+  storeSession(null);
+  return null;
+}
+function storeSession(value) {
+  try {
+    if (value) globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify({ version: 1, ...value }));
+    else globalThis.sessionStorage?.removeItem(SESSION_KEY);
+  } catch { /* In-memory sign-in remains usable when browser storage is blocked. */ }
+}
+function currentStaff() {
+  const person = session && session.expiresAt > Date.now()
+    ? state.staff.find((p) => p.id === session.staffId) : null;
+  if (person && ROLES.includes(person.role)) return person;
+  session = null;
+  storeSession(null);
+  return null;
+}
+const publicStaff = (person) => person
+  ? { id: person.id, name: person.name, email: person.email, role: person.role } : null;
+export function can(permission) {
+  const person = currentStaff();
+  if (!person) return false;
+  if (["view", "reports"].includes(permission)) return true;
+  if (permission === "operate") return ["Administrator", "Operator"].includes(person.role);
+  return ["staff", "demo"].includes(permission) && person.role === "Administrator";
+}
+function requirePermission(permission) {
+  if (!currentStaff()) error("Sign in to continue.");
+  if (!can(permission)) error("Your role does not have permission to perform this action.");
+}
+export async function signIn(email, password) {
+  await delay(65);
+  const address = typeof email === "string" ? email.trim().toLowerCase() : "";
+  const person = state.staff.find((p) => p.email.toLowerCase() === address);
+  if (!person || !ROLES.includes(person.role) || password !== DEMO_PASSWORD)
+    error("Email or demo password is incorrect.");
+  session = { staffId: person.id, expiresAt: Date.now() + SESSION_LIFETIME };
+  storeSession(session);
+  notifyListeners();
+  return publicStaff(person);
+}
+export async function signOut() {
+  session = null;
+  storeSession(null);
+  notifyListeners();
+  return null;
+}
+export async function getSession() {
+  return publicStaff(currentStaff());
+}
 
 function validState(s) {
   return (
@@ -93,6 +161,9 @@ function persist() {
 }
 function notify() {
   persist();
+  notifyListeners();
+}
+function notifyListeners() {
   for (const listener of listeners) {
     try {
       listener();
@@ -113,11 +184,15 @@ function error(message, fields) {
   if (fields) issue.fields = fields;
   throw issue;
 }
-async function read() {
+async function read(permission = "view") {
+  requirePermission(permission);
   await delay(state.mode === "loading" ? 1800 : 35);
+  requirePermission(permission);
 }
-async function write() {
+async function write(permission = "operate") {
+  requirePermission(permission);
   await delay(65);
+  requirePermission(permission);
 }
 const isEmpty = () => state.mode === "empty";
 const exhibitById = (exhibitId) => {
@@ -333,6 +408,7 @@ export function subscribe(fn) {
   return () => listeners.delete(fn);
 }
 export function getDemoMode() {
+  requirePermission("view");
   return state.mode;
 }
 export async function getSnapshot() {
@@ -343,6 +419,7 @@ export async function getSnapshot() {
   delete result.accessLog;
   delete result.sequence;
   delete result.scanSequence;
+  if (!can("staff")) result.staff = [];
   if (state.mode === "offline") result.showcase.online = false;
   if (isEmpty()) {
     result.exhibits = [];
@@ -440,7 +517,9 @@ export async function assignExhibit(exhibitId) {
   return queue("assignment", exhibitId, { exhibitId });
 }
 export async function scanExhibitTag() {
+  requirePermission("operate");
   await delay(900);
+  requirePermission("operate");
   if (["failed", "offline"].includes(state.mode))
     error(
       "Mock exhibit tag scan failed. Try again when the showcase is online.",
@@ -574,7 +653,7 @@ export async function generateReport(
   filters = {},
   sections = ["history", "activity", "environment", "missing"],
 ) {
-  await write();
+  await write("reports");
   if (
     !Array.isArray(sections) ||
     sections.some(
@@ -597,15 +676,15 @@ export async function generateReport(
   return copy(report);
 }
 export async function listReports() {
-  await read();
+  await read("reports");
   return copy(isEmpty() ? [] : state.reports);
 }
 export async function listStaff() {
-  await read();
+  await read("staff");
   return copy(isEmpty() ? [] : state.staff);
 }
 export async function saveStaff(profile) {
-  await write();
+  await write("staff");
   if (!profile || typeof profile !== "object")
     error("A staff profile is required.");
   const existing = profile.id ? staffById(profile.id) : null;
@@ -622,6 +701,12 @@ export async function saveStaff(profile) {
     });
   if (!["Administrator", "Operator", "Viewer"].includes(profile.role))
     error("Choose a valid role.", { role: "Invalid role" });
+  if (existing?.role === "Administrator" && profile.role !== "Administrator") {
+    if (state.staff.filter((p) => p.role === "Administrator").length <= 1)
+      error("Keep at least one Administrator. Add another Administrator before changing this role.", { role: "At least one Administrator is required" });
+    if (existing.id === currentStaff().id)
+      error("You cannot change your own Administrator role. Ask another Administrator to make this change.", { role: "You cannot demote yourself" });
+  }
   const record = {
     id: existing?.id || id("staff"),
     name: text(profile.name, "name", 100),
@@ -637,7 +722,9 @@ export async function saveStaff(profile) {
   return copy(record);
 }
 export async function scanStaffCard() {
+  requirePermission("staff");
   await delay(900);
+  requirePermission("staff");
   if (["failed", "offline"].includes(state.mode))
     error(
       "Mock staff card scan failed. Try again when the showcase is online.",
@@ -672,11 +759,11 @@ function cardCommand(staffId, cardId, enabled) {
   return queue("card", staffId, { cardId, enabled });
 }
 export async function registerCard(staffId, cardId) {
-  await write();
+  await write("staff");
   return cardCommand(staffId, cardId, true);
 }
 export async function setCardAccess(staffId, enabled) {
-  await write();
+  await write("staff");
   if (typeof enabled !== "boolean")
     error("Card access must be enabled or disabled.");
   const person = staffById(staffId);
@@ -684,18 +771,18 @@ export async function setCardAccess(staffId, enabled) {
   return cardCommand(staffId, person.cardId, enabled);
 }
 export async function getAccessLog() {
-  await read();
+  await read("staff");
   return copy(isEmpty() ? [] : state.accessLog);
 }
 export async function setDemoMode(mode) {
-  await write();
+  await write("demo");
   if (!DEMO_MODES.includes(mode)) error("Unknown demo mode.");
   state.mode = mode;
   notify();
   return mode;
 }
 export async function settlePending() {
-  await write();
+  await write("demo");
   const ids = state.operations
     .filter((o) => o.status === "pending")
     .map((o) => o.id);
@@ -707,15 +794,21 @@ export async function settlePending() {
   return copy(state.operations.filter((o) => ids.includes(o.id)));
 }
 export async function resetDemo() {
-  await write();
+  await write("demo");
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
   state = createInitialState();
+  // Seed administrators keep their sign-in; reset removes custom staff records.
+  const person = currentStaff();
   notify();
-  return getSnapshot();
+  return person ? getSnapshot() : null;
 }
 
 export const api = {
+  signIn,
+  signOut,
+  getSession,
+  can,
   getSnapshot,
   listExhibits,
   saveExhibit,

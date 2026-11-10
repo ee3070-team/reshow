@@ -1,4 +1,5 @@
-import { api } from "./services.js";
+import { api } from "./api.js";
+import { renderLogin } from "./login.js";
 import {
   icon,
   esc,
@@ -58,6 +59,73 @@ let current = "overview",
   dirty = false,
   renderId = 0;
 const content = document.querySelector("#page-content");
+const loginScreen = document.querySelector("#login-screen");
+let sessionUser = null, loginCleanup = null;
+
+function updateIdentity(user) {
+  sessionUser = user;
+  const initials = user.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
+  document.querySelector("#session-identity").innerHTML = `<span class="avatar">${esc(initials)}</span><span>${esc(user.name)}<small>${esc(user.role)} · ${api.isLive() ? "Live" : "Demo"} session</small></span>`;
+  document.querySelector('[data-page="staff"]').hidden = false;
+  document.querySelector("#demo-controls").hidden = !api.can("demo");
+  document.querySelector("#workspace-mode").textContent = api.isLive() ? "Live backend" : "Demo data";
+  document.querySelector("#workspace-note").textContent = api.isLive() ? "Connected staff workspace" : "Prototype · Case 01";
+  document.querySelector("#live-refresh").hidden = !api.isLive();
+  document.querySelector("#mode-footer").textContent = api.isLive() ? "Live backend · Device execution requires producer acknowledgement · All times HKT (UTC+8)" : "Simulated devices & acknowledgements · All times HKT (UTC+8)";
+}
+
+function publicEditorText() {
+  return api.isLive() && dirty && ["exhibits", "labels", "overview"].includes(current)
+    ? [...document.querySelectorAll('#page-content input:not([type="password"]):not([type="email"]):not([type="hidden"]), #page-content textarea, #page-content select, dialog input:not([type="password"]):not([type="email"]):not([type="hidden"]), dialog textarea')]
+      .filter(field => !["button", "submit", "file", "checkbox", "radio"].includes(field.type) && field.value)
+      .map(field => `${field.name || field.id || "Editor field"}: ${field.value}`).join("\n\n") : "";
+}
+function showLogin(message = "") {
+  // Keep non-sensitive editor text in memory so expiry does not silently destroy it.
+  const preserved = publicEditorText();
+  ++renderId;
+  cleanup?.();
+  cleanup = null;
+  loginCleanup?.();
+  sessionUser = null;
+  dirty = false;
+  content.replaceChildren();
+  document.querySelectorAll("dialog").forEach(dialog => dialog.remove());
+  document.querySelector("#toast-region").replaceChildren();
+  document.querySelector(".sidebar").hidden = true;
+  document.querySelector("#main").hidden = true;
+  document.querySelector("#session-identity").replaceChildren();
+  document.body.classList.add("signed-out");
+  loginScreen.hidden = false;
+  document.title = "ReShow · Staff sign in";
+  loginCleanup = renderLogin(loginScreen, api, async () => {
+    await navigate(location.hash.slice(1) || "overview", {}, true);
+  }, message);
+  if (preserved) {
+    const note = document.createElement("div");
+    note.className = "notice info preserved-editor";
+    const label = document.createElement("label");
+    label.className = "field";
+    label.textContent = "Unsaved editor text — copy before continuing to live sign in. This copy remains only in this page's memory.";
+    const text = document.createElement("textarea");
+    text.readOnly = true;
+    text.rows = 6;
+    text.value = preserved;
+    label.append(text);
+    note.append(label);
+    loginScreen.querySelector(".login-card").append(note);
+  }
+}
+
+async function requireSession() {
+  const user = await api.getSession();
+  if (!user) {
+    if (sessionUser || loginScreen.hidden) showLogin(`Your ${api.isLive() ? "live" : "demo"} session ended. Please sign in again.`);
+    return false;
+  }
+  updateIdentity(user);
+  return true;
+}
 document.querySelector("#navigation").innerHTML = Object.entries(pages)
   .map(
     ([key, p]) =>
@@ -88,6 +156,7 @@ async function canLeave() {
   );
 }
 async function navigate(tab, nextParams = {}, replace = false) {
+  if (!(await requireSession())) return;
   if (!pages[tab]) tab = "overview";
   if (!(await canLeave())) return;
   dirty = false;
@@ -102,9 +171,23 @@ async function navigate(tab, nextParams = {}, replace = false) {
   await refresh();
 }
 async function refresh() {
+  if (!(await requireSession())) return;
   const id = ++renderId;
+  const loadStarted = performance.now();
+  content.dataset.frontendBuild = "2026-11-04-scoped-snapshots";
+  content.dataset.loadState = "loading";
+  content.dataset.loadId = String(id);
+  content.dataset.requestTimings = "[]";
+  delete content.dataset.loadMs;
   cleanup?.();
   cleanup = null;
+  loginCleanup?.();
+  loginCleanup = null;
+  loginScreen.replaceChildren();
+  loginScreen.hidden = true;
+  document.querySelector(".sidebar").hidden = false;
+  document.querySelector("#main").hidden = false;
+  document.body.classList.remove("signed-out");
   const page = pages[current];
   document.title = `ReShow · ${page.title}`;
   document.querySelector("#page-title").textContent = page.title;
@@ -119,15 +202,24 @@ async function refresh() {
     else a.removeAttribute("aria-current");
   });
   content.innerHTML =
-    '<div class="loading-state" role="status"><div class="spinner"></div><span>Loading demo records…</span></div>';
+    `<div class="loading-state" role="status"><div class="spinner"></div><span>Loading ${api.isLive() ? "live" : "demo"} records…</span></div>`;
   try {
-    const snap = await api.getSnapshot();
+    // The Live header needs only a clock and mode. Let the page fetch its own
+    // records instead of loading the entire workspace before every navigation.
+    const snap = api.isLive() ? { now: new Date().toISOString() } : await api.getSnapshot();
     if (id !== renderId) return;
     document.querySelector("#demo-date").textContent =
-      `${formatDate(snap.now)} · Demo clock`;
+      `${formatDate(snap.now)} · ${api.isLive() ? "Live refresh" : "Demo clock"}`;
     updateBanner(snap);
     const stage = document.createElement("div");
+    stage.innerHTML = content.innerHTML;
     content.replaceChildren(stage);
+    if (current === "staff" && !api.can("staff")) {
+      stage.innerHTML = '<div class="card empty"><h3>Staff access permission required</h3><p>Your current account cannot manage staff. Contact an administrator for access.</p></div>';
+      content.dataset.loadMs = String(Math.round(performance.now() - loadStarted));
+      content.dataset.loadState = "ready";
+      return;
+    }
     const off = await page.render(stage, {
       api,
       navigate,
@@ -137,11 +229,17 @@ async function refresh() {
         if (id === renderId) dirty = value;
       },
     });
-    if (id === renderId) cleanup = off;
+    if (id === renderId) {
+      cleanup = off;
+      content.dataset.loadMs = String(Math.round(performance.now() - loadStarted));
+      content.dataset.loadState = "ready";
+    }
     else off?.();
   } catch (error) {
     if (id !== renderId) return;
-    content.innerHTML = `<div class="card empty"><h3>Could not load demo records</h3><p>${esc(error.message)}</p><button id="retry-page" class="button" style="margin-top:16px">Try again</button></div>`;
+    content.dataset.loadState = "error";
+    if (!(await requireSession())) return;
+    content.innerHTML = `<div class="card empty"><h3>Could not load ${api.isLive() ? "live" : "demo"} records</h3><p>${esc(error.message)}</p><button id="retry-page" class="button" style="margin-top:16px">Try again</button></div>`;
     document.querySelector("#retry-page").onclick = refresh;
   }
 }
@@ -159,13 +257,14 @@ function updateBanner(snap) {
     failed:
       "Failed delivery demo: device commands will fail after a simulated wait.",
   };
-  const message = messages[mode] || snap.storageWarning;
+  const message = api.isLive() ? (snap.liveWarning || "Live backend. Automatic refresh checks again 5 seconds after each refresh finishes. Requested device changes remain pending until producer acknowledgement.") : messages[mode] || snap.storageWarning;
   banner.hidden = !message;
   banner.innerHTML = message
     ? `<div class="notice ${mode === "offline" || mode === "failed" ? "warning" : "info"}">${icon("info")}${esc(message)}</div>`
     : "";
 }
 document.querySelector("#demo-controls").onclick = async () => {
+  if (!(await requireSession()) || !api.can("demo")) return;
   const snap = await api.getSnapshot();
   const mode = api.getDemoMode();
   const choices = [
@@ -216,14 +315,55 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+document.querySelector("#sign-out").onclick = async () => {
+  if (!(await canLeave())) return;
+  try { await api.signOut(); }
+  catch (error) { toast(`Sign out could not be confirmed: ${error.message}`, "error"); return; }
+  dirty = false;
+  history.replaceState({ tab: "overview", params: {} }, "", "#overview");
+  showLogin();
+};
 // Keep the demo clock and storage warnings current without replacing page editors.
-api.subscribe(async () => {
-  const snapshot = await api.getSnapshot();
-  updateBanner(snapshot);
-  document.querySelector("#demo-date").textContent =
-    `${formatDate(snapshot.now)} · Demo clock`;
+api.subscribe(async (event) => {
+  if (!sessionUser) return;
+  const previousPermissions = JSON.stringify([sessionUser.role, sessionUser.permissions]);
+  if (!(await requireSession())) return;
+  if (event?.error) {
+    const banner = document.querySelector("#scenario-banner");
+    banner.hidden = false;
+    banner.innerHTML = `<div class="notice warning">Automatic refresh failed: ${esc(event.error.message)} Displayed records may be out of date. Retrying automatically.</div>`;
+    return;
+  }
+  if (previousPermissions !== JSON.stringify([sessionUser.role, sessionUser.permissions])) {
+    const preserved = publicEditorText();
+    dirty = false;
+    await refresh();
+    if (preserved && sessionUser) {
+      const note = document.createElement("section");
+      note.className = "notice warning";
+      const label = document.createElement("label");
+      label.className = "field";
+      label.textContent = "Permissions changed. Your unsaved editor text is retained here for copying before leaving this page.";
+      const field = document.createElement("textarea");
+      field.readOnly = true;
+      field.rows = 5;
+      field.value = preserved;
+      label.append(field); note.append(label); content.prepend(note);
+    }
+    return;
+  }
+  try {
+    const snapshot = api.isLive() ? { now: new Date().toISOString() } : await api.getSnapshot();
+    if (!sessionUser) return;
+    updateBanner(snapshot);
+    document.querySelector("#demo-date").textContent =
+      `${formatDate(snapshot.now)} · ${api.isLive() ? "Live refresh" : "Demo clock"}`;
+  } catch {
+    await requireSession();
+  }
 });
 window.addEventListener("popstate", async (e) => {
+  if (!(await requireSession())) return;
   const target = e.state?.tab || location.hash.slice(1);
   if (!(await canLeave())) {
     history.pushState({ tab: current, params }, "", `#${current}`);
@@ -239,4 +379,43 @@ window.addEventListener("hashchange", () => {
   const target = location.hash.slice(1);
   if (pages[target] && target !== current) navigate(target, {}, true);
 });
-navigate(location.hash.slice(1) || "overview", {}, true);
+// Check expiry even while a page is idle; service calls also check it independently.
+async function checkSession() {
+  if (!sessionUser) return;
+  const previousRole = sessionUser.role;
+  if (api.isLive()) {
+    try { await api.refreshSession(); await requireSession(); }
+    catch (error) {
+      if (await requireSession()) {
+        const banner = document.querySelector("#scenario-banner");
+        banner.hidden = false;
+        banner.innerHTML = `<div class="notice warning">${esc(error.message)} Displayed live records have not refreshed.</div>`;
+      }
+      return;
+    }
+    // Identity-change subscriptions apply new permissions; do not render twice.
+    return;
+  }
+  if (await requireSession()) {
+    if (previousRole !== sessionUser.role) {
+      dirty = false;
+      await refresh();
+    }
+  }
+}
+window.addEventListener("focus", checkSession);
+setInterval(checkSession, 30000);
+document.querySelector("#live-refresh").onclick = async () => {
+  if (!(await canLeave())) return;
+  try {
+    await api.refreshSession();
+    if (await requireSession()) { dirty = false; await refresh(); }
+  } catch (error) {
+    if (await requireSession()) toast(error.message, "error");
+  }
+};
+try {
+  await api.initialize();
+  if (await api.getSession()) await navigate(location.hash.slice(1) || "overview", {}, true);
+  else showLogin();
+} catch (error) { showLogin(error.message || "Could not complete live sign in. Please try again."); }
