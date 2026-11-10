@@ -1,5 +1,5 @@
 ReShow: sensors -> Mega 2560 -> ESP32-S3 -> existing AWS API
-Prepared 4 November 2026, Hong Kong time
+Prepared 4 November 2026; review update 10 November 2026, Hong Kong time
 
 FILES
 
@@ -9,6 +9,15 @@ FILES
 Open each .ino in its matching folder in Arduino IDE. Upload one sketch to
 each board. These are a matching pair; the UART format differs from the old
 sketches. No third-party libraries are needed.
+
+DEFAULT MODE: UART DIAGNOSTIC ONLY
+
+HARDWARE_UPLOADS_ENABLED is false in the shared sketch. Even with valid local
+credentials, this default does not start Wi-Fi or make API requests. Leave it
+false until the backend teammate has provisioned and confirmed the hardware
+producer, source=device scope, device and exhibit IDs described below. Only then
+explicitly set HARDWARE_UPLOADS_ENABLED=true in the sketch and flash it.
+This is integration firmware, not a ready-to-use production uploader.
 
 IMPORTANT: AWS BACKEND REQUIREMENT
 
@@ -103,7 +112,8 @@ sketch uses its own local_config.h in the same way. If the local file is absent,
 the sketches use safe placeholders from local_config.example.h.
 
 EXHIBIT_ID and DEVICE_ID remain near the top of ESP32S3_AWS.ino.
-The standalone ZIP retains inline placeholders; configure its sketch directly.
+The local ZIP is an older convenience bundle and is not published. Use the tracked
+source and example headers for the reviewed version.
 
 Configuration fields:
   WIFI_SSID            Your 2.4 GHz Wi-Fi network
@@ -112,8 +122,9 @@ Configuration fields:
   EXHIBIT_ID           Existing backend exhibit ID for this physical setup
   DEVICE_ID            Device ID authorized by the backend; default reshow-mega-01
 
-Shared source and the standalone ZIP intentionally contain credential placeholders. The sketch receives
-and logs UART frames but does not start Wi-Fi uploads until these are replaced.
+Shared source intentionally contains credential placeholders. The sketch receives
+and logs UART frames; uploads require both real provisioned credentials and the
+explicit HARDWARE_UPLOADS_ENABLED gate.
 Do not commit or distribute a configured sketch containing a real credential.
 The original sketches' Wi-Fi passwords have not been copied into this package.
 
@@ -170,8 +181,13 @@ ESP32-S3:
     server failures retain the payload with exponential backoff (up to 60 s).
     HTTP 429 also honors Retry-After delta seconds up to one day; date-form
     Retry-After falls back to backoff. 401/403/404/redirects retry after 60 s.
-    400/409/413/415/422 explicitly discard that endpoint's rejected record and
+    400/413/415/422 explicitly discard that endpoint's rejected record and
     log the failure. It does not pretend that those requests succeeded.
+  - HTTP 409 retains the exact pending payload, ID, endpoint stage and paired
+    reading; it retries after 60 seconds and logs an explicit conflict. Backend
+    reconciliation is required. Conflicts never count as acceptance. Pending
+    data is RAM-only: a long conflict can fill the queue and drop new samples;
+    reboot/power loss still discards the queue. This is not durable storage.
 
 AWS FIELD MAPPING
 
