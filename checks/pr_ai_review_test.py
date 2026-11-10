@@ -1,4 +1,5 @@
 """Run trusted review orchestration against GitHub/AWS/gateway fixtures, never live services."""
+import base64
 import copy
 import importlib.util
 import io
@@ -14,9 +15,10 @@ spec = importlib.util.spec_from_file_location('pr_review', 'scripts/pr-ai-review
 review = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(review)
 COMMIT = 'a' * 40
+BASE_COMMIT = 'c' * 40
 PASS = {'decision': 'pass', 'blockers': [], 'review': 'The changed execution path preserves validation.'}
 PR = {'number': 7, 'state': 'open', 'head': {'sha': COMMIT, 'ref': 'feature', 'repo': {'id': 22}},
-      'base': {'ref': 'master', 'repo': {'id': 11}}, 'changed_files': 1, 'additions': 1, 'deletions': 1}
+      'base': {'ref': 'master', 'sha': BASE_COMMIT, 'repo': {'id': 11}}, 'changed_files': 1, 'additions': 1, 'deletions': 1}
 RUN = {'id': 101, 'run_attempt': 1, 'name': review.SOURCE_NAME, 'path': review.SOURCE_WORKFLOW,
        'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'head_sha': COMMIT,
        'head_repository': {'id': 22}, 'head_branch': 'feature', 'pull_requests': [{'number': 7}]}
@@ -41,6 +43,10 @@ class FakeGitHub:
         self.comments, self.calls, self.newer = [], [], []
         self.pr_reads = 0
         self.change_after_review = False
+        self.base_change_after_review = False
+        self.base_files = {path: {'type': 'file', 'path': path, 'sha': 'd' * 40,
+                                 'encoding': 'base64', 'size': 4, 'content': base64.b64encode(b'base').decode()}
+                           for path in review.BASE_CONTEXT_PATHS}
 
     def call(self, path, data=None, method=None):
         self.calls.append((path, copy.deepcopy(data), method))
@@ -55,9 +61,13 @@ class FakeGitHub:
             result = copy.deepcopy(self.pr)
             if self.change_after_review and self.pr_reads >= 3:
                 result['head']['sha'] = 'b' * 40
+            if self.base_change_after_review and self.pr_reads >= 3:
+                result['base']['sha'] = 'e' * 40
             return result
         if path == '/pulls/7/files?per_page=100':
             return copy.deepcopy(self.files)
+        if path.startswith('/contents/') and path.endswith('?ref=' + BASE_COMMIT):
+            return copy.deepcopy(self.base_files[path[len('/contents/'):].split('?')[0]])
         raise AssertionError('Unexpected path: ' + path)
 
     def pages(self, path, key=None):
@@ -173,6 +183,66 @@ class PrReviewTests(unittest.TestCase):
         self.assertNotIn(arbitrary_field, github.body())
         self.assertNotIn('sensitive model content', github.body())
         self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+
+    def test_base_context_is_pinned_and_changed_files_are_not_substituted(self):
+        github = FakeGitHub()
+        files = [dict(FILE, filename='js/api.js')]
+        context = review.base_context(github, github.pr, files)
+        self.assertEqual(context['base_commit'], BASE_COMMIT)
+        self.assertEqual({item['filename'] for item in context['files']},
+                         set(review.BASE_CONTEXT_PATHS) - {'js/api.js'})
+        for item in context['files']:
+            self.assertEqual(item['content'], 'base')
+            self.assertEqual(item['blob_sha'], 'd' * 40)
+        self.assertTrue(all(path.endswith('?ref=' + BASE_COMMIT) for path, _, _ in github.calls))
+        self.assertFalse(any('/contents/js/api.js?' in path for path, _, _ in github.calls))
+
+    def test_pr_text_cannot_choose_context_paths_and_non_frontend_changes_need_none(self):
+        github = FakeGitHub()
+        context = review.base_context(github, github.pr, [dict(FILE, filename='scripts/tool.py')])
+        self.assertEqual(context['files'], [])
+        self.assertEqual(github.calls, [])
+        review.base_context(github, github.pr, [dict(FILE, patch=FILE['patch'] + '\n+import "../.env"')])
+        self.assertEqual({path.split('?')[0] for path, _, _ in github.calls},
+                         {'/contents/' + path for path in review.BASE_CONTEXT_PATHS})
+
+    def test_missing_invalid_incomplete_or_oversized_base_context_fails_closed(self):
+        changes = [
+            {'type': 'symlink'}, {'path': '.env'}, {'encoding': 'none'}, {'sha': 'bad'},
+            {'content': '!invalid!'}, {'content': base64.b64encode(b'\xff').decode(), 'size': 1},
+            {'size': 5}, {'size': 120001},
+        ]
+        for change in changes:
+            with self.subTest(change=change):
+                github = FakeGitHub()
+                github.base_files['js/api.js'].update(change)
+                result, gateway, load = self.execute(github)
+                self.assertEqual(result, 1)
+                gateway.assert_not_called()
+                load.assert_not_called()
+                self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+        github = FakeGitHub()
+        with patch.object(review, 'MAX_BASE_CONTEXT_CHARS', 15):
+            with self.assertRaises(review.ReviewError):
+                review.base_context(github, github.pr, github.files)
+
+    def test_base_moving_during_review_prevents_stale_verdict_publication(self):
+        github = FakeGitHub()
+        github.base_change_after_review = True
+        result, gateway, _ = self.execute(github)
+        self.assertEqual(result, 0)
+        gateway.assert_called_once()
+        self.assertEqual(github.writes('/issues/'), [])
+        self.assertEqual([data['state'] for _, data, _ in github.writes('/statuses/')], ['pending'])
+
+    def test_verified_base_context_is_included_with_the_complete_diff(self):
+        github = FakeGitHub()
+        result, gateway, _ = self.execute(github)
+        self.assertEqual(result, 0)
+        evidence = json.loads(gateway.call_args.args[2]['messages'][1]['content'])
+        self.assertEqual(evidence['files'][0]['patch'], FILE['patch'])
+        self.assertEqual(evidence['base_context']['base_commit'], BASE_COMMIT)
+        self.assertEqual(len(evidence['base_context']['files']), len(review.BASE_CONTEXT_PATHS))
 
     def test_unsupported_structured_output_fails_closed_without_fallback(self):
         github = FakeGitHub()
