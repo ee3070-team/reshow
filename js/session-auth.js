@@ -20,10 +20,15 @@ export function createSessionAuth(session, location = globalThis.location) {
       });
     },
     async request(path, options = {}) {
-      const headers = new Headers(options.headers);
-      const version = headers.get("If-Match");
+      const { headers: suppliedHeaders, version: suppliedVersion, ...requestOptions } = options;
+      const headerVersion = new Headers(suppliedHeaders).get("If-Match");
+      if (headerVersion !== null && suppliedVersion !== undefined && headerVersion !== String(suppliedVersion)) {
+        throw Object.assign(new Error("Conflicting record versions. Reload the record before editing."), { code: "version_mismatch" });
+      }
+      // The shared session is the sole owner of HTTP headers and credentials.
+      const version = headerVersion ?? suppliedVersion;
       const relative = path.startsWith("/staff-api/") ? path.slice("/staff-api".length) : path;
-      return session.request(relative, { ...options, ...(version !== null ? { version } : {}) });
+      return session.request(relative, { ...requestOptions, ...(version !== undefined ? { version } : {}) });
     },
     async signOut() {
       const result = await session.signOut();

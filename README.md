@@ -101,12 +101,10 @@ The fixed demonstration clock starts on **6 October 2026 at 13:20 HKT**, matchin
 ```text
 index.html              App shell and six-tab navigation
 auth/callback.html      OAuth callback shell (root base URL)
-js/auth.js              PKCE, memory token, backend session and logout
+js/auth-session.js      Shared PKCE, memory token, backend session and logout
+js/session-auth.js      Dashboard adapter for the shared session
 js/api.js               Explicit Demo / Live service facade
 js/live-api.js          Staff API adapter and live record normalization
-index.html              App shell and dashboard navigation
-auth/callback.html      Matching app shell for the exact Cognito callback
-js/auth-session.js      PKCE login and memory-only staff tokens
 js/live-accounts.js     Live account controls backed by the staff API
 js/live-showcase.js     Paced, read-only AWS showcase fixture loader
 js/live-refresh.js      Visible-tab refresh scheduler with no overlapping loads
@@ -131,7 +129,7 @@ assets/                 Local SVG illustrations, image and GLB model
 tools/demo-showcase/     Synthetic seed, immutable updater and GET-only report
 ```
 
-The facade in `js/api.js` selects existing demo services or `js/live-api.js`. `js/auth.js` implements provider login/session handling, and `auth/callback.html` loads the same app shell with a root base URL. Keep callback shell markup aligned when changing `index.html`. Telemetry, command execution, durable evidence, permissions and hardware integration remain backend/producer responsibilities.
+The facade in `js/api.js` selects existing demo services or `js/live-api.js`. `js/auth-session.js` implements shared provider login/session handling, and `auth/callback.html` loads the same app shell with a root base URL. Keep callback shell markup aligned when changing `index.html`. Telemetry, command execution, durable evidence, permissions and hardware integration remain backend/producer responsibilities.
 
 The authentication boundary in `js/services.js` exposes async `signIn(email)`, `signOut()`, and `getSession()`, plus synchronous `can(permission)` for the UI. A session read returns `{ id, name, email, role }` or `null`. Permission keys are `view`, `operate`, `staff`, `demo`, and `reports`. Client permission checks guide the interface; a real API must independently authorize every request.
 
@@ -218,13 +216,13 @@ six-tab API facade, preserving request cancellation and exact If-Match versions.
 Demo mode still uses the separate local login. In Live mode, the **Website account**
 header button opens account administration; **Staff access** manages the directory
 and physical cards. The Live showcase and 3D & AI studio tabs from master remain available.
-The older `auth.js` implementation is retained for reference and its existing tests;
-the running dashboard uses the shared session instead.
+The unused duplicate OAuth implementation has been removed. Facade tests exercise
+the shared session, callback mode, identity invalidation and actual request headers.
 
 Both entry shells use one application script and matching complete import maps
-at revision `20261110-merge-1`. The callback differs only by its root base URL.
-Local verification: syntax checks, 54 repository JavaScript tests, the 121-test
-local dashboard suite, and eight-tab browser navigation. Synthetic tests cover the
+at revision `20261110-review-2`. The callback differs only by its root base URL.
+Local verification: syntax checks and 60 repository JavaScript tests; earlier
+integration checks also covered the local dashboard suite and eight-tab navigation. Synthetic tests cover the
 shared callback/session, request versions, cancellation and sign-out; no live
 account changes or device operations were performed. Linux deployment and Python
 3.14 checks run in GitHub CI, since this workstation has Windows and Python 3.10.
