@@ -10,6 +10,12 @@ import {
   showDialog,
 } from "../ui.js";
 
+// Live identity and directory rows share backend staff_id, never provider subject.
+export function isOwnStaffRecord(person, session) {
+  const staffId = session?.staff_id ?? session?.id;
+  return Boolean(person?.id && person.id === staffId);
+}
+
 export async function render(container, ctx) {
   const { api } = ctx;
   const live = api.getMode?.() === "live";
@@ -144,7 +150,7 @@ export async function render(container, ctx) {
   }
   function openAccount(person) {
     const account = accounts.find(item => (item.staffId || item.id) === person.id);
-    const own = person.id === session?.id || person.id === session?.staffId;
+    const own = isOwnStaffRecord(person, session);
     showDialog(account ? "Manage website account" : "Prepare website invitation", `<form class="staff-account-form"><p>${esc(person.name)} · ${esc(person.email)}</p><p class="notice info">${account ? "Website permissions affect sign-in and dashboard controls. Physical cards and directory roles are separate." : "Prepare account provisioning with invitation email suppressed. This action does not send an invitation email."}</p><label class="field">Account role<select name="role" ${own ? "disabled" : ""}>${["Administrator","Operator","Viewer"].map(role => `<option ${role === (account?.role || "Viewer") ? "selected" : ""}>${role}</option>`).join("")}</select></label>${account ? `<label class="field">Account access<select name="status" ${own ? "disabled" : ""}><option value="unchanged">Keep current (${esc(account.status)})</option><option value="active">Active</option><option value="disabled">Disabled</option></select></label>` : ""}<p role="alert" class="staff-form-error"></p><div class="actions"><button type="button" class="button" data-cancel>Cancel</button><button type="submit" class="button primary" ${own ? "disabled" : ""}>${account ? "Save account" : "Prepare without email"}</button></div></form>`, dialog => {
       const form = dialog.querySelector("form"), close = dialog.close.bind(dialog);
       const original = JSON.stringify([...new FormData(form)]);
@@ -218,7 +224,7 @@ export async function render(container, ctx) {
   }
   function openProfile(person = null) {
     if (!api.can("staff")) return;
-    const ownProfile = person?.id === session?.id;
+    const ownProfile = isOwnStaffRecord(person, session);
     showDialog(
       person ? "Manage staff" : "Add staff",
       `<form class="staff-profile-form"><div class="form-grid"><label class="field">Full name<input name="name" value="${esc(person?.name || "")}" maxlength="80" required></label><label class="field">Email<input type="email" name="email" value="${esc(person?.email || "")}" maxlength="150" required></label><label class="field">${live ? "Directory role" : "Website role"}<select name="role" ${ownProfile ? "disabled" : ""}>${["Administrator", "Operator", "Viewer"].map((role) => `<option${role === (person?.role || "Viewer") ? " selected" : ""}>${role}</option>`).join("")}</select></label></div><p class="notice info">${ownProfile ? "Your own website role cannot be changed here. " : ""}${live ? "This changes directory metadata only. Website permissions are managed in Website accounts; physical card permissions remain separate." : "Website controls follow the selected demo role. Demo account selection requires no password; changing this email changes the selectable demo address. Secure authentication and authorization require a backend."}</p><p class="staff-form-error" role="alert"></p><div class="actions"><button class="button" type="button" data-cancel>Cancel</button><button class="button primary" type="submit">${person ? "Save profile" : "Add staff"}</button></div></form>${person ? `<div class="staff-manage-card"><h3>Physical access card</h3><p>${esc(person.cardId || "No card assigned")} · ${esc(person.cardId ? (person.cardEnabled ? "Enabled" : "Revoked") : "Use the registration panel to assign a card.")}</p>${person.cardId ? `<button class="button ${person.cardEnabled ? "danger" : ""}" data-access ${pendingFor(person.id) ? "disabled" : ""}>${person.cardEnabled ? "Revoke card access" : "Restore card access"}</button>` : ""}${pendingFor(person.id) ? '<p class="muted">A card change is awaiting acknowledgement.</p>' : ""}</div>` : ""}`,

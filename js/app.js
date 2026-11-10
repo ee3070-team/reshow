@@ -1,3 +1,4 @@
+// Shared API/session and login modules were merged in PR #9 (b7dabd4).
 import { api } from "./api.js";
 import { renderLogin } from "./login.js";
 import { renderLiveAccounts } from "./live-accounts.js";
