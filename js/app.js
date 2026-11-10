@@ -30,28 +30,24 @@ const pages = {
     render: overview,
   },
   exhibits: {
-    liveReady: false,
     title: "Exhibits",
     subtitle: "Manage exhibit profiles and showcase assignments",
     icon: "cube",
     render: exhibits,
   },
   labels: {
-    liveReady: false,
     title: "Electronic labels",
     subtitle: "Edit exhibit information and confirm delivery to the showcase",
     icon: "tag",
     render: labels,
   },
   activity: {
-    liveReady: false,
     title: "Activity",
     subtitle: "Anonymous proximity activity and operational events",
     icon: "activity",
     render: activity,
   },
   reports: {
-    liveReady: false,
     title: "Reports",
     subtitle: "Review exhibition activity and display conditions",
     icon: "report",

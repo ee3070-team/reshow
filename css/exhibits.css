@@ -630,3 +630,6 @@
     font-size: 12px;
   }
 }
+
+/* Text-only live labels use the complete preview width. */
+.epaper-screen:has(> img[hidden]) { grid-template-columns: 1fr; }

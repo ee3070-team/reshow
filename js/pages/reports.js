@@ -9,6 +9,9 @@ import {
   metric,
   filterFields,
   readFilters,
+  dateKey,
+  activityNotes,
+  confirmAction,
 } from "../ui.js";
 
 // Use the same clipped display periods in the preview and CSV export.
@@ -26,21 +29,23 @@ export function displayPeriod(assignment, report) {
 }
 
 export async function render(container, ctx) {
-  const [exhibits, reports] = await Promise.all([
-    ctx.api.listExhibits(),
-    ctx.api.listReports(),
-  ]);
+  const live = ctx.api.getMode?.() === "live";
+  const snapshot = await ctx.api.getSnapshot({ include: ["exhibits", "reports"] });
+  const { exhibits, reports } = snapshot;
   let records = reports,
     current = records[0] || null;
+  if (live && current) current = await ctx.api.getReport(current.id);
+  const today = dateKey(snapshot.now);
   const hasIncomingFilters = Object.keys(ctx.params).length > 0;
   if (hasIncomingFilters) current = null;
   const filters = {
-    showcaseId: "case-01",
-    start: ctx.params.start || current?.filters.start || "2026-10-01",
-    end: ctx.params.end || current?.filters.end || "2026-10-06",
+    showcaseId: snapshot.showcase.id,
+    showcaseName: snapshot.showcase.name,
+    start: ctx.params.start || current?.filters.start || (live ? today : "2026-10-01"),
+    end: ctx.params.end || current?.filters.end || (live ? today : "2026-10-06"),
     exhibitId: ctx.params.exhibitId || current?.filters.exhibitId || "",
   };
-  container.innerHTML = `<div class="stack"><div class="reports-columns"><section class="card report-settings"><h2 class="section-title">${icon("report")}Create report</h2><form data-report-form>${filterFields(exhibits, filters)}<hr><h3>Include in report</h3><label class="check-row"><input type="checkbox" name="section" value="history" checked>Exhibit display history</label><label class="check-row"><input type="checkbox" name="section" value="activity" checked>Proximity activity</label><label class="check-row"><input type="checkbox" name="section" value="environment" checked>Environmental warnings</label><label class="check-row"><input type="checkbox" checked disabled>Missing-data information</label><div class="notice info">${icon("info")}Data completeness is always included.</div><span data-report-error class="field-error" role="alert"></span><button class="button primary" type="submit">Generate preview</button><p class="muted small-text" style="margin-top:12px">Sample records: 1–6 Oct 2026. Proximity activity does not identify individual visitors.</p></form></section><section class="card report-preview" data-preview></section></div><section class="card recent-reports"><h2 class="section-title">${icon("report")}Recent reports</h2><div data-recent></div></section></div>`;
+  container.innerHTML = `<div class="stack"><div class="reports-columns"><section class="card report-settings"><h2 class="section-title">${icon("report")}Create report</h2><form data-report-form>${filterFields(exhibits, filters)}<hr><h3>Include in report</h3><label class="check-row"><input type="checkbox" name="section" value="history" checked>Exhibit display history</label><label class="check-row"><input type="checkbox" name="section" value="activity" checked>Proximity activity</label><label class="check-row"><input type="checkbox" name="section" value="environment" checked>Environmental warnings</label><label class="check-row"><input type="checkbox" checked disabled>Missing-data information</label><div class="notice info">${icon("info")}Data completeness is always included.</div><span data-report-error class="field-error" role="alert"></span><button class="button primary" type="submit">Generate preview</button><p class="muted small-text" style="margin-top:12px">${live ? "Up to 31 inclusive HKT dates; current-day totals use a captured cutoff." : "Sample records: 1–6 Oct 2026."} Proximity activity does not identify individual visitors.</p></form></section><section class="card report-preview" data-preview></section></div><section class="card recent-reports"><h2 class="section-title">${icon("report")}Recent reports</h2><div data-recent></div></section></div>`;
   const form = container.querySelector("[data-report-form]"),
     preview = container.querySelector("[data-preview]");
   function syncFormToReport() {
@@ -71,8 +76,8 @@ export async function render(container, ctx) {
     const end = new Date(
       Date.parse(r.filters.end + "T00:00:00+08:00") + 86400000,
     ).toISOString();
-    preview.innerHTML = `<p class="print-only">ReShow · DEMO DATA · Simulated exhibition report · Generated ${esc(formatDate(r.createdAt))}, ${esc(formatTime(r.createdAt))}</p><div class="card-head"><h2>${icon("report")} Report preview</h2>${badge("Demo report", "info")}</div><h2>School exhibition</h2><p class="report-meta">Case 01 · ${esc(formatDate(start))} – ${esc(formatDate(r.filters.end + "T00:00:00+08:00"))} · HKT</p><p class="report-meta">${esc(r.filters.exhibitId ? r.exhibitNames[r.filters.exhibitId] : "All exhibits")} · ${esc(r.id)}</p>
-    ${selected.includes("activity") ? `<div class="report-summary" style="grid-template-columns:repeat(${selected.includes("environment") ? 3 : 2},1fr)">${metric("Proximity events", s.expectedIntervals ? s.proximityEvents : "—", "Recorded events", "activity")}${metric("Occupied duration", s.expectedIntervals ? duration(s.occupiedSeconds) : "—", "Completed intervals", "clock")}${selected.includes("environment") ? metric("Warnings", s.warnings, "Environmental events", "warning", "amber") : ""}</div>` : ""}
+    preview.innerHTML = `<p class="print-only">ReShow · ${live ? "API report" : "DEMO DATA · Simulated exhibition report"} · Generated ${esc(formatDate(r.createdAt))}, ${esc(formatTime(r.createdAt))}</p><div class="card-head"><h2>${icon("report")} Report preview</h2>${badge(live ? (r.saved ? "Saved API snapshot" : "API preview · unsaved") : "Demo report", "info")}</div><h2>${esc(r.title || snapshot.showcase.exhibition || "Exhibition report")}</h2><p class="report-meta">${esc(r.filters.showcaseId)} · ${esc(formatDate(start))} – ${esc(formatDate(r.filters.end + "T00:00:00+08:00"))} · HKT</p><p class="report-meta">${esc(r.filters.exhibitId ? r.exhibitNames[r.filters.exhibitId] : "All exhibits")} · ${esc(r.id)}</p>
+    ${selected.includes("activity") ? `<div class="report-summary" style="grid-template-columns:repeat(${selected.includes("environment") ? 3 : 2},1fr)">${metric("Proximity events", (live || s.expectedIntervals) ? (s.proximityEvents ?? "—") : "—", "Recorded events", "activity")}${metric("Occupied duration", s.occupiedSeconds == null || (!live && !s.expectedIntervals) ? "—" : duration(s.occupiedSeconds), live ? "Through captured cutoff" : "Completed intervals", "clock")}${selected.includes("environment") ? metric("Warnings", s.warnings, "Environmental events", "warning", "amber") : ""}</div>` : ""}
     ${
       selected.includes("history")
         ? `<section class="report-section"><h3>${icon("cube")}Exhibit display history</h3><table><thead><tr><th>Exhibit</th><th>Display period (HKT)</th></tr></thead><tbody>${
@@ -89,22 +94,31 @@ export async function render(container, ctx) {
           }</tbody></table></section>`
         : ""
     }
-    ${selected.includes("environment") ? `<section class="report-section"><h3>${icon("temperature")}Environmental warnings</h3><table><tbody><tr><td>Temperature</td><td>${warnings.filter((e) => e.type === "temperature").length} warning events</td></tr><tr><td>Relative brightness</td><td>${warnings.filter((e) => e.type === "brightness").length} warning events</td></tr></tbody></table></section>` : ""}
-    <section class="report-section"><h3>${icon("database")}Data completeness</h3><p class="small-text">${s.expectedIntervals ? `${s.recordedIntervals} of ${s.expectedIntervals} completed intervals recorded (${s.coveragePercent}%). ${s.missingIntervals} missing intervals.` : "No completed observation intervals are available for this selection. Coverage cannot be determined."}</p>${missing.length ? `<div class="table-wrap"><table><thead><tr><th>Missing interval (HKT)</th><th>Availability</th></tr></thead><tbody>${missing.map((i) => `<tr><td>${esc(formatDate(i.start))}, ${esc(formatTime(i.start))} – ${esc(formatTime(i.end))}</td><td>Unknown activity</td></tr>`).join("")}</tbody></table></div>` : ""}<p class="notice info report-note">${icon("info")}Totals include recorded data only. Missing intervals are excluded, never treated as zero activity. The open hour and future hours are not yet included.</p><p class="muted small-text" style="margin-top:8px">Coverage describes retained demo intervals during exhibition hours (09:00–17:00), 1–6 Oct 2026. No claims are made about other dates.</p></section><div class="actions end report-actions"><button class="button" data-print>${icon("report")}Print / Save as PDF</button><button class="button" data-csv>${icon("download")}Export CSV</button></div>`;
+    ${selected.includes("environment") ? `<section class="report-section"><h3>${icon("temperature")}Environmental warnings</h3><table><tbody><tr><td>Temperature</td><td>${new Set(warnings.filter((e) => e.type === "temperature").map(e => e.sourceId || e.id)).size} warning events</td></tr><tr><td>Relative brightness</td><td>${new Set(warnings.filter((e) => e.type === "brightness").map(e => e.sourceId || e.id)).size} warning events</td></tr></tbody></table></section>` : ""}
+    ${activityNotes(d)}${r.profileContext?.note ? `<p class="notice info">${esc(r.profileContext.note)}</p>` : ""}<section class="report-section" ${live ? "hidden" : ""}><h3>${icon("database")}Data completeness</h3><p class="small-text">${s.expectedIntervals ? `${s.recordedIntervals} of ${s.expectedIntervals} completed intervals recorded (${s.coveragePercent}%). ${s.missingIntervals} missing intervals.` : "No completed observation intervals are available for this selection. Coverage cannot be determined."}</p>${missing.length ? `<div class="table-wrap"><table><thead><tr><th>Missing interval (HKT)</th><th>Availability</th></tr></thead><tbody>${missing.map((i) => `<tr><td>${esc(formatDate(i.start))}, ${esc(formatTime(i.start))} – ${esc(formatTime(i.end))}</td><td>Unknown activity</td></tr>`).join("")}</tbody></table></div>` : ""}<p class="notice info report-note">${icon("info")}Totals include recorded data only. Missing intervals are excluded, never treated as zero activity. The open hour and future hours are not yet included.</p><p class="muted small-text" style="margin-top:8px">Coverage describes retained demo intervals during exhibition hours (09:00–17:00), 1–6 Oct 2026. No claims are made about other dates.</p></section><div class="actions end report-actions">${live && !r.saved && ctx.api.can("save_reports") ? '<button class="button primary" data-save-report>Save new server snapshot</button>' : ""}<button class="button" data-print>${icon("report")}Print / Save as PDF</button><button class="button" data-csv>${icon("download")}Export CSV</button></div>`;
+    preview.querySelector("[data-save-report]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      if (!(await confirmAction("Save report snapshot?", "The server captures current records again. The saved report may differ from this preview and will retain its own cutoff.", "Capture and save"))) return;
+      button.disabled = true;
+      try { current = await ctx.api.saveReport(current); records = await ctx.api.listReports(); drawPreview(); drawRecent(); toast("Server snapshot saved."); }
+      catch (error) { toast(error.message, "error"); button.disabled = false; }
+    });
     preview.querySelector("[data-print]").onclick = () => window.print();
     preview.querySelector("[data-csv]").onclick = () => exportCsv(current);
   }
   function drawRecent() {
     container.querySelector("[data-recent]").innerHTML = records.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Report</th><th>Period</th><th>Created (HKT)</th><th>Action</th></tr></thead><tbody>${records.map((r) => `<tr><td>School exhibition ${badge("Demo", "info")}<br><small>${esc(r.id)}</small></td><td>${esc(r.filters.start)} – ${esc(r.filters.end)}</td><td>${esc(formatDate(r.createdAt))}, ${esc(formatTime(r.createdAt))}</td><td><button class="text-button" data-open-report="${esc(r.id)}">Open ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><thead><tr><th>Report</th><th>Period</th><th>Created (HKT)</th><th>Action</th></tr></thead><tbody>${records.map((r) => `<tr><td>School exhibition ${badge(live ? "Saved API" : "Demo", "info")}<br><small>${esc(r.id)}</small></td><td>${esc(r.filters.start)} – ${esc(r.filters.end)}</td><td>${esc(formatDate(r.createdAt))}, ${esc(formatTime(r.createdAt))}</td><td><button class="text-button" data-open-report="${esc(r.id)}">Open ${icon("arrow")}</button></td></tr>`).join("")}</tbody></table></div>`
       : '<p class="empty">No reports generated yet. Your generated reports will appear here.</p>';
     container.querySelectorAll("[data-open-report]").forEach(
       (b) =>
-        (b.onclick = () => {
-          current = records.find((r) => r.id === b.dataset.openReport);
+        (b.onclick = async () => {
+          try {
+          current = live ? await ctx.api.getReport(b.dataset.openReport) : records.find((r) => r.id === b.dataset.openReport);
           syncFormToReport();
           drawPreview();
           preview.scrollIntoView({ behavior: "smooth", block: "start" });
+          } catch (error) { toast(error.message, "error"); }
         }),
     );
   }
@@ -125,7 +139,7 @@ export async function render(container, ctx) {
       records = await ctx.api.listReports();
       drawPreview();
       drawRecent();
-      toast("Demo report generated from the selected records.");
+      toast(live ? "API preview generated. Saving requires a separate server capture." : "Demo report generated from the selected records.");
     } catch (error) {
       form.querySelector("[data-report-error]").textContent = error.message;
     } finally {
@@ -155,7 +169,7 @@ export function buildCsv(report) {
     d = r.data,
     s = d.summary;
   const rows = [
-    ["ReShow demo report", r.id],
+    [r.data.raw ? "ReShow API report" : "ReShow demo report", r.id],
     ["Generated at (UTC)", r.createdAt],
     ["Display timezone", "Asia/Hong_Kong (UTC+8)"],
     ["Showcase", r.filters.showcaseId],
@@ -168,16 +182,26 @@ export function buildCsv(report) {
     ],
     [],
     ["Data completeness"],
-    ["Recorded intervals", s.recordedIntervals],
-    ["Missing intervals", s.missingIntervals],
-    ["Expected completed intervals", s.expectedIntervals],
+    ...(d.raw ? [] : [
+      ["Recorded intervals", s.recordedIntervals],
+      ["Missing intervals", s.missingIntervals],
+      ["Expected completed intervals", s.expectedIntervals],
+    ]),
     ["Coverage percent", s.coveragePercent ?? "Unavailable"],
     [
       "Note",
-      "Missing intervals are excluded from totals, not treated as zero. Open and future hours are excluded. Coverage describes retained demo intervals only.",
+      d.raw ? "Recorded lower bounds where coverage is incomplete. Future time is excluded; unknown data is never zero." : "Missing intervals are excluded from totals, not treated as zero. Open and future hours are excluded. Coverage describes retained demo intervals only.",
     ],
     [],
   ];
+  if (d.raw) {
+    rows.push(["Report state", r.saved ? "Immutable saved snapshot" : "Unsaved API preview"], ["Effective cutoff (UTC)", d.evaluation?.effective_end || d.raw.evaluation?.effective_end || "Unavailable"], ["Totals interpretation", d.raw.summary?.totals_interpretation], ["Producer sources", (d.provenance?.sources || d.raw.provenance?.sources || []).join("; ")]);
+    for (const [stream, c] of Object.entries(d.completeness || d.raw.data_completeness || {})) rows.push(["Stream completeness", stream, "coverage seconds", c.coverage_seconds, "missing seconds", c.missing_seconds, "fraction", c.coverage_fraction ?? "Unavailable", c.denominator_note || ""]);
+    for (const [stream, periods] of Object.entries(d.missingData || d.raw.missing_data || {})) for (const period of periods) rows.push(["Missing period", stream, period.start, period.end]);
+    for (const note of [...(d.limitations || d.raw.limitations || []), ...(d.notices || [])]) rows.push(["Limitation", note]);
+    if (r.profileContext?.note) rows.push(["Frozen profile context", r.profileContext.note]);
+    rows.push(["Display attribution quality", JSON.stringify(d.dataQuality || d.raw.data_quality || {})]);
+  }
   if (r.sections.includes("activity"))
     rows.push(
       ["Proximity events", s.proximityEvents],

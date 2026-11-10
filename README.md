@@ -1,6 +1,6 @@
 # ReShow
 
-A desktop demonstration dashboard for a reusable smart exhibition showcase. Built with HTML, CSS, plain JavaScript ES modules, and a standard-library Python server. The showcase demo needs no build step, framework, package installation or hardware communication. Live website account administration uses the existing AWS Cognito and staff API services. The 3D studio loads the included Three.js r128 and GLTFLoader files. Production serves static files from EC2 through CloudFront and routes the studio API to a separate Python Lambda function over HTTPS.
+A desktop dashboard for a reusable smart exhibition showcase, with six core workspace tabs plus Live showcase and 3D & AI studio views. Built with HTML, CSS and plain JavaScript ES modules, without a frontend build step or framework. Choose an explicitly local **Demo** workspace or **Live** staff authentication against the existing backend. The frontend never submits device evidence or acknowledges live commands. A standard-library Python HTTPS server supports local use; production serves static files through CloudFront and routes the studio API to a separate Python Lambda function. The 3D studio uses the included Three.js r128 and GLTFLoader files.
 
 ## Run locally
 
@@ -14,17 +14,61 @@ Stop any previously running local web server first, then open **https://127.0.0.
 
 Staff sign-in is configured for the production website using the exact `/auth/callback.html` path. The previous HTTP localhost callback is retained in the account configuration, but the local server now requires HTTPS; a trusted HTTPS local callback must be explicitly configured in Cognito and the client allowlist before local staff sign-in can work. PKCE state/verifier expire after ten minutes in sessionStorage; access and refresh tokens remain in memory and are cleared on logout or expiry. Other demo origins can use the local showcase without staff sign-in.
 
-Use the same origin/port to keep saved demo records. Data is stored in that browser's `localStorage`; it is not shared with a server. If storage is unavailable, an on-screen warning explains that changes are held in memory.
+Use the same origin/port to keep saved demo records. Demo data is stored in that browser's `localStorage`; it is not shared with a server. Live records remain on the backend. If storage is unavailable, an on-screen warning explains that changes are held in memory.
+
+## Live staff sign in and integration
+
+The public contract and `/auth/config` were fetched on **31 October 2026 HKT** and still identify API **0.4.0**. The API origin is configured in the `reshow-api-origin` meta tag in `index.html` and `auth/callback.html`. It contains no secret. [Current API documentation](https://urauw4ckw1.execute-api.us-east-1.amazonaws.com/docs). Configuration is fetched at runtime; provider endpoints and callback allowlists are not guessed.
+
+Choose **Live** on the sign-in screen, then **Continue to live sign in**. Passwords and recovery are handled by the provider. The browser uses authorization code + PKCE/S256; the callback checks a short-lived state/verifier transaction, removes callback parameters, and checks `/staff-api/session`. Only the access token is used, in memory, for `/staff-api` requests. The current access lifetime is 900 seconds. Reload requires sign-in again through the provider session; there is no background refresh loop or persistent live token. Sign out first invalidates the account's existing sessions on the backend, then opens provider logout. A failed logout is surfaced and is not reported as successful.
+
+Live identities and effective permissions are rechecked on focus and every 30 seconds. Backend permission checks remain authoritative. Viewers may preview, read saved reports and export; only permitted Operators/Administrators save snapshots. Staff directory metadata, website account roles/status, and physical card permissions have separate controls. Account preparation explicitly uses `delivery: suppress`; **this build has no send/resend invitation email action**. No invitation or live management mutation was performed during implementation.
+
+In Live mode, all six core workspace tabs use the separate live data adapter. Requests are paced, concurrent duplicate reads are coalesced, and empty filtered pages with `next_cursor` are followed. HTTP errors stay visible; live failures never switch to demo data. Profile/draft edits retain their opened versions using `If-Match`. Conflicts preserve editor content for review. Unsaved text from exhibit/label editors is shown for copying when a live session expires; copy it before navigating back through provider login. It is not persisted.
+
+**Image upload is deferred.** Text-only new records send null optional media references. Existing remote references survive text edits. Selected local images are labelled **Preview only—not uploaded** and are excluded from live writes. Existing authorized image downloads may be displayed; a media error does not block text workflows.
+
+**Device evidence:** pending, failed, recovery-pending and recovered commands remain distinct from acknowledged state. Source `demo` received from the live backend stays labelled synthetic; `device` is a producer assertion, not independent hardware verification. Readings and contact freshness are separate. No remote unlock, producer ingestion or acknowledgement route is exposed.
+
+**Analytics:** inclusive HKT date filters become UTC requests, limited to 31 calendar days with hourly buckets (at most 744). Backend partial/unknown/ambiguous/out-of-scope/future states and coverage are retained. Current-day results show the backend's effective cutoff. Overview, Activity and report previews share normalization. Saving a preview creates a new server capture, which may differ; exports and printing use the displayed saved snapshot once opened. Warnings count distinct source IDs, not attribution fragments.
+
+Known backend-dependent limits:
+
+- Historical access attempts identify the card, without inferring its past owner from current staff assignments.
+- Tag-scan reads remain Administrator-only. Operators may select existing profiles for confirmed assignment; scan controls explain the restriction.
+- Workflow audit reads remain Administrator-only. Other roles retain permitted analytics and see an availability notice.
+- Command reads are documented for all roles. The frontend hides card commands from non-admin displays; **server-side card-detail redaction remains unverified** and cannot be guaranteed by the UI.
+- Staff-card enrollment requires a new hardware scan with the displayed attempt nonce. A producer must coordinate that nonce; the browser does not start hardware or invent scans.
+- Expired/recovery-pending commands need backend/producer recovery. The UI does not release locks or fake reconciliation.
+- Interactive Cognito login, authenticated CORS/data access, real permissions and hardware outcomes require an explicitly approved account/environment for end-to-end verification.
+
+Public CORS OPTIONS was checked without credentials or writes: localhost:8000 is allowed with GET/POST/PATCH/PUT and Authorization/Content-Type/If-Match. This differs from stale `x-cors` metadata in OpenAPI; actual authenticated integration is still unverified.
+
+## Demo staff sign in
+
+The Demo workspace is a local role simulation. Expand **Demo accounts**, select a sample email, then choose **Open demo**. No password is required or accepted. Use **Live** for authenticated staff access.
+
+| Role | Sample email | Available actions |
+| --- | --- | --- |
+| Admin (Administrator) | `sarah.chen@reshow.demo` | All dashboard actions, Staff Access, cards and demo controls |
+| Operator | `james.wong@reshow.demo` | Edit exhibits, labels and lighting; browse activity and generate/export reports |
+| Viewer | `emily.lau@reshow.demo` | Read-only dashboard, exhibits and labels; browse activity and generate/export reports |
+
+All six tabs remain visible; Staff access explains its Administrator requirement for other roles. Adding a staff profile enables its demo login without a password; changing its email or role changes its login details or permissions. Website login is independent of physical card access. Administrators cannot demote themselves or remove the last administrator role.
+
+**Sign out** clears the session and prompts before discarding unsaved edits. Sessions expire after eight hours of real time and survive refresh in the same tab through `sessionStorage`. If session storage is blocked, sign-in works in memory until reload. The exhibition demo clock does not affect expiry.
+
+This is a browser-only simulation, not a security boundary. No passwords are saved. The separate Live workspace uses backend authentication and permissions.
 
 ## Explore the dashboard
 
 - **Overview:** confirmed showcase status, environmental readings, assigned exhibit, actual acknowledged label, lighting requests, heatmap, and recent events.
-- **Exhibits:** search/filter, create/edit profiles and limits, simulate an exhibit-tag scan, confirm assignment, and inspect illustrative model metadata.
+- **Exhibits:** search/filter, create/edit profiles and limits, wait for an authorized hardware scan (or simulate in Demo), confirm assignment, and inspect illustrative model metadata.
 - **Labels:** edit the live monochrome preview, choose a local image, save a draft, and separately request delivery. The previously acknowledged label remains visible until delivery succeeds.
 - **Activity:** filter by Hong Kong dates and exhibit, switch heatmap measures, inspect cells with mouse or keyboard, and filter the event log.
-- **Reports:** choose sections and filters, generate a stored preview, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
-- **Staff access:** sign in through Cognito for live website account administration. An Administrator can manage live invitations, roles and account status. The separate expandable browser-local demo edits sample staff/cards and historical accepted/denied attempts; these sample roles and cards do not grant live website access.
-- **Live showcase:** sign in to inspect the shared AWS `demo-test-case` fixture, its actual latest readings, saved profiles/label drafts, confirmed device state, command history and historical report. Changes from the [Python data tools](tools/demo-showcase/README.md) appear automatically while this tab is visible: the next paced read starts 30 seconds after the previous one finishes. Loads never overlap. Hiding the tab, navigating away or signing out stops its requests. Automatic refresh can be paused; **Refresh live data** still performs a single check. The previous display remains visible while loading or after a transient error, with retained sections explicitly marked; a permission denial clears that section. Reads show one page of up to 20 entries per history section; role filtering can leave fewer visible entries. Administrator-only card/access data and Operator exhibit scans follow the backend's role rules. The original showcase tabs retain their browser-local samples.
+- **Reports:** choose sections and filters, generate a preview, separately save a live server snapshot, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
+- **Staff access:** administrators manage staff and separate website accounts, register scanned cards, confirm revoke/restore, and filter historical accepted/denied attempts. Website roles control permitted UI and service actions, separately from physical card permissions.
+- **Live showcase:** sign in to inspect the shared AWS `demo-test-case` fixture, its actual latest readings, saved profiles/label drafts, confirmed device state, command history and historical report. Changes from the [Python data tools](tools/demo-showcase/README.md) appear automatically while this tab is visible: the next paced read starts 30 seconds after the previous one finishes. Loads never overlap. Hiding the tab, navigating away or signing out stops its requests. Automatic refresh can be paused; **Refresh live data** still performs a single check. The previous display remains visible while loading or after a transient error, with retained sections explicitly marked; a permission denial clears that section. Reads show one page of up to 20 entries per history section; role filtering can leave fewer visible entries. Administrator-only card/access data and Operator exhibit scans follow the backend's role rules. The six core workspace tabs use browser-local samples in Demo mode and the separate live adapter in Live mode.
 - **3D & AI studio:** explore and adjust the 3D model, import a `.glb`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
 
 Image-to-JSON generation requires Cloudflare Workers AI access. Enter your 32-character Cloudflare Account ID and API token in the **3D & AI studio** tab when generating. Credentials are sent to the Python API for that request only; they are not stored in browser storage or written to disk. Production forwards them through CloudFront HTTPS to Lambda without API caching or application request-body logging. Enable the model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. The image is processed in memory and is not saved.
@@ -51,9 +95,12 @@ The fixed demonstration clock starts on **6 October 2026 at 13:20 HKT**, matchin
 ## Source map
 
 ```text
-index.html              App shell and dashboard navigation
-auth/callback.html      Matching app shell for the exact Cognito callback
-js/auth-session.js      PKCE login and memory-only staff tokens
+index.html              App shell, six workspace tabs and supplementary views
+auth/callback.html      OAuth callback shell (root base URL)
+js/auth-session.js      Shared PKCE, memory token, backend session and logout
+js/session-auth.js      Dashboard adapter for the shared session
+js/api.js               Explicit Demo / Live service facade
+js/live-api.js          Staff API adapter and live record normalization
 js/live-accounts.js     Live account controls backed by the staff API
 js/live-showcase.js     Paced, read-only AWS showcase fixture loader
 js/live-refresh.js      Visible-tab refresh scheduler with no overlapping loads
@@ -64,7 +111,9 @@ BACKEND_ASSET_UPLOAD.md  Backend contract proposal for exhibit .glb and .jpg ass
 css/styles.css          Shared desktop components and print rules
 css/exhibits.css         Exhibit and label layouts
 css/staff.css            Staff directory and card registration layout
-js/app.js               Routing, navigation guards, demo dialog
+css/login.css            Sign-in screen and session visibility
+js/app.js               Routing, login/session guards, demo dialog
+js/login.js             Demo email selection and provider-backed Live sign-in
 js/ui.js                Icons, safe text escaping, dates, dialogs, heatmaps
 js/data.js              Seed records, demo clock and storage version
 js/services.js          Async data access, validation and acknowledgements
@@ -76,6 +125,48 @@ assets/                 Local SVG illustrations, image and GLB model
 tools/demo-showcase/     Synthetic seed, immutable updater and GET-only report
 ```
 
+The facade in `js/api.js` selects existing demo services or `js/live-api.js`. `js/auth-session.js` implements shared provider login/session handling, and `auth/callback.html` loads the same app shell with a root base URL. Keep callback shell markup aligned when changing `index.html`. Telemetry, command execution, durable evidence, permissions and hardware integration remain backend/producer responsibilities.
+
+The authentication boundary in `js/services.js` exposes async `signIn(email)`, `signOut()`, and `getSession()`, plus synchronous `can(permission)` for the UI. A session read returns `{ id, name, email, role }` or `null`. Permission keys are `view`, `operate`, `staff`, `demo`, and `reports`. Client permission checks guide the interface; a real API must independently authorize every request.
+
+## Files needed to run
+
+Serve `index.html` together with the complete `auth/`, `css/`, `js/` and `assets/` folders, preserving their relative paths. No build step or package installation is required.
+
+The README and `.gitignore` support repository use but are not runtime dependencies. Local supporting material is grouped in `project-materials/`, which is ignored by Git. This includes design references, agent instructions, implementation and backend handoff notes, tests, verification screenshots, and the weekly report with its working files.
+
+If the local supporting material is available, run its tests from the project root:
+
+```powershell
+node --test project-materials/tests/*.test.mjs
+```
+
+
+## Verification (31 October 2026)
+
+Run `node --test project-materials/tests/*.test.mjs`. Tests use isolated in-memory fixtures and cover demo state, auth/PKCE, API pagination/versioning, permissions, media preservation, report snapshots and rendering. Supporting tests and contract captures remain Git-ignored under the existing repository policy. The optional local contract fixture at `/project-materials/verification/live-fixture.html` imports actual live adapter/page code but uses mock responses only; it is deliberately separate from the app and should not be published.
+
+Six-tab browser verification and detailed limitations are recorded in `project-materials/VERIFICATION.md`. CSV download was checked. The embedded browser stalls on native print; use a regular browser's **Print / Save as PDF** dialog. PDF output/pagination has not been verified. No deployed data was changed, invitation sent, push made or deployment performed.
+
+## Automatic Live refresh (4 November 2026)
+
+Live Overview refreshes automatically. Each cycle reads the selected showcase's exact detail and command state, waits for subscribed refresh work to finish, then waits five seconds before the next cycle. Activity refreshes even when showcase IDs, timestamps and command versions are unchanged. Reads remain paced and concurrent duplicates are shared; slow requests do not stack polling cycles.
+
+Overview paints readings and confirmed exhibit/label/lighting before waiting for activity. A failed refresh keeps displayed records with a visible retry notice; retained activity is labelled potentially stale. Pending requests still do not replace acknowledged device state. Existing editor dirty-state/version guards remain in place.
+
+Verification: 98 local tests pass, including 18 new refresh regressions. Browser checks use isolated changing mock responses; authenticated read-only Overview also showed advancing contact age and activity cutoff without reload. No external producer measurement change or physical outcome was observed. The public contract fetched on 4 November is version 0.4.1; older integration notes above describe the earlier 0.4.0 audit. Detailed evidence and backend follow-up: `project-materials/LIVE_REFRESH_VERIFICATION.md` (local supporting material, intentionally Git-ignored). No live records were changed, pushed or deployed.
+
+## Faster page navigation (4 November 2026 follow-up)
+
+Live pages fetch only the collections they use. The shell no longer fetches the entire workspace before opening a page, and pages reuse included profile/staff/report lists. Request pacing and live refresh remain enabled; this optimization adds no persistent data cache.
+
+A local Administrator Overview benchmark with the production 550 ms pacing reduced 17 reads to 7: readings became ready in 1.69 s instead of 7.29 s, and activity in 3.37 s instead of 8.98 s. These are mock timings without network latency, not a Live service guarantee. Run `node project-materials/verification/loading-benchmark.mjs` to reproduce. All 114 tests pass. Details: `project-materials/PAGE_LOADING_VERIFICATION.md`.
+
+## Authenticated loading follow-up (4 November 2026)
+
+Actual Live navigation was measured after the user reported little improvement. A mixed JavaScript module cache was observed in the test browser; the main and callback shells now use matching versioned import maps so an updated page loads a consistent module set. After updating source, bump the module revision in **both** shells. Reload the site to receive the current map; Ctrl+Shift+R forces a full reload in Chrome. Live sign-in may be required again.
+
+Measured authenticated page completion with the updated modules ranged from about 2.0 to 4.7 seconds in this session. Individual API roundtrips normally took 0.6–0.8 seconds, so Live is slower than the earlier network-free mock benchmark. The loading indicator now remains visible throughout page fetching. See `project-materials/LIVE_LOADING_VERIFICATION.md` for per-page timings, conditions and validation. The current module revision is `20261104-liveperf-2`; no deployment was performed.
 The original project under `C:\Coding\EE3070\php` is not modified or removed.
 
 ## Files needed to run
@@ -111,3 +202,39 @@ The last recorded GitHub AWS role trust rejects new role assumptions at **27 Dec
 After checks, Sonar and AI review succeed, deployment assumes `ee3070-reshow-github-actions` in AWS account `835822826851` using OIDC. Before any production change, the constrained SSM document `EE3070-ReShow-ValidateFrontend` validates the installed extractor against the exact commit on existing instance `i-00301bb65c9133a63` in `us-east-1`. For the one existing manual auth release, `EE3070-ReShow-AdoptFrontend` first compares every installed public file path/hash against immutable source commit `03ce9a0e269337055388d45a04d52cdae411c072` before adding the missing release metadata. It does not switch the release or restart the service. An existing valid release marker is a no-op; a different unmarked release, content mismatch or invalid marker blocks deployment. The legacy commit is retained in repository history so rollback can retrieve its exact authenticated runtime. The workflow stages and checks an immutable Lambda API version, deploys that commit's static files, then activates the API alias. CloudFront distribution `E1P2W5YKS25NPQ` is invalidated, then the workflow verifies both `release.json` and `/api/health` report that commit at **https://dkbznu9f5nh9n.cloudfront.net**. Deployment failures after static deployment begins trigger restoration of the previous API alias and static release; rollback errors fail explicitly. Manual dispatch from other branches runs checks only. The AI gateway is separate from website hosting.
 
 Infrastructure prerequisites are the OIDC trust restricted to this repository's immutable-ID `master` subject (the account uses GitHub's repository-ID subject format), least-privilege SSM/parameter/CloudFront/Lambda permissions, the constrained validation, adoption and deployment SSM documents and installed deployment helper, and the reviewed `infra/studio-api.json` and `infra/frontend.json` resources. The private Lambda Function URL requires AWS IAM authentication and CloudFront origin access control; `/api/*` uses HTTPS with POST support and caching disabled. A missing prerequisite causes an explicit failed run. The callback, index and JavaScript use disabled CloudFront caching; the trusted static server marks the callback no-store and removes query strings from request logs. CloudFront overrides Referrer-Policy with no-referrer and does not log access queries. Browser demo records remain local to each origin. The separate staff API enforces real website account permissions; the studio Python API supports image generation. No initial Administrator invitation is sent by deployment.
+
+
+## PR #7 integration (10 November 2026)
+
+The dashboard, Live showcase, and Website account panel now share the same
+`auth-session.js` staff session. `session-auth.js` adapts that session for the
+six-tab API facade, preserving request cancellation and exact If-Match versions.
+Demo mode still uses the separate local login. In Live mode, the **Website account**
+header button opens account administration; **Staff access** manages the directory
+and physical cards. The Live showcase and 3D & AI studio tabs from master remain available.
+The unused duplicate OAuth implementation has been removed. Facade tests exercise
+the shared session, callback mode, identity invalidation and actual request headers.
+
+Both entry shells use one application script and matching complete import maps
+at revision `20261110-review-6`. The callback differs only by its root base URL.
+Local verification: syntax checks and 67 repository JavaScript tests; earlier
+integration checks also covered the local dashboard suite and eight-tab navigation. Synthetic tests cover the
+shared callback/session, request versions, cancellation and sign-out; no live
+account changes or device operations were performed. Linux deployment and Python
+3.14 checks run in GitHub CI, since this workstation has Windows and Python 3.10.
+
+
+## PR review fixes (10 November 2026)
+
+Removed the hard-coded demo credential and the password field from Demo entry.
+Local persona selection still applies role-based demo controls and never grants a
+Live session. Provider-backed Live authentication is unchanged. Live request IDs
+now require cryptographic UUIDs, email/base64 handling avoids backtracking regexes,
+and background notifications explicitly observe subscriber settlement without
+holding up accepted writes. Overview refresh still coalesces reads and stops after
+its view is disposed. Both entry shells use revision `20261110-review-1`.
+
+The firmware ZIP is a local convenience bundle and is not tracked; review and use
+the source under `firmware/ReShow/`.
+
+The repository test suite also opens the real home and callback shells in headless Chromium, verifying that the sign-in UI renders and normalized relative imports share the same versioned API module. CI requires Chromium; local runs without a browser explicitly skip that one integration test. The test uses a temporary profile and a loopback server restricted to public runtime paths.
