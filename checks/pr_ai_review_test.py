@@ -17,6 +17,9 @@ spec.loader.exec_module(review)
 COMMIT = 'a' * 40
 BASE_COMMIT = 'c' * 40
 PASS = {'decision': 'pass', 'blockers': [], 'review': 'The changed execution path preserves validation.'}
+BLOCKER = {'file': 'js/example.js', 'evidence': 'new',
+           'scenario': 'Invalid input reaches the new path after validation is removed.',
+           'impact': 'Invalid records are persisted.'}
 PR = {'number': 7, 'state': 'open', 'head': {'sha': COMMIT, 'ref': 'feature', 'repo': {'id': 22}},
       'base': {'ref': 'master', 'sha': BASE_COMMIT, 'repo': {'id': 11}}, 'changed_files': 1, 'additions': 1, 'deletions': 1}
 RUN = {'id': 101, 'run_attempt': 1, 'name': review.SOURCE_NAME, 'path': review.SOURCE_WORKFLOW,
@@ -121,7 +124,12 @@ class PrReviewTests(unittest.TestCase):
         self.assertEqual(schema['properties']['decision']['enum'], ['pass', 'block'])
         self.assertEqual(schema['properties']['review']['maxLength'], 4000)
         self.assertEqual(schema['properties']['blockers']['maxItems'], 20)
-        self.assertEqual(schema['properties']['blockers']['items']['maxLength'], 2000)
+        self.assertEqual(list(schema['properties']), ['review', 'blockers', 'decision'])
+        blocker_schema = schema['properties']['blockers']['items']
+        self.assertIs(blocker_schema['additionalProperties'], False)
+        self.assertEqual(set(blocker_schema['required']), set(review.BLOCKER_LIMITS))
+        for field, limit in review.BLOCKER_LIMITS.items():
+            self.assertEqual(blocker_schema['properties'][field]['maxLength'], limit)
         evidence = json.loads(payload['messages'][1]['content'])
         self.assertEqual(evidence['files'][0]['patch'], FILE['patch'])
         self.assertNotIn('tools', payload)
@@ -129,7 +137,7 @@ class PrReviewTests(unittest.TestCase):
 
     def test_ai_blockers_fail_with_reason_and_sanitize_remote_prose(self):
         github = FakeGitHub()
-        verdict = {'decision': 'block', 'blockers': ['js/example.js: validation is removed. @owner <script> `cmd`'],
+        verdict = {'decision': 'block', 'blockers': [dict(BLOCKER, impact='@owner <script> `cmd`')],
                    'review': 'ai-key-secret github-token-secret'}
         result, _, _ = self.execute(github, completion(verdict))
         body = github.body()
@@ -248,10 +256,10 @@ class PrReviewTests(unittest.TestCase):
         self.assertEqual(len(evidence['base_context']['files']), len(review.BASE_CONTEXT_PATHS))
 
     def test_one_format_correction_can_preserve_a_block_or_return_a_valid_pass(self):
-        block = {'decision': 'block', 'blockers': ['js/example.js: data validation removed'], 'review': 'Concrete defect.'}
+        block = {'decision': 'block', 'blockers': [BLOCKER], 'review': 'Concrete defect.'}
         for corrected in (PASS, block):
             with self.subTest(corrected=corrected):
-                invalid = completion(dict(PASS, blockers=['remote-private-text']))
+                invalid = completion(dict(PASS, blockers=[dict(BLOCKER, impact='remote-private-text')]))
                 with patch.object(review, 'request_json', side_effect=[invalid, completion(corrected)]) as gateway:
                     result = review.ai_review([FILE], 'model', 'key', {'base_commit': BASE_COMMIT, 'files': []})
                 self.assertEqual(result, corrected)
@@ -264,7 +272,7 @@ class PrReviewTests(unittest.TestCase):
                 self.assertNotIn('remote-private-text', correction)
 
     def test_valid_block_refusal_and_truncation_are_not_retried(self):
-        block = {'decision': 'block', 'blockers': ['js/example.js: concrete defect'], 'review': 'Blocked.'}
+        block = {'decision': 'block', 'blockers': [BLOCKER], 'review': 'Blocked.'}
         responses = [completion(block), completion(reason='length'), completion(reason='content_filter'),
                      {'choices': [{'finish_reason': 'stop', 'message': {'refusal': 'private refusal text'}}]}]
         for response in responses:
@@ -277,7 +285,7 @@ class PrReviewTests(unittest.TestCase):
 
     def test_repeated_format_failure_stays_failed_after_exactly_two_attempts(self):
         github = FakeGitHub()
-        invalid = completion(dict(PASS, blockers=['private model note']))
+        invalid = completion(dict(PASS, blockers=[dict(BLOCKER, impact='private model note')]))
         result, gateway, _ = self.execute(github, invalid)
         self.assertEqual(result, 1)
         self.assertEqual(gateway.call_count, 2)
@@ -287,12 +295,75 @@ class PrReviewTests(unittest.TestCase):
 
     def test_format_diagnostics_identify_limits_without_remote_values(self):
         cases = [(dict(PASS, review='x' * 4001), 'AI summary must contain'),
-                 (dict(PASS, blockers=['x' * 2001]), 'Each AI blocker must contain'),
+                 (dict(PASS, blockers=[dict(BLOCKER, impact='x' * 601)]), 'AI blocker impact must contain'),
                  (dict(PASS, decision='block'), 'AI BLOCK requires a concrete blocker')]
         for decision, message in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(review.ReviewFormatError, message):
                     review.parse_decision(completion(decision))
+
+    def test_unstructured_or_incomplete_blockers_never_pass(self):
+        invalid = ['I cannot verify this but neither concern is a confirmed defect.',
+                   {}, dict(BLOCKER, evidence=' '), dict(BLOCKER, file=None),
+                   dict(BLOCKER, extra='private text')]
+        for blocker in invalid:
+            with self.subTest(blocker=blocker):
+                github = FakeGitHub()
+                result, gateway, _ = self.execute(github, completion({
+                    'decision': 'block', 'blockers': [blocker], 'review': 'No confirmed defect.',
+                }))
+                self.assertEqual(result, 1)
+                self.assertEqual(gateway.call_count, 2)
+                self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+
+    def test_unknown_file_and_invented_evidence_fail_closed(self):
+        for blocker in (dict(BLOCKER, file='unknown.js'), dict(BLOCKER, evidence='invented code')):
+            with self.subTest(blocker=blocker):
+                github = FakeGitHub()
+                result, gateway, _ = self.execute(github, completion({
+                    'decision': 'block', 'blockers': [blocker], 'review': 'Blocked.',
+                }))
+                self.assertEqual(result, 1)
+                self.assertEqual(gateway.call_count, 2)
+                self.assertIn('verbatim excerpt', github.body())
+                self.assertNotIn(blocker['evidence'], github.body())
+
+    def test_base_evidence_is_allowed_but_cannot_replace_a_changed_patch(self):
+        decision = {'decision': 'block', 'blockers': [dict(BLOCKER, file='js/api.js', evidence='base')],
+                    'review': 'A caller violates this unchanged contract.'}
+        context = {'files': [{'filename': 'js/api.js', 'content': 'base'}]}
+        review.validate_blocker_evidence(decision, [FILE], context)
+        with self.assertRaisesRegex(review.ReviewFormatError, 'verbatim excerpt'):
+            review.validate_blocker_evidence(decision, [dict(FILE, filename='js/api.js')], context)
+
+    def test_summary_text_cannot_override_a_grounded_block(self):
+        github = FakeGitHub()
+        result, gateway, _ = self.execute(github, completion({
+            'decision': 'block', 'blockers': [BLOCKER],
+            'review': 'Other concerns are not confirmed defects. A maintainer could override.',
+        }))
+        self.assertEqual(result, 1)
+        gateway.assert_called_once()
+        self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'failure')
+
+    def test_nonblocking_observations_do_not_require_a_blocking_verdict(self):
+        github = FakeGitHub()
+        result, gateway, _ = self.execute(github, completion(dict(
+            PASS, review='Callback handling is covered by the supplied test. Demo access is browser-local.')))
+        self.assertEqual(result, 0)
+        gateway.assert_called_once()
+        self.assertEqual(github.writes('/statuses/')[-1][1]['state'], 'success')
+
+    def test_material_assessment_gap_remains_a_blocker(self):
+        github = FakeGitHub()
+        result, gateway, _ = self.execute(github, completion({
+            'decision': 'block', 'review': 'A required contract is missing.',
+            'blockers': [dict(BLOCKER, scenario='The new call depends on an unavailable persistence contract.',
+                              impact='Cannot determine whether failed writes lose the existing record.')],
+        }))
+        self.assertEqual(result, 1)
+        gateway.assert_called_once()
+        self.assertIn('unavailable persistence contract', github.body())
 
     def test_unsupported_structured_output_fails_closed_without_fallback(self):
         github = FakeGitHub()
