@@ -1,0 +1,214 @@
+.technology-studio {
+  gap: 16px;
+}
+.technology-intro {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.technology-intro h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+.technology-intro h2 .icon {
+  color: var(--teal);
+}
+.technology-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(350px, 0.85fr);
+  gap: 16px;
+  align-items: start;
+}
+.technology-grid > .card {
+  display: grid;
+  gap: 14px;
+}
+.technology-grid .card-head {
+  margin: 0;
+}
+.technology-viewer {
+  width: 100%;
+  height: 330px;
+  overflow: hidden;
+  border: 1px solid #dfe7ef;
+  border-radius: 8px;
+  background: radial-gradient(ellipse at 50% 42%, #fff 0, #edf5f8 65%, #e5eef3 100%);
+  touch-action: none;
+}
+.technology-viewer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.technology-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.technology-import {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border: 1px dashed #b9c9d8;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+.technology-field {
+  display: grid;
+  gap: 8px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+.technology-field input {
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 400;
+}
+.technology-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.technology-controls label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.technology-controls output {
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+}
+.technology-controls input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--teal);
+}
+.technology-colors {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.technology-colors label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.technology-colors input {
+  width: 38px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+}
+.technology-actions {
+  gap: 7px;
+}
+.technology-actions .button {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.technology-ai > p {
+  font-size: 13px;
+}
+.technology-credential {
+  display: grid;
+  gap: 6px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+.technology-credential > input,
+.technology-token-input > input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #9caac0;
+  border-radius: 5px;
+  background: #fff;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 400;
+}
+.technology-token-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.technology-token-input .button {
+  flex-shrink: 0;
+}
+.technology-drop {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 22px 14px;
+  border: 1px dashed #b9c9d8;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: var(--teal-dark);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+.technology-drop > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.technology-drop > span .icon {
+  width: 20px;
+  height: 20px;
+}
+.technology-drop input {
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 400;
+}
+.technology-image-preview {
+  display: grid;
+  min-height: 150px;
+  max-height: 220px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #f4f8fb;
+  color: var(--muted);
+  font-size: 13px;
+}
+.technology-image-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+}
+.technology-json {
+  min-height: 230px;
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #29505f;
+  font: 12px/1.6 "Cascadia Code", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1350px) {
+  .technology-grid {
+    grid-template-columns: 1fr;
+  }
+}

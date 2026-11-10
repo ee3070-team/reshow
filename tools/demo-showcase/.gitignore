@@ -1,0 +1,11 @@
+private/
+*-tokens.json
+*-access.json
+*credentials*.json
+demo-journal.json
+demo-manifest.json
+*-result.json
+demo-report.json
+update-*.json
+demo-plans/
+*.tmp

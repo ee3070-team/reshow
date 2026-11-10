@@ -1,0 +1,179 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "EE3070 ReShow studio API HTTPS origin; app releases are published by gated GitHub workflow.",
+  "Resources": {
+    "ApiLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/ee3070-reshow-studio-api",
+        "RetentionInDays": 14
+      }
+    },
+    "ApiRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "StudioApiLogsOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "arn:aws:logs:us-east-1:835822826851:log-group:/aws/lambda/ee3070-reshow-studio-api:*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": "ApiLogs",
+      "Properties": {
+        "FunctionName": "ee3070-reshow-studio-api",
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ApiRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 60,
+        "MemorySize": 512,
+        "ReservedConcurrentExecutions": 2,
+        "Environment": {
+          "Variables": {
+            "RESHOW_ALLOWED_ORIGIN": "https://dkbznu9f5nh9n.cloudfront.net"
+          }
+        },
+        "Code": {
+          "ZipFile": "import json\ndef handler(event, context):\n return {'statusCode':503,'headers':{'Content-Type':'application/json','Cache-Control':'no-store'},'body':json.dumps({'error':'API release is not deployed yet'})}\n"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "BootstrapVersion": {
+      "Type": "AWS::Lambda::Version",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "Description": "Initial unavailable placeholder; releases and live alias managed by gated CI"
+      }
+    },
+    "LiveAlias": {
+      "Type": "AWS::Lambda::Alias",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "FunctionVersion": {
+          "Fn::GetAtt": [
+            "BootstrapVersion",
+            "Version"
+          ]
+        },
+        "Name": "live"
+      }
+    },
+    "ApiUrl": {
+      "Type": "AWS::Lambda::Url",
+      "DependsOn": "LiveAlias",
+      "Properties": {
+        "TargetFunctionArn": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        },
+        "Qualifier": "live",
+        "AuthType": "AWS_IAM"
+      }
+    },
+    "InvokeUrlPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "LiveAlias"
+        },
+        "Action": "lambda:InvokeFunctionUrl",
+        "Principal": "cloudfront.amazonaws.com",
+        "SourceArn": "arn:aws:cloudfront::835822826851:distribution/E1P2W5YKS25NPQ",
+        "FunctionUrlAuthType": "AWS_IAM"
+      }
+    },
+    "InvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "LiveAlias"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "cloudfront.amazonaws.com",
+        "SourceArn": "arn:aws:cloudfront::835822826851:distribution/E1P2W5YKS25NPQ",
+        "InvokedViaFunctionUrl": true
+      }
+    },
+    "ApiOriginAccessControl": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": "ee3070-reshow-studio-api-oac",
+          "Description": "Only ReShow CloudFront can invoke the studio API",
+          "OriginAccessControlOriginType": "lambda",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiUrl": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiUrl",
+          "FunctionUrl"
+        ]
+      }
+    },
+    "ApiOriginAccessControlId": {
+      "Value": {
+        "Ref": "ApiOriginAccessControl"
+      }
+    },
+    "ApiFunctionName": {
+      "Value": {
+        "Ref": "ApiFunction"
+      }
+    },
+    "ApiAliasArn": {
+      "Value": {
+        "Ref": "LiveAlias"
+      }
+    }
+  }
+}

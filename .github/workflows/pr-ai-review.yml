@@ -1,0 +1,49 @@
+name: AI pull request review
+
+on:
+  workflow_run:
+    workflows: ['Check, SonarQube and deploy']
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reshow-pr-ai-review-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      statuses: write
+      id-token: write
+    steps:
+      # workflow_run uses the default branch SHA. Never check out the PR head or
+      # download/execute artifacts from the source workflow, including forks.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        if: github.event.workflow_run.conclusion == 'success'
+        continue-on-error: true
+        with:
+          role-to-assume: arn:aws:iam::835822826851:role/ee3070-reshow-github-actions
+          aws-region: us-east-1
+          role-duration-seconds: 900
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ssm:GetParameter","Resource":"arn:aws:ssm:us-east-1:835822826851:parameter/ee3070/reshow/ci/ai-api-key"}]}
+      - name: Review diff and publish PASS or FAIL on the current PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'claude-sonnet-5-5' }}
+        run: python3 scripts/pr-ai-review.py

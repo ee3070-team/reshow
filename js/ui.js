@@ -81,6 +81,15 @@ export function toast(text, tone = "success") {
   region.append(el);
   setTimeout(() => el.remove(), 6000);
 }
+// Event callbacks have no browser rejection handler; show failures consistently.
+export function reportError(error) {
+  toast(error.message || "The action could not be completed.", "error");
+}
+
+export function handleAction(action) {
+  return (...args) => Promise.resolve().then(() => action(...args)).catch(reportError);
+}
+
 export function showDialog(title, html, onMount) {
   const el = document.createElement("dialog");
   el.innerHTML = `<div class="dialog-header"><h2>${esc(title)}</h2><button class="dialog-close" aria-label="Close dialog">${icon("close")}</button></div><div class="dialog-body">${html}</div>`;

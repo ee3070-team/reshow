@@ -1,0 +1,200 @@
+name: Check, SonarQube and deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reshow-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        id: lambda-python
+        with:
+          python-version: '3.12'
+      - name: Verify the production Lambda API on Python 3.12
+        run: '"${{ steps.lambda-python.outputs.python-path }}" -m unittest checks.api_test.ApiTests'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - run: npm run check && npm test && python3 -m unittest discover -s checks -p '*_test.py' && npm run build && python3 scripts/preflight.py
+      - name: Validate standalone demo data plans and editor
+        run: python3 -m unittest discover -s tools/demo-showcase -p 'test_*.py'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-preflight
+          path: preflight-report.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: website
+          path: dist/
+          if-no-files-found: error
+
+  sonar:
+    outputs:
+      report-ready: ${{ steps.report.outcome == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Start disposable SonarQube Community
+        run: |
+          sudo sysctl -w vm.max_map_count=524288
+          docker run -d --name sonarqube -p 127.0.0.1:9000:9000 sonarqube:26.10.0.133078-community
+          python3 scripts/sonar.py bootstrap
+      - name: Scan
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7.2.1
+        env:
+          SONAR_HOST_URL: http://127.0.0.1:9000
+        with:
+          args: -Dsonar.ci.autoconfig.disabled=true
+      - name: Export quality gate, issues and measures
+        id: report
+        run: python3 scripts/sonar.py report
+      - name: Preserve scan evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sonar-report
+          path: sonar-report/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce quality gate
+        run: python3 scripts/sonar.py enforce
+      - name: SonarQube diagnostics
+        if: failure()
+        run: docker logs --tail 150 sonarqube
+      - name: Stop disposable server
+        if: always()
+        run: docker rm -f sonarqube
+
+  ai-review:
+    needs: [check, sonar]
+    if: always() && needs.check.result == 'success' && needs.sonar.outputs.report-ready == 'true' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sonar-report
+          path: sonar-report/
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: arn:aws:iam::835822826851:role/ee3070-reshow-github-actions
+          aws-region: us-east-1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deployment-preflight
+          path: sonar-report/
+      - name: Load AI review key
+        shell: bash
+        run: |
+          key=$(aws ssm get-parameter --name /ee3070/reshow/ci/ai-api-key --with-decryption --query Parameter.Value --output text)
+          test -n "$key" && test "$key" != None
+          echo "::add-mask::$key"
+          echo "AI_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Enforce AI review of sanitized Sonar and deployment evidence
+        env:
+          AI_BASE_URL: https://18.163.201.242/ica/harry/v1
+          AI_MODEL: ${{ vars.AI_MODEL || 'claude-sonnet-5-5' }}
+        run: python3 scripts/ai-review.py
+      - name: Record review job failure
+        if: failure()
+        run: |
+          mkdir -p sonar-report
+          if [ ! -f sonar-report/ai-review.md ]; then
+            echo 'AI review could not run because a prerequisite failed. See the failed job step; deployment is blocked.' > sonar-report/ai-review.md
+          fi
+      - name: Preserve deployment AI review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review
+          path: sonar-report/ai-review.md
+          if-no-files-found: warn
+      - name: Review summary
+        if: always()
+        run: |
+          echo '## AI review' >> "$GITHUB_STEP_SUMMARY"
+          echo 'See the ai-review artifact. A block verdict, malformed response, missing preflight evidence or API failure blocks deployment; review text is never executed.' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: [check, sonar, ai-review]
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: reshow-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: arn:aws:iam::835822826851:role/ee3070-reshow-github-actions
+          aws-region: us-east-1
+      - name: Validate the installed extractor against this commit before changing production
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: bash scripts/deploy-static.sh "$DEPLOY_SHA" validate
+      - name: Verify and stamp the exact existing manual auth release when needed
+        run: bash scripts/deploy-static.sh 03ce9a0e269337055388d45a04d52cdae411c072 adopt
+      - name: Stage and verify the exact API version without changing live traffic
+        id: api-stage
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: python3 scripts/api-deploy.py prepare --state /tmp/reshow-api-state.json --commit "$DEPLOY_SHA"
+      - name: Deploy approved static files through the constrained SSM document
+        id: static-deploy
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: bash scripts/deploy-static.sh "$DEPLOY_SHA"
+      - name: Activate the verified API version
+        run: python3 scripts/api-deploy.py activate --state /tmp/reshow-api-state.json
+      - name: Refresh CloudFront and verify deployed commit
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          invalidation_id=$(aws cloudfront create-invalidation --distribution-id E1P2W5YKS25NPQ --paths '/*' --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id E1P2W5YKS25NPQ --id "$invalidation_id"
+          curl --fail --silent --show-error --retry 4 https://dkbznu9f5nh9n.cloudfront.net/release.json -o /tmp/release.json
+          python3 -c 'import json,os; assert json.load(open("/tmp/release.json"))["commit"] == os.environ["DEPLOY_SHA"], "Live commit differs from deployment"'
+          curl --fail --silent --show-error --retry 4 https://dkbznu9f5nh9n.cloudfront.net/api/health -o /tmp/api-release.json
+          python3 -c 'import json,os; assert json.load(open("/tmp/api-release.json"))["commit"] == os.environ["DEPLOY_SHA"], "Live API commit differs from deployment"'
+          echo "Deployed $DEPLOY_SHA to https://dkbznu9f5nh9n.cloudfront.net" >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore the prior API and static release after a deployment failure
+        if: (failure() || cancelled()) && steps.api-stage.outcome == 'success' && steps.static-deploy.outcome != 'skipped'
+        env:
+          PREVIOUS_SHA: ${{ steps.api-stage.outputs.previous-static }}
+        run: |
+          rollback_failed=0
+          python3 scripts/api-deploy.py rollback --state /tmp/reshow-api-state.json || rollback_failed=1
+          bash scripts/deploy-static.sh "$PREVIOUS_SHA" || rollback_failed=1
+          invalidation_id=$(aws cloudfront create-invalidation --distribution-id E1P2W5YKS25NPQ --paths '/*' --query Invalidation.Id --output text) || rollback_failed=1
+          if [ -n "$invalidation_id" ]; then
+            aws cloudfront wait invalidation-completed --distribution-id E1P2W5YKS25NPQ --id "$invalidation_id" || rollback_failed=1
+          fi
+          test "$rollback_failed" = 0

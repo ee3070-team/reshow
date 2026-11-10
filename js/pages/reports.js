@@ -15,7 +15,7 @@ import {
 } from "../ui.js";
 
 // Use the same clipped display periods in the preview and CSV export.
-function displayPeriod(assignment, report) {
+export function displayPeriod(assignment, report) {
   const start = new Date(
     report.filters.start + "T00:00:00+08:00",
   ).toISOString();
@@ -24,7 +24,7 @@ function displayPeriod(assignment, report) {
   ).toISOString();
   return {
     start: assignment.start > start ? assignment.start : start,
-    end: [assignment.end || report.createdAt, end, report.createdAt].sort()[0],
+    end: [assignment.end || report.createdAt, end, report.createdAt].sort((a, b) => a.localeCompare(b))[0],
   };
 }
 

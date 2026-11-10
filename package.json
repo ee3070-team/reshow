@@ -1,0 +1,10 @@
+{
+  "name": "reshow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test checks/*.test.js",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs"
+  }
+}

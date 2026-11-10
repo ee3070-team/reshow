@@ -340,6 +340,15 @@ main {
   gap: 15px;
   align-items: start;
 }
+.live-demo-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px 24px;
+  margin: 20px 0;
+}
+.live-demo-facts dt { color: var(--muted); font-size: 12px; }
+.live-demo-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.live-demo table td { max-width: 380px; overflow-wrap: anywhere; }
 .grid-two > .card {
   height: 100%;
 }

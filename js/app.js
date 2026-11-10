@@ -8,6 +8,8 @@ import {
   showDialog,
   confirmAction,
   toast,
+  reportError,
+  handleAction,
 } from "./ui.js";
 import { render as overview } from "./pages/overview.js";
 import { render as exhibits } from "./pages/exhibits.js";
@@ -15,6 +17,8 @@ import { render as labels } from "./pages/labels.js";
 import { render as activity } from "./pages/activity.js";
 import { render as reports } from "./pages/reports.js";
 import { render as staff } from "./pages/staff.js";
+import { render as liveDemo } from "./pages/live-demo.js";
+import { render as technologyShowcase } from "./pages/technology-showcase.js";
 const pages = {
   overview: {
     title: "Showcase overview",
@@ -51,6 +55,19 @@ const pages = {
     subtitle: "Manage staff permissions and showcase access cards",
     icon: "users",
     render: staff,
+  },
+  "live-demo": {
+    title: "Live showcase",
+    subtitle: "AWS test data and Python updates",
+    icon: "display",
+    live: true,
+    render: liveDemo,
+  },
+  technology: {
+    title: "3D & AI studio",
+    subtitle: "Preview 3D models and generate exhibit details from an image",
+    icon: "cube",
+    render: technologyShowcase,
   },
 };
 let current = "overview",
@@ -134,16 +151,16 @@ document.querySelector("#navigation").innerHTML = Object.entries(pages)
   .join("");
 document.querySelector("#report-shortcut").innerHTML =
   icon("report") + "Generate report";
-document.querySelector("#report-shortcut").onclick = () => navigate("reports");
+document.querySelector("#report-shortcut").onclick = () => navigate("reports").catch(reportError);
 document.querySelectorAll("[data-page]").forEach((a) =>
   a.addEventListener("click", (e) => {
     e.preventDefault();
-    navigate(a.dataset.page);
+    navigate(a.dataset.page).catch(reportError);
   }),
 );
 document.querySelector(".brand").onclick = (e) => {
   e.preventDefault();
-  navigate("overview");
+  navigate("overview").catch(reportError);
 };
 async function canLeave() {
   return (
@@ -192,6 +209,8 @@ async function refresh() {
   document.title = `ReShow · ${page.title}`;
   document.querySelector("#page-title").textContent = page.title;
   document.querySelector("#page-subtitle").textContent = page.subtitle;
+  document.querySelector("#page-mode").textContent = page.live ? "Live AWS showcase" : "Local showcase demo";
+  document.querySelector("#demo-controls").hidden = Boolean(page.live);
   document.querySelector("#report-shortcut").hidden = ![
     "overview",
     "activity",
@@ -279,20 +298,20 @@ document.querySelector("#demo-controls").onclick = async () => {
     "Development / demo controls",
     `<p>All readings, scans, permissions and device responses are simulated.</p><div class="demo-mode-grid">${choices.map(([value, title, description]) => `<label class="demo-mode-option"><input type="radio" name="mode" value="${value}" ${value === mode ? "checked" : ""}>${title}<small>${description}</small></label>`).join("")}</div><p class="demo-clock">Demo clock: ${esc(formatDate(snap.now))}, ${esc(formatTime(snap.now))}. Sample exhibition hours: 09:00–17:00 HKT. The clock is fixed and advances for demo operations.</p><div class="actions"><button class="button" data-settle>Acknowledge pending</button><button class="button danger" data-reset>Reset demo records</button><button class="button primary" data-apply>Apply scenario</button></div>`,
     (d) => {
-      d.querySelector("[data-apply]").onclick = async () => {
+      d.querySelector("[data-apply]").onclick = handleAction(async () => {
         if (!(await canLeave())) return;
         dirty = false;
         await api.setDemoMode(d.querySelector("[name=mode]:checked").value);
         d.close();
-        refresh();
-      };
-      d.querySelector("[data-settle]").onclick = async () => {
+        await refresh();
+      });
+      d.querySelector("[data-settle]").onclick = handleAction(async () => {
         await api.settlePending();
         toast("Pending demo commands processed.");
         d.close();
-        if (!dirty) refresh();
-      };
-      d.querySelector("[data-reset]").onclick = async () => {
+        if (!dirty) await refresh();
+      });
+      d.querySelector("[data-reset]").onclick = handleAction(async () => {
         if (
           await confirmAction(
             "Reset demo records?",
@@ -303,12 +322,12 @@ document.querySelector("#demo-controls").onclick = async () => {
           dirty = false;
           await api.resetDemo();
           d.close();
-          refresh();
+          await refresh();
         }
-      };
+      });
     },
   );
-};
+});
 window.addEventListener("beforeunload", (e) => {
   if (dirty) {
     e.preventDefault();
@@ -372,12 +391,12 @@ window.addEventListener("popstate", async (e) => {
   dirty = false;
   current = pages[target] ? target : "overview";
   params = e.state?.params || {};
-  refresh();
-});
+  await refresh();
+}));
 // Keep external hash links useful without bypassing the unsaved-edits guard.
 window.addEventListener("hashchange", () => {
   const target = location.hash.slice(1);
-  if (pages[target] && target !== current) navigate(target, {}, true);
+  if (pages[target] && target !== current) navigate(target, {}, true).catch(reportError);
 });
 // Check expiry even while a page is idle; service calls also check it independently.
 async function checkSession() {

@@ -239,7 +239,7 @@ function normaliseLabel(content) {
 }
 function fieldNumber(value, name, min, max, integer = false) {
   const number =
-    typeof value === "string" && value.trim() === "" ? NaN : Number(value);
+    typeof value === "string" && value.trim() === "" ? Number.NaN : Number(value);
   if (
     !["number", "string"].includes(typeof value) ||
     !Number.isFinite(number) ||
@@ -689,7 +689,10 @@ export async function saveStaff(profile) {
     error("A staff profile is required.");
   const existing = profile.id ? staffById(profile.id) : null;
   const email = text(profile.email, "email", 160).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  const parts = email.split("@");
+  const domain = parts[1] || "";
+  const dot = domain.lastIndexOf(".");
+  if (parts.length !== 2 || !parts[0] || /\s/.test(email) || dot <= 0 || dot === domain.length - 1)
     error("Enter a valid email address.", { email: "Invalid email" });
   if (
     state.staff.some(

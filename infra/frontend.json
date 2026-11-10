@@ -1,0 +1,294 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "ReShow static frontend on existing EC2 plus HTTPS IAM-protected studio API origin.",
+  "Parameters": {
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "OriginDomainName": {
+      "Type": "String"
+    },
+    "CloudFrontPrefixListId": {
+      "Type": "String",
+      "Default": "pl-3b927c52"
+    },
+    "ApiOriginDomainName": {
+      "Type": "String"
+    },
+    "ApiOriginAccessControlId": {
+      "Type": "String"
+    }
+  },
+  "Resources": {
+    "FrontendSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "ReShow frontend HTTP origin only from AWS CloudFront origin-facing addresses",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 8080,
+            "ToPort": 8080,
+            "SourcePrefixListId": {
+              "Ref": "CloudFrontPrefixListId"
+            },
+            "Description": "CloudFront to ReShow static origin"
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Existing HTTPS-only outbound policy"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070-ReShow"
+          },
+          {
+            "Key": "Name",
+            "Value": "ee3070-reshow-frontend-origin"
+          }
+        ]
+      }
+    },
+    "FrontendResponseHeaders": {
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-security-headers"
+          },
+          "Comment": "Security headers compatible with the unchanged browser-local ReShow prototype",
+          "SecurityHeadersConfig": {
+            "ContentTypeOptions": {
+              "Override": true
+            },
+            "FrameOptions": {
+              "FrameOption": "DENY",
+              "Override": true
+            },
+            "ReferrerPolicy": {
+              "ReferrerPolicy": "no-referrer",
+              "Override": true
+            },
+            "StrictTransportSecurity": {
+              "AccessControlMaxAgeSec": 31536000,
+              "IncludeSubdomains": true,
+              "Preload": false,
+              "Override": true
+            }
+          }
+        }
+      }
+    },
+    "FrontendDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": "EE3070 ReShow frontend served from existing EC2",
+          "DefaultRootObject": "index.html",
+          "HttpVersion": "http2",
+          "IPV6Enabled": true,
+          "PriceClass": "PriceClass_100",
+          "Origins": [
+            {
+              "Id": "ExistingEC2",
+              "DomainName": {
+                "Ref": "OriginDomainName"
+              },
+              "CustomOriginConfig": {
+                "HTTPPort": 8080,
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 30,
+                "OriginKeepaliveTimeout": 5
+              }
+            },
+            {
+              "Id": "StudioApi",
+              "DomainName": {
+                "Ref": "ApiOriginDomainName"
+              },
+              "OriginAccessControlId": {
+                "Ref": "ApiOriginAccessControlId"
+              },
+              "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "https-only",
+                "OriginReadTimeout": 60,
+                "OriginKeepaliveTimeout": 5,
+                "OriginSSLProtocols": [
+                  "TLSv1.2"
+                ]
+              }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "ExistingEC2",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "Compress": true,
+            "MinTTL": 0,
+            "DefaultTTL": 0,
+            "MaxTTL": 0,
+            "ForwardedValues": {
+              "QueryString": false,
+              "Cookies": {
+                "Forward": "none"
+              }
+            },
+            "ResponseHeadersPolicyId": {
+              "Ref": "FrontendResponseHeaders"
+            }
+          },
+          "CustomErrorResponses": [
+            {
+              "ErrorCode": 403,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 404,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 502,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 503,
+              "ErrorCachingMinTTL": 0
+            }
+          ],
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          },
+          "CacheBehaviors": [
+            {
+              "PathPattern": "api/*",
+              "TargetOriginId": "StudioApi",
+              "ViewerProtocolPolicy": "https-only",
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "POST",
+                "PATCH",
+                "DELETE"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              },
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+            },
+            {
+              "PathPattern": "auth/callback.html",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
+            },
+            {
+              "PathPattern": "index.html",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
+            },
+            {
+              "PathPattern": "js/*",
+              "TargetOriginId": "ExistingEC2",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "ResponseHeadersPolicyId": {
+                "Ref": "FrontendResponseHeaders"
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070-ReShow"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebsiteUrl": {
+      "Value": {
+        "Fn::Sub": "https://${FrontendDistribution.DomainName}"
+      }
+    },
+    "DistributionId": {
+      "Value": {
+        "Ref": "FrontendDistribution"
+      }
+    },
+    "FrontendSecurityGroupId": {
+      "Value": {
+        "Ref": "FrontendSecurityGroup"
+      }
+    },
+    "OriginDomainName": {
+      "Value": {
+        "Ref": "OriginDomainName"
+      }
+    }
+  }
+}

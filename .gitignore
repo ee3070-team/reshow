@@ -17,3 +17,18 @@ Thumbs.db
 
 # Per-device firmware credentials
 /firmware/**/local_config.h
+/Reference Picture/
+/AGENT.md
+/AGENTS.md
+/BACKEND_HANDOFF.md
+/CONTRACT.md
+/PROJECT_CHECKPOINT.md
+/VERIFICATION.md
+/tests/
+/verification/
+
+# CI output
+/dist/
+/sonar-report/
+/.scannerwork/
+/preflight-report.json

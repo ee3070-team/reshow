@@ -1,0 +1,19 @@
+.live-accounts { padding: 22px; }
+.live-accounts > p { line-height: 1.55; }
+.live-accounts .card-head { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.live-accounts .card-head h2 { margin: 0; }
+.live-accounts [data-live-actions] { flex-wrap: wrap; align-items: center; margin: 16px 0; }
+.live-account-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 24px; }
+.live-account-grid > section { min-width: 0; }
+.live-accounts label { display: grid; gap: 6px; margin: 12px 0; font-size: 13px; }
+.live-accounts input, .live-accounts select { border: 1px solid #ccd5e6; border-radius: 6px; background: white; color: inherit; padding: 10px; font: inherit; min-width: 0; width: 100%; }
+.live-accounts table { border-collapse: collapse; text-align: left; width: 100%; font-size: 13px; }
+.live-accounts td, .live-accounts th { border-bottom: 1px solid #e0e7ef; padding: 12px 8px; overflow-wrap: anywhere; }
+.live-accounts td small { display: block; color: #697398; margin-top: 5px; }
+.live-accounts .muted { line-height: 1.55; font-size: 12px; }
+.live-account-secondary { margin: 16px 0; flex-wrap: wrap; }
+.local-staff-demo { padding: 18px; }
+.local-staff-demo > summary { cursor: pointer; font-weight: 600; }
+.local-staff-demo > .notice { margin: 16px 0; }
+.live-accounts [data-live-message] { overflow-wrap: anywhere; }
+@media(max-width: 1000px) { .live-account-grid { grid-template-columns: 1fr; } }

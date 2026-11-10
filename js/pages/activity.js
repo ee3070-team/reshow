@@ -95,13 +95,13 @@ export async function render(container, ctx) {
       ctx.navigate("reports", filters);
     bindHeatmap(results);
   }
-  form.onsubmit = (e) => {
+  form.onsubmit = async (e) => {
     e.preventDefault();
     try {
       filters = readFilters(form);
       container.querySelector("[data-filter-error]").textContent = "";
       limit = 12;
-      load();
+      await load();
     } catch (error) {
       container.querySelector("[data-filter-error]").textContent =
         error.message;
