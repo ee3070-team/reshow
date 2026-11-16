@@ -1,8 +1,12 @@
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import re
 import ssl
 import threading
+import time
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -19,19 +23,64 @@ MAX_IMAGE_SIZE = 4 * 1024 * 1024
 MAX_REQUEST_SIZE = MAX_IMAGE_SIZE + 32 * 1024
 MAX_RESPONSE_SIZE = 256 * 1024
 MAX_RFID_EVENT_SIZE = 4096
+MAX_HUNYUAN_QUERY_SIZE = 8192
 RFID_EVENT_FILE = ROOT / "hardware" / "rfid-events.jsonl"
+HUNYUAN_SUBMIT_PATH = "/api/technology/hunyuan/submit"
+HUNYUAN_QUERY_PATH = "/api/technology/hunyuan/query"
+HUNYUAN_REGIONS = {
+    "ap-guangzhou",
+    "ap-shanghai",
+    "ap-nanjing",
+    "ap-beijing",
+    "ap-chengdu",
+    "ap-chongqing",
+    "ap-hongkong",
+    "ap-singapore",
+    "ap-jakarta",
+    "ap-bangkok",
+    "ap-seoul",
+    "ap-tokyo",
+    "na-ashburn",
+    "na-siliconvalley",
+    "sa-saopaulo",
+    "eu-frankfurt",
+}
 RFID_EVENT_LOCK = threading.Lock()
 RFID_WORKFLOW = {
     "phase": "idle",
     "uid": None,
     "exhibit_id": None,
 }
+RFID_LATEST_DEVICE_EVENT = None
 PROMPT = """Analyze the attached image and identify the visible artifact. Return exactly one valid JSON object and no Markdown or extra text, using precisely these two keys:
 {
   "name": "A short, specific title for the visible image",
   "description": "A concise description of details visible in the image."
 }
 Do not return a general image summary instead of this JSON. Do not infer facts that cannot be seen."""
+THREEJS_GROUP_PROMPT = """Analyze the attached artifact image and build a recognizable low-poly Three.js model from its silhouette and visible details, not a generic blob. Return exactly one valid JSON object and no Markdown, with this schema:
+{"parts":[{"shape":"sphere","position":[0,0,0],"scale":[1,1,1],"color":"#aabbcc"}]}
+Include 8 to 12 parts. Each part must have exactly the keys shape, position, scale, and color. shape must be sphere, box, or cylinder. position must contain three numbers from -2.5 to 2.5. scale must contain three numbers greater than 0 and no greater than 3. color must be a six-digit hex color. Use boxes and cylinders for the main body, frame, rim, visor, handle, or base. Use at most three spheres, only for small rounded details or when the artifact itself is spherical; never replace a non-spherical artifact with one large sphere. Make parts different sizes and place them to form a clear silhouette instead of stacking them at the origin. Use a restrained palette of two to four colors based on the image. Keep the model upright with its main axis on Y. Do not include JavaScript, HTML, explanations, or facts not visible in the image."""
+THREEJS_GROUP_STAGES = {
+    "silhouette": {
+        "previous": (0, 0),
+        "new": (3, 4),
+        "total": (3, 4),
+        "instruction": "Build only the object's main silhouette from 3 to 4 large parts.",
+    },
+    "structure": {
+        "previous": (3, 4),
+        "new": (3, 4),
+        "total": (6, 8),
+        "instruction": "Add 3 to 4 major structural features that make this specific object recognizable.",
+    },
+    "details": {
+        "previous": (6, 8),
+        "new": (2, 4),
+        "total": (8, 12),
+        "instruction": "Add 2 to 4 small, visible details that refine this specific object.",
+    },
+}
 
 
 class UploadError(ValueError):
@@ -61,7 +110,7 @@ def read_cloudflare_response(response):
     return decode_json_response(body)
 
 
-def cloudflare_request(endpoint, token, payload):
+def cloudflare_request(endpoint, token, payload, timeout=40):
     request = Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -72,13 +121,224 @@ def cloudflare_request(endpoint, token, payload):
         method="POST",
     )
     try:
-        with build_opener(NoRedirects()).open(request, timeout=40) as response:
+        with build_opener(NoRedirects()).open(request, timeout=timeout) as response:
             return response.status, read_cloudflare_response(response)
     except HTTPError as error:
         # Upstream bodies may echo credentials. Do not return or log them.
         return error.code, {}
     except OSError as error:
         raise RuntimeError("Cloudflare Workers AI could not complete the request. Try again.") from error
+
+
+def validate_hunyuan_credentials(secret_id, secret_key, region):
+    if not isinstance(secret_id, str) or not re.fullmatch(r"[A-Za-z0-9]{1,128}", secret_id):
+        raise UploadError(400, "Enter a valid Tencent Cloud SecretId.")
+    if (
+        not isinstance(secret_key, str)
+        or not secret_key
+        or len(secret_key) > 4096
+        or "\r" in secret_key
+        or "\n" in secret_key
+    ):
+        raise UploadError(400, "Enter a valid Tencent Cloud SecretKey.")
+    if not isinstance(region, str) or region not in HUNYUAN_REGIONS:
+        raise UploadError(400, "Choose a supported Tencent Hunyuan region.")
+
+
+def parse_hunyuan_multipart(content_type, body):
+    fields = {}
+    image = None
+    seen = set()
+    for part in multipart_message(content_type, body).iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if (
+            part.get_content_disposition() != "form-data"
+            or name not in ("image", "secret_id", "secret_key", "region")
+            or name in seen
+        ):
+            raise UploadError(400, "Upload exactly one image and Tencent credentials.")
+        seen.add(name)
+        if name == "image":
+            image = uploaded_image(part)
+        else:
+            fields[name] = uploaded_credential(part)
+    if seen != {"image", "secret_id", "secret_key", "region"} or image is None:
+        raise UploadError(400, "Upload exactly one image and Tencent credentials.")
+    validate_hunyuan_credentials(
+        fields["secret_id"], fields["secret_key"], fields["region"]
+    )
+    return image, fields["secret_id"], fields["secret_key"], fields["region"]
+
+
+def parse_hunyuan_query(body):
+    if not body or len(body) > MAX_HUNYUAN_QUERY_SIZE:
+        raise UploadError(400, "The Tencent Hunyuan query is invalid.")
+    try:
+        fields = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise UploadError(400, "The Tencent Hunyuan query is invalid.") from error
+    if not isinstance(fields, dict) or set(fields) != {
+        "job_id", "secret_id", "secret_key", "region"
+    }:
+        raise UploadError(400, "The Tencent Hunyuan query is invalid.")
+    validate_hunyuan_credentials(
+        fields["secret_id"], fields["secret_key"], fields["region"]
+    )
+    if (
+        not isinstance(fields["job_id"], str)
+        or not fields["job_id"]
+        or len(fields["job_id"]) > 128
+        or "\r" in fields["job_id"]
+        or "\n" in fields["job_id"]
+    ):
+        raise UploadError(400, "The Tencent Hunyuan job ID is invalid.")
+    return fields["job_id"], fields["secret_id"], fields["secret_key"], fields["region"]
+
+
+def build_hunyuan_request(action, payload, secret_id, secret_key, region, timestamp=None):
+    host = "hunyuan.intl.tencentcloudapi.com"
+    service = "hunyuan"
+    version = "2023-09-01"
+    timestamp = int(time.time()) if timestamp is None else timestamp
+    date = time.strftime("%Y-%m-%d", time.gmtime(timestamp))
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    canonical_headers = (
+        "content-type:application/json; charset=utf-8\n"
+        f"host:{host}\n"
+    )
+    signed_headers = "content-type;host"
+    canonical_request = "\n".join(
+        (
+            "POST",
+            "/",
+            "",
+            canonical_headers,
+            signed_headers,
+            hashlib.sha256(body).hexdigest(),
+        )
+    )
+    credential_scope = f"{date}/{service}/tc3_request"
+    string_to_sign = "\n".join(
+        (
+            "TC3-HMAC-SHA256",
+            str(timestamp),
+            credential_scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        )
+    )
+    secret_date = hmac.new(
+        ("TC3" + secret_key).encode("utf-8"), date.encode("utf-8"), hashlib.sha256
+    ).digest()
+    secret_service = hmac.new(
+        secret_date, service.encode("utf-8"), hashlib.sha256
+    ).digest()
+    secret_signing = hmac.new(
+        secret_service, b"tc3_request", hashlib.sha256
+    ).digest()
+    signature = hmac.new(
+        secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    authorization = (
+        "TC3-HMAC-SHA256 "
+        f"Credential={secret_id}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    return Request(
+        f"https://{host}/",
+        data=body,
+        headers={
+            "Authorization": authorization,
+            "Content-Type": "application/json; charset=utf-8",
+            "Host": host,
+            "X-TC-Action": action,
+            "X-TC-Version": version,
+            "X-TC-Timestamp": str(timestamp),
+            "X-TC-Region": region,
+        },
+        method="POST",
+    )
+
+
+def hunyuan_api_request(action, payload, secret_id, secret_key, region):
+    request = build_hunyuan_request(
+        action, payload, secret_id, secret_key, region
+    )
+    try:
+        with build_opener(NoRedirects()).open(request, timeout=25) as response:
+            body = response.read(MAX_RESPONSE_SIZE + 1)
+    except HTTPError as error:
+        error.close()
+        raise RuntimeError(
+            "Tencent Hunyuan could not complete the request. Check credentials, permissions, and model access."
+        ) from error
+    except OSError as error:
+        raise RuntimeError(
+            "Tencent Hunyuan could not complete the request. Try again."
+        ) from error
+    if len(body) > MAX_RESPONSE_SIZE:
+        raise RuntimeError("Tencent Hunyuan returned an oversized response.")
+    result = decode_json_response(body).get("Response")
+    if not isinstance(result, dict):
+        raise RuntimeError("Tencent Hunyuan returned an invalid response.")
+    if isinstance(result.get("Error"), dict):
+        raise RuntimeError(
+            "Tencent Hunyuan rejected the request. Check credentials, permissions, and model access."
+        )
+    return result
+
+
+def submit_hunyuan_job(image, secret_id, secret_key, region):
+    result = hunyuan_api_request(
+        "SubmitHunyuanTo3DRapidJob",
+        {
+            "ImageBase64": base64.b64encode(image).decode("ascii"),
+            "ResultFormat": "GLB",
+        },
+        secret_id,
+        secret_key,
+        region,
+    )
+    job_id = result.get("JobId")
+    if not isinstance(job_id, str) or not job_id or len(job_id) > 128:
+        raise RuntimeError("Tencent Hunyuan returned no valid job ID.")
+    return {"job_id": job_id}
+
+
+def query_hunyuan_job(job_id, secret_id, secret_key, region):
+    result = hunyuan_api_request(
+        "QueryHunyuanTo3DRapidJob",
+        {"JobId": job_id},
+        secret_id,
+        secret_key,
+        region,
+    )
+    status = result.get("Status")
+    if status not in ("WAIT", "RUN", "FAIL", "DONE"):
+        raise RuntimeError("Tencent Hunyuan returned an unknown job status.")
+    files = []
+    if status == "DONE":
+        result_files = result.get("ResultFile3Ds")
+        if isinstance(result_files, list):
+            for item in result_files:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("Url")
+                if not isinstance(url, str):
+                    continue
+                parsed_url = urlsplit(url)
+                if (
+                    parsed_url.scheme != "https"
+                    or not parsed_url.hostname
+                    or parsed_url.username
+                    or parsed_url.password
+                ):
+                    continue
+                file = {"url": url}
+                file_type = item.get("Type")
+                if isinstance(file_type, str) and len(file_type) <= 64:
+                    file["type"] = file_type
+                files.append(file)
+    return {"job_id": job_id, "status": status, "files": files}
 
 
 def extract_json_object(text):
@@ -132,32 +392,68 @@ def create_exhibit_name(description):
     return name[:1].upper() + name[1:] if name else "Image-based exhibit"
 
 
-def generate_exhibit(image_bytes, account_id, api_token):
+def generate_vision_text(
+    image_bytes,
+    account_id,
+    api_token,
+    prompt,
+    max_tokens,
+    timeout=40,
+    retries=2,
+):
     endpoint = (
         "https://api.cloudflare.com/client/v4/accounts/"
         + account_id
         + "/ai/run/@cf/meta/llama-3.2-11b-vision-instruct"
     )
-    status, response = cloudflare_request(
-        endpoint,
-        api_token,
-        {
-            "prompt": PROMPT,
-            "image": list(image_bytes),
-            "max_tokens": 512,
-            "temperature": 0.2,
-        },
-    )
-    if not (200 <= status < 300 and response.get("success")):
-        raise RuntimeError(
-            "Cloudflare Workers AI rejected the request. Check your account, token, "
-            "model access and accepted model terms in Cloudflare."
-        )
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            status, response = cloudflare_request(
+                endpoint,
+                api_token,
+                {
+                    "prompt": prompt,
+                    "image": list(image_bytes),
+                    "max_tokens": max_tokens,
+                    "temperature": 0.2,
+                },
+                timeout=timeout,
+            )
+            if not 200 <= status < 300:
+                raise RuntimeError(
+                    f"Cloudflare Workers AI rejected the request (HTTP {status}). "
+                    "Check that your API token can run Workers AI on this account, "
+                    "and that the model is enabled with any required terms accepted."
+                )
+            if not response.get("success"):
+                raise RuntimeError(
+                    "Cloudflare Workers AI rejected the request. Check your account, "
+                    "token permissions, model access and accepted model terms."
+                )
 
-    result = response.get("result")
-    generated = result.get("response") if isinstance(result, dict) else None
-    if not isinstance(generated, str) or not generated.strip() or len(generated) > 16000:
-        raise RuntimeError("Cloudflare returned no generated text. Try another image.")
+            result = response.get("result")
+            generated = (
+                result.get("response") if isinstance(result, dict) else None
+            )
+            if (
+                isinstance(generated, str)
+                and generated.strip()
+                and len(generated) <= 16000
+            ):
+                return generated.strip()
+            last_error = RuntimeError("Cloudflare returned no generated text.")
+        except RuntimeError as error:
+            last_error = error
+        if attempt < retries:
+            time.sleep(1 + attempt)
+    raise last_error or RuntimeError("Cloudflare Workers AI failed after retries.")
+
+
+def generate_exhibit(image_bytes, account_id, api_token):
+    generated = generate_vision_text(
+        image_bytes, account_id, api_token, PROMPT, 512
+    )
     details = extract_json_object(generated)
     if details is None:
         description = generated.strip()
@@ -177,6 +473,148 @@ def generate_exhibit(image_bytes, account_id, api_token):
     }
 
 
+def validate_model_parts(parts, minimum, maximum):
+    if not isinstance(parts, list) or not minimum <= len(parts) <= maximum:
+        raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+
+    validated = []
+    for part in parts:
+        if not isinstance(part, dict) or set(part) != {
+            "shape",
+            "position",
+            "scale",
+            "color",
+        }:
+            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+        if part["shape"] not in ("sphere", "box", "cylinder"):
+            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+        position = part["position"]
+        scale = part["scale"]
+        if (
+            not isinstance(position, list)
+            or len(position) != 3
+            or not isinstance(scale, list)
+            or len(scale) != 3
+            or any(
+                not isinstance(component, (int, float))
+                or isinstance(component, bool)
+                or not -2.5 <= component <= 2.5
+                for component in position
+            )
+            or any(
+                not isinstance(component, (int, float))
+                or isinstance(component, bool)
+                or not 0 < component <= 3
+                for component in scale
+            )
+            or not isinstance(part["color"], str)
+            or not re.fullmatch(r"#[a-fA-F0-9]{6}", part["color"])
+        ):
+            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+        validated.append(
+            {
+                "shape": part["shape"],
+                "position": position,
+                "scale": scale,
+                "color": part["color"],
+            }
+        )
+    if sum(part["shape"] == "sphere" for part in validated) > 3:
+        raise RuntimeError("Workers AI returned a sphere-heavy 3D model. Try again.")
+    return validated
+
+
+def extract_model_parts(text, minimum=8, maximum=12):
+    decoder = json.JSONDecoder()
+    value = None
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and "parts" in candidate:
+            value = candidate
+            break
+    parts = value.get("parts") if isinstance(value, dict) else None
+    return validate_model_parts(parts, minimum, maximum)
+
+
+FALLBACK_MODEL_PARTS = [
+    {"shape": "box", "position": [0, 0, 0], "scale": [1.4, 0.2, 1.4], "color": "#8b4513"},
+    {"shape": "box", "position": [0, 0.75, 0], "scale": [1.0, 1.2, 1.0], "color": "#d2b48c"},
+    {"shape": "cylinder", "position": [0, 1.6, 0], "scale": [0.3, 0.3, 0.6], "color": "#8b4513"},
+    {"shape": "box", "position": [-0.8, 0.75, 0], "scale": [0.15, 1.2, 1.0], "color": "#5d4037"},
+    {"shape": "box", "position": [0.8, 0.75, 0], "scale": [0.15, 1.2, 1.0], "color": "#5d4037"},
+    {"shape": "box", "position": [0, 1.9, 0], "scale": [1.3, 0.15, 1.3], "color": "#8b4513"},
+    {"shape": "box", "position": [-0.6, 1.25, 0.5], "scale": [0.2, 0.5, 0.1], "color": "#5d4037"},
+    {"shape": "box", "position": [0.6, 1.25, 0.5], "scale": [0.2, 0.5, 0.1], "color": "#5d4037"},
+    {"shape": "box", "position": [-0.6, 1.25, -0.5], "scale": [0.2, 0.5, 0.1], "color": "#5d4037"},
+    {"shape": "box", "position": [0.6, 1.25, -0.5], "scale": [0.2, 0.5, 0.1], "color": "#5d4037"},
+    {"shape": "sphere", "position": [0, 2.0, 0], "scale": [0.15, 0.15, 0.15], "color": "#8b4513"},
+    {"shape": "cylinder", "position": [0, 0.75, 0.7], "scale": [0.12, 0.12, 0.6], "color": "#d2b48c"},
+]
+
+
+def generate_model_group(image_bytes, account_id, api_token):
+    try:
+        generated = generate_vision_text(
+            image_bytes, account_id, api_token, THREEJS_GROUP_PROMPT, 900, timeout=55
+        )
+        return {
+            "stage": "silhouette",
+            "parts": extract_model_parts(generated),
+        }
+    except Exception:
+        return {
+            "stage": "silhouette",
+            "parts": FALLBACK_MODEL_PARTS,
+            "fallback": True,
+        }
+
+
+def generate_model_group_step(
+    image_bytes, account_id, api_token, stage, previous_parts
+):
+    settings = THREEJS_GROUP_STAGES[stage]
+    minimum_previous, maximum_previous = settings["previous"]
+    try:
+        previous_parts = validate_model_parts(
+            previous_parts, minimum_previous, maximum_previous
+        )
+    except Exception:
+        previous_parts = list(FALLBACK_MODEL_PARTS[:maximum_previous])
+    minimum_new, maximum_new = settings["new"]
+    instruction = settings["instruction"]
+    prompt = f"""Analyze the attached artifact image and incrementally build a recognizable low-poly Three.js model, not a generic blob.
+This is the {stage} step. {instruction}
+The existing model parts are: {json.dumps(previous_parts, separators=(",", ":"))}
+Return exactly one valid JSON object and no Markdown, using this schema:
+{{"parts":[{{"shape":"box","position":[0,0,0],"scale":[1,1,1],"color":"#aabbcc"}}]}}
+Return only {minimum_new} to {maximum_new} NEW parts in the parts array; do not repeat the existing parts. Keep the object upright with its main axis on Y and align new parts to the existing coordinates. Each part must have exactly the keys shape, position, scale, and color. shape must be sphere, box, or cylinder. position must contain three numbers from -2.5 to 2.5. scale must contain three numbers greater than 0 and no greater than 3. color must be a six-digit hex color. Prefer boxes and cylinders for structural features. Use spheres only for small rounded details or when the artifact itself is spherical. Match the image's restrained two-to-four color palette. Do not include JavaScript, HTML, explanations, or facts not visible in the image."""
+    try:
+        generated = generate_vision_text(
+            image_bytes, account_id, api_token, prompt, 650, timeout=55
+        )
+        new_parts = extract_model_parts(generated, minimum_new, maximum_new)
+        combined = validate_model_parts(
+            previous_parts + new_parts,
+            settings["total"][0],
+            settings["total"][1],
+        )
+        return {"stage": stage, "parts": combined, "fallback": False}
+    except Exception:
+        combined = list(previous_parts)
+        if len(combined) < settings["total"][0]:
+            combined = list(FALLBACK_MODEL_PARTS[: settings["total"][0]])
+        return {
+            "stage": stage,
+            "parts": combined,
+            "fallback": True,
+        }
+
+
 def multipart_message(content_type, body):
     if len(body) > MAX_REQUEST_SIZE:
         raise UploadError(413, "The image must be smaller than 4 MB.")
@@ -189,7 +627,7 @@ def multipart_message(content_type, body):
     boundary = header.get_boundary()
     if not boundary or not re.fullmatch(r"[A-Za-z0-9'()+_,./:=? -]{1,70}", boundary):
         raise UploadError(400, "The image upload boundary is invalid.")
-    if body.count(b"--" + boundary.encode("ascii")) != 4:
+    if body.count(b"--" + boundary.encode("ascii")) not in (4, 5, 6, 7):
         raise UploadError(400, "Upload exactly one image, account ID and API token.")
     try:
         message = BytesParser(policy=policy.default).parsebytes(
@@ -219,11 +657,11 @@ def uploaded_image(part):
 def uploaded_credential(part):
     value = part.get_payload(decode=True) or b""
     if len(value) > 4096:
-        raise UploadError(400, "Cloudflare credentials are too long.")
+        raise UploadError(400, "A request field is too long.")
     try:
         return value.decode("utf-8").strip()
     except UnicodeDecodeError as error:
-        raise UploadError(400, "Cloudflare credentials must be text.") from error
+        raise UploadError(400, "Request fields must be text.") from error
 
 
 def parse_multipart_request(content_type, body):
@@ -232,7 +670,14 @@ def parse_multipart_request(content_type, body):
     seen = set()
     for part in multipart_message(content_type, body).iter_parts():
         name = part.get_param("name", header="content-disposition")
-        if part.get_content_disposition() != "form-data" or name not in ("image", "account_id", "api_token") or name in seen:
+        if part.get_content_disposition() != "form-data" or name not in (
+            "image",
+            "account_id",
+            "api_token",
+            "task",
+            "stage",
+            "previous_parts",
+        ) or name in seen:
             raise UploadError(400, "Upload exactly one image, account ID and API token.")
         seen.add(name)
         if name == "image":
@@ -241,13 +686,40 @@ def parse_multipart_request(content_type, body):
             fields[name] = uploaded_credential(part)
     account_id = fields.get("account_id", "")
     api_token = fields.get("api_token", "")
+    task = fields.get("task", "exhibit")
     if not re.fullmatch(r"[a-fA-F0-9]{32}", account_id):
         raise UploadError(400, "Enter a valid 32-character Cloudflare Account ID.")
     if not re.fullmatch(r"[A-Za-z0-9_-]{20,4096}", api_token):
         raise UploadError(400, "Enter a valid Cloudflare API token.")
     if image is None:
         raise UploadError(400, "Choose a JPEG, PNG, or WebP image and try again.")
-    return image, account_id, api_token
+    if task not in ("exhibit", "threejs_group"):
+        raise UploadError(400, "Choose a supported Workers AI generation task.")
+    stage = fields.get("stage")
+    previous_parts_value = fields.get("previous_parts")
+    if task == "exhibit" and (
+        stage is not None or previous_parts_value is not None
+    ):
+        raise UploadError(400, "Choose a supported Workers AI generation task.")
+    if stage is None:
+        if previous_parts_value is not None:
+            raise UploadError(400, "The 3D model step is invalid.")
+        previous_parts = None
+    else:
+        settings = THREEJS_GROUP_STAGES.get(stage)
+        if task != "threejs_group" or settings is None:
+            raise UploadError(400, "The 3D model step is invalid.")
+        try:
+            previous_parts_data = json.loads(previous_parts_value or "[]")
+        except json.JSONDecodeError as error:
+            raise UploadError(400, "The 3D model step is invalid.") from error
+        try:
+            previous_parts = validate_model_parts(
+                previous_parts_data, *settings["previous"]
+            )
+        except RuntimeError as error:
+            raise UploadError(400, "The 3D model step is invalid.") from error
+    return image, account_id, api_token, task, stage, previous_parts
 
 
 class StudioHandler(SimpleHTTPRequestHandler):
@@ -279,15 +751,120 @@ class StudioHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if urlsplit(self.path).path == "/api/rfid/status":
+        path = urlsplit(self.path).path
+        if path == "/api/rfid/status":
             with RFID_EVENT_LOCK:
                 status = dict(RFID_WORKFLOW)
             self.send_json(200, {"data": status})
             return
+        if path == "/api/rfid/device-event":
+            with RFID_EVENT_LOCK:
+                event = dict(RFID_LATEST_DEVICE_EVENT) if RFID_LATEST_DEVICE_EVENT else None
+            if event is None:
+                self.send_json(404, {"error": "No RFID device event has been received yet."})
+                return
+            self.send_json(200, event)
+            return
         super().do_GET()
 
     def do_POST(self):
+        global RFID_LATEST_DEVICE_EVENT
         path = urlsplit(self.path).path
+        if path in (HUNYUAN_SUBMIT_PATH, HUNYUAN_QUERY_PATH):
+            origin = urlsplit(self.headers.get("Origin", ""))
+            scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+            host = self.headers.get("Host", "").lower()
+            if (
+                origin.scheme != scheme
+                or origin.netloc.lower() != host
+                or origin.path not in ("", "/")
+                or origin.query
+                or origin.fragment
+            ):
+                self.send_json(403, {"error": "Use the ReShow website to submit Tencent Hunyuan jobs."})
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(400, {"error": "Invalid request length."})
+                return
+            maximum = MAX_REQUEST_SIZE if path == HUNYUAN_SUBMIT_PATH else MAX_HUNYUAN_QUERY_SIZE
+            if content_length <= 0 or content_length > maximum:
+                self.send_json(413, {"error": "The Tencent Hunyuan request is too large."})
+                return
+            body = self.rfile.read(content_length)
+            try:
+                if path == HUNYUAN_SUBMIT_PATH:
+                    result = submit_hunyuan_job(
+                        *parse_hunyuan_multipart(
+                            self.headers.get("Content-Type", ""), body
+                        )
+                    )
+                else:
+                    result = query_hunyuan_job(*parse_hunyuan_query(body))
+                self.send_json(200, {"data": result})
+            except UploadError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except RuntimeError as error:
+                self.send_json(502, {"error": str(error)})
+            return
+
+        if path == "/api/rfid/device-event":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(400, {"error": "Invalid request length."})
+                return
+            if content_length <= 0 or content_length > MAX_RFID_EVENT_SIZE:
+                self.send_json(400, {"error": "Invalid RFID device event."})
+                return
+            try:
+                event = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Invalid RFID device event JSON."})
+                return
+            if not isinstance(event, dict) or set(event) not in (
+                {"type", "uid", "result"},
+                {"type", "uid", "result", "exhibit_id"},
+            ):
+                self.send_json(400, {"error": "RFID event must contain type, uid, result, and optional exhibit_id."})
+                return
+            uid = event.get("uid")
+            result = event.get("result")
+            exhibit_id = event.get("exhibit_id")
+            if event.get("type") != "rfid_event":
+                self.send_json(400, {"error": "RFID event type must be rfid_event."})
+                return
+            if not isinstance(uid, str) or not re.fullmatch(r"[A-Fa-f0-9]{4,20}", uid):
+                self.send_json(400, {"error": "Invalid RFID UID."})
+                return
+            if result not in ("accepted", "denied"):
+                self.send_json(400, {"error": "RFID result must be accepted or denied."})
+                return
+            if result == "accepted" and (
+                not isinstance(exhibit_id, str)
+                or not exhibit_id.strip()
+                or len(exhibit_id) > 100
+            ):
+                self.send_json(400, {"error": "Accepted RFID events require a valid exhibit_id."})
+                return
+            if exhibit_id is not None and (
+                not isinstance(exhibit_id, str) or not exhibit_id.strip() or len(exhibit_id) > 100
+            ):
+                self.send_json(400, {"error": "Invalid exhibit_id."})
+                return
+            normalized_event = {
+                "type": "rfid_event",
+                "uid": uid.upper(),
+                "result": result,
+            }
+            if exhibit_id is not None:
+                normalized_event["exhibit_id"] = exhibit_id.strip()
+            with RFID_EVENT_LOCK:
+                RFID_LATEST_DEVICE_EVENT = normalized_event
+            self.send_json(200, normalized_event)
+            return
+
         if path == "/api/rfid/access-event":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
@@ -393,17 +970,31 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            image, account_id, api_token = parse_multipart_request(
+            image, account_id, api_token, task, stage, previous_parts = parse_multipart_request(
                 self.headers.get("Content-Type", ""),
                 self.rfile.read(content_length),
             )
+            if task == "threejs_group":
+                generated = (
+                    generate_model_group_step(
+                        image,
+                        account_id,
+                        api_token,
+                        stage,
+                        previous_parts,
+                    )
+                    if stage is not None
+                    else generate_model_group(image, account_id, api_token)
+                )
+            else:
+                generated = generate_exhibit(image, account_id, api_token)
             self.send_json(
-                200, {"data": generate_exhibit(image, account_id, api_token)}
+                200, {"data": generated}
             )
         except UploadError as error:
             self.send_json(error.status, {"error": str(error)})
-        except RuntimeError:
-            self.send_json(502, {"error": "Cloudflare Workers AI could not complete the request. Check your credentials and model access in Cloudflare."})
+        except RuntimeError as error:
+            self.send_json(502, {"error": str(error)})
 
 
 

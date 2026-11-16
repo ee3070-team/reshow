@@ -15,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+from http.server import ThreadingHTTPServer
 
 import lambda_handler
 import server
@@ -26,21 +27,41 @@ IMAGE = b"\xff\xd8\xfftest-image"
 CONTENT_TYPE = "multipart/form-data; boundary=reshow-test"
 
 
-def multipart(account=ACCOUNT, token=TOKEN, image=IMAGE, image_type="image/jpeg", extra=b""):
+def multipart(account=ACCOUNT, token=TOKEN, image=IMAGE, image_type="image/jpeg", task=None, stage=None, previous_parts=None, extra=b""):
     body = b""
-    for name, value in (("account_id", account.encode()), ("api_token", token.encode())):
-        body += b'--reshow-test\r\nContent-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n' + value + b"\r\n"
+    fields = [("account_id", account), ("api_token", token)]
+    if task is not None:
+        fields.append(("task", task))
+    if stage is not None:
+        fields.append(("stage", stage))
+    if previous_parts is not None:
+        fields.append(("previous_parts", json.dumps(previous_parts)))
+    for name, value in fields:
+        body += b'--reshow-test\r\nContent-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n' + value.encode() + b"\r\n"
     body += b'--reshow-test\r\nContent-Disposition: form-data; name="image"; filename="image.jpg"\r\nContent-Type: ' + image_type.encode() + b"\r\n\r\n" + image + b"\r\n"
     return body + extra + b"--reshow-test--\r\n"
 
 
-def event(body=None, **headers):
+def event(body=None, path=lambda_handler.GENERATE_PATH, content_type=CONTENT_TYPE, **headers):
     body = multipart() if body is None else body
-    return {"rawPath": lambda_handler.GENERATE_PATH,
+    return {"rawPath": path,
             "requestContext": {"http": {"method": "POST"}},
-            "headers": {"origin": ORIGIN, "content-type": CONTENT_TYPE,
+            "headers": {"origin": ORIGIN, "content-type": content_type,
                         "x-amz-content-sha256": hashlib.sha256(body).hexdigest(), **headers},
             "isBase64Encoded": True, "body": base64.b64encode(body).decode()}
+
+
+def hunyuan_multipart(secret_id="a" * 36, secret_key="test-tencent-key", region="ap-hongkong", image=IMAGE):
+    body = b""
+    fields = [
+        ("secret_id", secret_id),
+        ("secret_key", secret_key),
+        ("region", region),
+    ]
+    for name, value in fields:
+        body += b'--reshow-test\r\nContent-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n' + value.encode() + b"\r\n"
+    body += b'--reshow-test\r\nContent-Disposition: form-data; name="image"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n' + image + b"\r\n"
+    return body + b"--reshow-test--\r\n"
 
 
 class ApiTests(unittest.TestCase):
@@ -63,6 +84,194 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(token, TOKEN)
         self.assertEqual(bytes(payload["image"]), IMAGE)
         self.assertNotEqual(payload["prompt"], "agree")
+
+    def test_workers_ai_generates_validated_threejs_group_parts(self):
+        parts = [
+            {"shape": "box" if index % 2 else "cylinder",
+             "position": [0, index / 10, 0],
+             "scale": [0.5, 0.5, 0.5], "color": "#aabbcc"}
+            for index in range(8)
+        ]
+        with patch.object(server, "cloudflare_request", return_value=(200, {
+            "success": True, "result": {"response": json.dumps({"parts": parts})},
+        })) as outbound:
+            result = lambda_handler.handler(
+                event(multipart(task="threejs_group")), None
+            )
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"])["data"]["parts"], parts)
+        payload = outbound.call_args.args[2]
+        self.assertIn("Three.js model", payload["prompt"])
+        self.assertEqual(payload["max_tokens"], 900)
+        self.assertEqual(outbound.call_args.kwargs["timeout"], 55)
+
+    def test_workers_ai_builds_threejs_group_in_incremental_steps(self):
+        def part(index):
+            return {
+                "shape": "box",
+                "position": [index / 10, index / 8, 0],
+                "scale": [0.5, 0.6, 0.4],
+                "color": "#aabbcc",
+            }
+
+        generated_steps = [
+            [part(0), part(1), part(2)],
+            [part(3), part(4), part(5)],
+            [part(6), part(7)],
+        ]
+        replies = [
+            (200, {
+                "success": True,
+                "result": {"response": json.dumps({"parts": parts})},
+            })
+            for parts in generated_steps
+        ]
+        previous_parts = []
+        with patch.object(server, "cloudflare_request", side_effect=replies) as outbound:
+            for stage, new_parts, total in (
+                ("silhouette", generated_steps[0], 3),
+                ("structure", generated_steps[1], 6),
+                ("details", generated_steps[2], 8),
+            ):
+                result = lambda_handler.handler(
+                    event(multipart(
+                        task="threejs_group",
+                        stage=stage,
+                        previous_parts=previous_parts,
+                    )),
+                    None,
+                )
+                self.assertEqual(result["statusCode"], 200)
+                data = json.loads(result["body"])["data"]
+                self.assertEqual(data["stage"], stage)
+                self.assertEqual(len(data["parts"]), total)
+                self.assertEqual(data["parts"], previous_parts + new_parts)
+                previous_parts = data["parts"]
+
+        self.assertEqual(outbound.call_count, 3)
+        prompts = [call.args[2]["prompt"] for call in outbound.call_args_list]
+        self.assertIn("silhouette step", prompts[0])
+        self.assertIn("structure step", prompts[1])
+        self.assertIn(json.dumps(generated_steps[0], separators=(",", ":")), prompts[1])
+        self.assertIn("details step", prompts[2])
+        self.assertIn(json.dumps(generated_steps[0] + generated_steps[1], separators=(",", ":")), prompts[2])
+        self.assertTrue(all(call.kwargs["timeout"] == 55 for call in outbound.call_args_list))
+
+    def test_workers_ai_rejects_out_of_order_threejs_steps_before_calling_model(self):
+        with patch.object(server, "cloudflare_request") as outbound:
+            result = lambda_handler.handler(
+                event(multipart(
+                    task="threejs_group",
+                    stage="structure",
+                    previous_parts=[],
+                )),
+                None,
+            )
+        self.assertEqual(result["statusCode"], 400)
+        self.assertIn("3D model step is invalid", result["body"])
+        outbound.assert_not_called()
+
+    def test_tencent_hunyuan_submit_sends_glb_image_without_exposing_credentials(self):
+        body = hunyuan_multipart()
+        with patch.object(server, "hunyuan_api_request", return_value={"JobId": "job-123"}) as outbound:
+            result = lambda_handler.handler(
+                event(body, path=server.HUNYUAN_SUBMIT_PATH), None
+            )
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"]), {"data": {"job_id": "job-123"}})
+        action, payload, secret_id, secret_key, region = outbound.call_args.args
+        self.assertEqual(action, "SubmitHunyuanTo3DRapidJob")
+        self.assertEqual(payload["ImageBase64"], base64.b64encode(IMAGE).decode("ascii"))
+        self.assertEqual(payload["ResultFormat"], "GLB")
+        self.assertEqual((secret_id, secret_key, region), ("a" * 36, "test-tencent-key", "ap-hongkong"))
+        self.assertNotIn(secret_id, result["body"])
+        self.assertNotIn(secret_key, result["body"])
+
+    def test_tencent_hunyuan_query_returns_only_safe_result_links(self):
+        body = json.dumps({
+            "job_id": "job-123",
+            "secret_id": "a" * 36,
+            "secret_key": "test-tencent-key",
+            "region": "ap-hongkong",
+        }).encode("utf-8")
+        with patch.object(server, "hunyuan_api_request", return_value={
+            "Status": "DONE",
+            "ResultFile3Ds": [
+                {"Type": "GLB", "Url": "https://models.example/result.zip"},
+                {"Type": "GLB", "Url": "javascript:alert(1)"},
+            ],
+        }) as outbound:
+            result = lambda_handler.handler(
+                event(
+                    body,
+                    path=server.HUNYUAN_QUERY_PATH,
+                    content_type="application/json",
+                ),
+                None,
+            )
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"])["data"], {
+            "job_id": "job-123",
+            "status": "DONE",
+            "files": [{"url": "https://models.example/result.zip", "type": "GLB"}],
+        })
+        self.assertEqual(outbound.call_args.args[0], "QueryHunyuanTo3DRapidJob")
+
+    def test_tencent_tc3_request_signs_fixed_endpoint_without_sending_the_secret_key(self):
+        request = server.build_hunyuan_request(
+            "SubmitHunyuanTo3DRapidJob",
+            {"ImageBase64": "dGVzdA==", "ResultFormat": "GLB"},
+            "a" * 36,
+            "test-tencent-key",
+            "ap-hongkong",
+            timestamp=1700000000,
+        )
+        self.assertEqual(request.full_url, "https://hunyuan.intl.tencentcloudapi.com/")
+        self.assertEqual(request.get_header("X-tc-action"), "SubmitHunyuanTo3DRapidJob")
+        self.assertEqual(request.get_header("X-tc-region"), "ap-hongkong")
+        self.assertIn("Credential=" + "a" * 36, request.get_header("Authorization"))
+        self.assertNotIn("test-tencent-key", request.get_header("Authorization"))
+        self.assertEqual(len(request.get_header("Authorization").rsplit("Signature=", 1)[1]), 64)
+
+    def test_workers_ai_rejects_invalid_threejs_group_parts(self):
+        valid_part = {
+            "shape": "box",
+            "position": [0, 0, 0],
+            "scale": [0.5, 0.5, 0.5],
+            "color": "#aabbcc",
+        }
+        cases = [
+            [dict(valid_part) for _ in range(7)],
+            [dict(valid_part) for _ in range(8)],
+            [dict(valid_part) for _ in range(8)],
+            [{"shape": "sphere", "position": [0, 0, 0],
+              "scale": [0.5, 0.5, 0.5], "color": "#aabbcc"}
+             for _ in range(8)],
+        ]
+        cases[1][0]["scale"] = [4, 0.5, 0.5]
+        cases[2][0]["shape"] = "run_javascript"
+        for parts in cases:
+            with self.subTest(parts=parts):
+                with patch.object(server, "cloudflare_request", return_value=(200, {
+                    "success": True,
+                    "result": {"response": json.dumps({"parts": parts})},
+                })) as outbound:
+                    result = lambda_handler.handler(
+                        event(multipart(task="threejs_group")), None
+                    )
+                self.assertEqual(result["statusCode"], 502)
+                self.assertIn("3D model", result["body"])
+                if parts is cases[-1]:
+                    self.assertIn("sphere-heavy", result["body"])
+                outbound.assert_called_once()
+
+    def test_parser_rejects_unknown_workers_ai_task(self):
+        with patch.object(server, "cloudflare_request") as outbound:
+            result = lambda_handler.handler(
+                event(multipart(task="execute_code")), None
+            )
+        self.assertEqual(result["statusCode"], 400)
+        outbound.assert_not_called()
 
     def test_exhibit_names_preserve_sentence_prefix_and_clause_boundaries(self):
         cases = {
@@ -118,6 +327,7 @@ class ApiTests(unittest.TestCase):
         })):
             result = lambda_handler.handler(event(), None)
         self.assertEqual(result["statusCode"], 502)
+        self.assertIn("HTTP 403", result["body"])
         for secret in (TOKEN, ACCOUNT):
             self.assertNotIn(secret, result["body"] + capture.getvalue())
 
@@ -247,6 +457,136 @@ class LocalHttpsTests(unittest.TestCase):
                 httpd.shutdown()
                 thread.join(timeout=5)
             self.assertFalse(thread.is_alive())
+
+
+class LocalRfidDeviceEventTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.StudioHandler)
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.port = cls.httpd.server_port
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.thread.join(timeout=5)
+        cls.httpd.server_close()
+
+    def setUp(self):
+        with server.RFID_EVENT_LOCK:
+            server.RFID_LATEST_DEVICE_EVENT = None
+
+    def request(self, method, path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        payload = json.dumps(body) if body is not None else None
+        headers = {"Content-Type": "application/json"} if payload is not None else {}
+        connection.request(method, path, body=payload, headers=headers)
+        response = connection.getresponse()
+        result = response.status, json.loads(response.read())
+        connection.close()
+        return result
+
+    def test_local_hunyuan_submit_requires_same_origin_and_routes_to_tencent(self):
+        body = hunyuan_multipart()
+        with patch.object(server, "hunyuan_api_request", return_value={"JobId": "local-job"}) as outbound:
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", self.port, timeout=5
+            )
+            connection.request(
+                "POST",
+                server.HUNYUAN_SUBMIT_PATH,
+                body=body,
+                headers={
+                    "Content-Type": CONTENT_TYPE,
+                    "Origin": f"http://127.0.0.1:{self.port}",
+                },
+            )
+            response = connection.getresponse()
+            status, result = response.status, json.loads(response.read())
+            connection.close()
+        self.assertEqual(status, 200)
+        self.assertEqual(result["data"]["job_id"], "local-job")
+        outbound.assert_called_once()
+
+        with patch.object(server, "hunyuan_api_request") as outbound:
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", self.port, timeout=5
+            )
+            connection.request(
+                "POST",
+                server.HUNYUAN_SUBMIT_PATH,
+                body=body,
+                headers={
+                    "Content-Type": CONTENT_TYPE,
+                    "Origin": "https://attacker.example",
+                },
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+            connection.close()
+        outbound.assert_not_called()
+
+    def test_local_server_generates_and_routes_threejs_group_task(self):
+        parts = [
+            {"shape": "box", "position": [0, index / 10, 0],
+             "scale": [0.5, 0.5, 0.5], "color": "#aabbcc"}
+            for index in range(8)
+        ]
+        with patch.object(server, "cloudflare_request", return_value=(200, {
+            "success": True, "result": {"response": json.dumps({"parts": parts})},
+        })) as outbound:
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", self.port, timeout=5
+            )
+            connection.request(
+                "POST",
+                "/api/technology/generate-exhibit",
+                body=multipart(task="threejs_group"),
+                headers={"Content-Type": CONTENT_TYPE},
+            )
+            response = connection.getresponse()
+            status, result = response.status, json.loads(response.read())
+            connection.close()
+        self.assertEqual(status, 200)
+        self.assertEqual(result["data"]["parts"], parts)
+        self.assertEqual(outbound.call_count, 1)
+
+    def test_device_event_get_returns_latest_post_in_the_same_shape(self):
+        self.assertEqual(
+            self.request("GET", "/api/rfid/device-event"),
+            (404, {"error": "No RFID device event has been received yet."}),
+        )
+        posted_event = {
+            "type": "rfid_event",
+            "uid": "04833912EE1B90",
+            "result": "accepted",
+            "exhibit_id": "helmet-001",
+        }
+        status, response = self.request("POST", "/api/rfid/device-event", posted_event)
+        self.assertEqual(status, 200)
+        self.assertEqual(response, posted_event)
+        status, response = self.request("GET", "/api/rfid/device-event")
+        self.assertEqual(status, 200)
+        self.assertEqual(response, posted_event)
+
+    def test_device_event_rejects_bad_payload_without_replacing_latest(self):
+        accepted = {
+            "type": "rfid_event",
+            "uid": "04833912EE1B90",
+            "result": "accepted",
+            "exhibit_id": "helmet-001",
+        }
+        self.request("POST", "/api/rfid/device-event", accepted)
+        status, _ = self.request("POST", "/api/rfid/device-event", {
+            "type": "rfid_event",
+            "uid": "not-a-uid",
+            "result": "accepted",
+            "exhibit_id": "helmet-001",
+        })
+        self.assertEqual(status, 400)
+        self.assertEqual(self.request("GET", "/api/rfid/device-event"), (200, accepted))
 
 
 if __name__ == "__main__":

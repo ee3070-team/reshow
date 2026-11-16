@@ -30,6 +30,7 @@
   margin: 0;
 }
 .technology-viewer {
+  position: relative;
   width: 100%;
   height: 330px;
   overflow: hidden;
@@ -42,6 +43,29 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+.technology-viewer:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+.technology-viewer.is-four-view > .technology-four-view {
+  object-fit: contain;
+}
+.technology-fullscreen-exit {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  padding: 9px 13px;
+  border: 1px solid #fff;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 75%);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
 }
 .technology-status {
   min-height: 18px;
@@ -139,6 +163,32 @@
   color: var(--navy);
   font-size: 13px;
   font-weight: 400;
+}
+.technology-hunyuan-credentials {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+}
+.technology-hunyuan-credentials[hidden] {
+  display: none;
+}
+.technology-hunyuan-credentials > p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.technology-hunyuan-results {
+  display: grid;
+  gap: 8px;
+}
+.technology-hunyuan-results a {
+  width: fit-content;
+  color: var(--teal-dark);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .technology-token-input {
   display: flex;

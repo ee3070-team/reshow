@@ -1,33 +1,33 @@
-# NO-PUSH Explaination
+# NO-PUSH Explanation
 
-## The newest thing: an RFID door controlled by ESP32
+## RFID door controlled by Mega
 
-![RFID two-card workflow](rfid-two-scan.svg)
-
-We are using the new RFID card function directly on the ESP32.
+The current RFID demo reads the card on the Arduino Mega. The Mega checks the
+allowlisted UID and controls the relay locally; the ESP32 is optional for sending
+the event over Wi-Fi.
 
 ```text
         RFID card
            |
            v
-        ESP32
-       /      \
-      v        v
-  Open door   Send event to server
+     Arduino Mega
+       /       \
+      v         v
+  Open door   Send event to ESP32 -> Wi-Fi -> Server
 ```
 
 ## Simple flow
 
 1. Put an RFID card near the reader.
-2. ESP32 reads the card UID.
-3. ESP32 checks whether the UID is allowed.
+2. Mega reads the card UID.
+3. Mega checks whether the UID is allowed.
 4. If allowed:
-   - the door relay switches on;
-   - the door stays open for 3 seconds;
-   - the ESP32 tells the server about the accepted card.
+   - the Mega activates the relay to unlock the door;
+   - the door relocks after 3 seconds;
+   - the Mega sends the scan event to the ESP32.
 5. If not allowed:
    - the door remains closed;
-   - the ESP32 tells the server about the denied card.
+   - the Mega sends a denied scan event to the ESP32.
 
 ## What changed
 
@@ -42,10 +42,13 @@ The computer had to remain connected.
 ### Now
 
 ```text
-RFID -> ESP32 -> Wi-Fi -> Server
+RFID -> Mega -> Relay
+          |
+          v
+        ESP32 -> Wi-Fi -> Server (optional)
 ```
 
-The ESP32 can work without a computer.
+The local door action does not need Wi-Fi or a server.
 
 ## What ESP32 needs
 
@@ -59,8 +62,14 @@ The values are placeholders until they are entered:
 ```cpp
 const char wifiSsid[] = "YOUR_WIFI_NAME";
 const char wifiPassword[] = "YOUR_WIFI_PASSWORD";
-const char serverUrl[] = "https://192.168.1.100:8000/api/rfid/access-event";
+const char serverUrl[] = "http://192.168.1.100:8000/api/rfid/device-event";
 ```
+
+The current `wifi_updated_RFID.ino` still points to `httpbin.org` and only sends
+POST requests. Change its `SERVER_URL` to the local computer's LAN address to
+POST events to ReShow. The local server must be started with a LAN-reachable bind
+address for an ESP32 on Wi-Fi to reach it. The GET button below tests the local
+browser-to-server GET route; the ESP32 firmware does not yet poll this route.
 
 ## Server event
 
@@ -68,16 +77,17 @@ The ESP32 sends a small JSON message:
 
 ```json
 {
+  "type": "rfid_event",
   "uid": "FC6AB516",
   "result": "accepted",
-  "door": "opened"
+  "exhibit_id": "helmet-001"
 }
 ```
 
-The local Python server receives it at:
+The local Python server accepts the device event at:
 
 ```text
-/api/rfid/access-event
+POST /api/rfid/device-event
 ```
 
 ## What are GET and POST?
@@ -95,23 +105,40 @@ GET means:
 
 > “Server, please give me the latest information.”
 
-Example in this project:
+There are two different RFID GET routes in the local prototype:
 
 ```text
 GET /api/rfid/status
+GET /api/rfid/device-event
 ```
 
-The ESP32 sends a GET request every second. The server responds with the current workflow:
+`GET /api/rfid/status` returns the current workflow phase. It does not return the
+last raw RFID event:
 
 ```json
 {
-  "phase": "ready_to_confirm",
-  "uid": "FC6AB516",
-  "exhibit_id": "ex-014"
+  "data": {
+    "phase": "pending_edit",
+    "uid": "FC6AB516",
+    "exhibit_id": "helmet-001"
+  }
 }
 ```
 
-GET is used to receive status. It should not change the RFID workflow by itself.
+`GET /api/rfid/device-event` returns the latest received RFID event in the same
+JSON shape as the device's POST body:
+
+```json
+{
+  "type": "rfid_event",
+  "uid": "FC6AB516",
+  "result": "accepted",
+  "exhibit_id": "helmet-001"
+}
+```
+
+The event GET returns the latest event held in local server memory. It returns
+404 until an event has been received. It does not advance or change the workflow.
 
 ### POST: send new information
 
@@ -122,19 +149,23 @@ POST means:
 The ESP32 sends a POST after RFID events:
 
 ```text
-POST /api/rfid/access-event
+POST /api/rfid/device-event
 ```
 
 Example body:
 
 ```json
 {
+  "type": "rfid_event",
   "uid": "FC6AB516",
   "result": "accepted",
-  "door": "opened",
-  "phase": "first_scan_pending"
+  "exhibit_id": "helmet-001"
 }
 ```
+
+The separate workflow endpoint `POST /api/rfid/access-event` accepts phase and
+door fields for the two-scan workflow. The current Mega-to-ESP32 demo event does
+not include those fields, so use `/api/rfid/device-event` for the event example.
 
 The staff member or server also sends a POST to tell ESP32 that editing is finished:
 
@@ -154,28 +185,33 @@ Example body:
 
 | Method | Question it asks | Used here for |
 |---|---|---|
-| GET | What is the current status? | ESP32 reads `pending_edit`, `ready_to_confirm`, or `idle` |
-| POST | Please process this new event or change. | First scan, second scan, staff-ready update |
+| GET | What information has the server received? | Read workflow status or the latest RFID event |
+| POST | Please receive this new event or change. | Send a device event or mark manual work ready |
 
 ### Where they are written
 
 ```text
-ESP32 sends GET and POST:
-hardware/hardware.ino
+ESP32 sends its serial data to the Wi-Fi bridge:
+hardware_updated/hardware_updated_RFID.ino
+NO-PUSH-explaination/wifi_updated/wifi_updated_RFID.ino
 
 Python server receives them:
 server.py
 ```
 
-In `hardware/hardware.ino`:
+After configuring the ESP32 bridge for the local server:
 
-- `HTTPClient.GET()` calls `GET /api/rfid/status`
-- `HTTPClient.POST(payload)` calls `POST /api/rfid/access-event`
+- `HTTPClient.GET()` can be added to call `GET /api/rfid/device-event` and read the latest event
+- `HTTPClient.POST(payload)` calls `POST /api/rfid/device-event`
 
 In `server.py`:
 
-- `do_GET()` handles status requests
-- `do_POST()` handles RFID and staff-ready requests
+- `do_GET()` handles workflow-status and latest-event requests
+- `do_POST()` receives RFID events and staff-ready requests
+
+The 3D & AI studio includes **Send example RFID event** and **GET latest RFID
+event** buttons for testing this same-shaped POST/GET pair against the local
+server. The example event is only a demo and does not change `phase`.
 
 ## Small vocabulary
 
@@ -694,8 +730,13 @@ with the configured demo exhibit; other card UIDs are reported as denied:
 ```
 
 Change `allowedRfidUid` and `rfidExhibitId` in the Mega sketch to match the demo
-card and exhibit. The current reader reports scans only: it does not operate a
-door relay or perform the full first-scan/staff-ready/second-scan workflow.
+card and exhibit. The Mega controls a relay on pin 47: an allowed UID unlocks
+for three seconds, then the relay returns to the locked state. The sketch
+currently assumes an active-low relay module (`doorRelayActiveLow = true`); set
+it to `false` for a HIGH-trigger module. Verify the trigger with the lock
+disconnected before wiring the actual lock. Use a correctly rated relay and
+separate supply where required. This simple local action is not the
+first-scan/staff-ready/second-scan workflow.
 Install the `MFRC522` Arduino library before compiling the Mega sketch. The
 ESP32 still sends data to its configured HTTP endpoint; this does not connect
 the event to the ReShow website or database.

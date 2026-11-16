@@ -5,6 +5,13 @@ const THREE_URL =
   "js/vendor/three-r128/three.min.js";
 const GLTF_LOADER_URL =
   "js/vendor/three-r128/GLTFLoader.js";
+const FOUR_VIEW_TILE_SIZE = 480;
+const FOUR_VIEWS = [
+  { angle: 0, cell: [1, 0], rotation: 0 },
+  { angle: 90, cell: [2, 1], rotation: Math.PI / 2 },
+  { angle: 180, cell: [1, 2], rotation: Math.PI },
+  { angle: 270, cell: [0, 1], rotation: -Math.PI / 2 },
+];
 let threeReady;
 
 function loadScript(src) {
@@ -44,6 +51,21 @@ function disposeModel(THREE, model) {
       material.dispose();
     });
   });
+}
+
+async function serializeJson(value) {
+  const body = new TextEncoder().encode(JSON.stringify(value));
+  const hash = await crypto.subtle.digest("SHA-256", body);
+  const checksum = Array.from(new Uint8Array(hash), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return {
+    body,
+    headers: {
+      "Content-Type": "application/json",
+      "x-amz-content-sha256": checksum,
+    },
+  };
 }
 
 async function loadThreeGroupModule(file, THREE) {
@@ -148,6 +170,7 @@ export async function render(container) {
           <button class="button" type="button" data-angle="90">Side</button>
           <button class="button" type="button" data-angle="180">Back</button>
           <button class="button" type="button" data-angle="270">Side</button>
+          <button class="button" type="button" data-fullscreen aria-pressed="false">Play 4-view fullscreen</button>
           <button class="button primary" type="button" data-export>Export four views</button>
         </div>
         <p class="technology-status" data-export-status role="status" aria-live="polite"></p>
@@ -172,18 +195,19 @@ export async function render(container) {
         <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
         <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
         <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
-      </section>
-      <section class="card technology-ai technology-image-3d">
-        <div class="card-head"><h2>Image-to-3D assistant</h2><span class="badge info">Preview</span></div>
-        <p>Prepare one or four exhibit images for a future 3D-generation backend. This local preview does not send images to an external API.</p>
-        <label class="technology-drop">
-          <span>${icon("upload")}Choose an exhibit image or GLB preview input</span>
-          <input data-image-3d-file type="file" accept="image/jpeg,image/png,image/webp">
-        </label>
-        <div class="technology-image-preview" data-image-3d-preview role="img" aria-label="Image-to-3D input preview">No image selected</div>
-        <button class="button primary" data-generate-3d type="button" disabled>Generate 3D model</button>
-        <p class="technology-status" data-image-3d-status role="status" aria-live="polite">No image-to-3D API connected.</p>
-        <a class="button small" href="https://huggingface.co/spaces/tencent/Hunyuan3D-2mv" target="_blank" rel="noopener noreferrer">Open Hunyuan3D preview Space</a>
+        <section class="card technology-ai technology-image-3d">
+          <div class="card-head"><h2>Image-to-3D assistant</h2><span class="badge info" data-3d-provider-label>Workers AI</span></div>
+          <label class="technology-field">3D generation provider
+            <select data-3d-provider>
+              <option value="workers">Cloudflare Workers AI (three passes)</option>
+            </select>
+          </label>
+        
+          <p data-3d-provider-help>Build a Three.js Group in three passes—silhouette, structure, and details—and update the preview after each pass. This uses the same Cloudflare model, so it changes the workflow, not the model's underlying ability. Three passes use three Workers AI requests; free allowance and any charges depend on your Cloudflare plan.</p>
+          <button class="button primary" data-generate-3d type="button" disabled>Generate Three.js Group</button>
+          <p class="technology-status" data-image-3d-status role="status" aria-live="polite">Select an image above to generate a Three.js Group model.</p>
+          <div class="technology-hunyuan-results" data-hunyuan-results aria-live="polite"></div>
+        </section>
       </section>
       <section class="card technology-ai technology-rfid">
         <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
@@ -201,6 +225,14 @@ export async function render(container) {
           <button class="button primary" type="button" data-rfid-ready>Mark manual update finished</button>
         </div>
         <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
+        <h3>RFID event GET/POST example</h3>
+        <p class="technology-status">The example POST records a demo event without changing the workflow phase. GET returns that event in the same JSON shape.</p>
+        <div class="actions">
+          <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
+          <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
+        </div>
+        <pre class="technology-json" data-rfid-event aria-live="polite">No RFID event loaded.</pre>
+        <p class="technology-status" data-rfid-event-message role="status" aria-live="polite"></p>
       </section>
     </div>
   </div>`;
@@ -214,6 +246,7 @@ export async function render(container) {
   const zoomValue = container.querySelector("[data-zoom-value]");
   const intensity = container.querySelector("[data-light]");
   const intensityValue = container.querySelector("[data-light-value]");
+  const fullscreenButton = container.querySelector("[data-fullscreen]");
   let THREE;
   let renderer;
   let camera;
@@ -229,10 +262,11 @@ export async function render(container) {
   let active = true;
   let dragging = false;
   let previousPointer = null;
+  let fourViewCanvas = null;
+  let fourViewContext = null;
+  let fullscreenExitButton = null;
   let loadedImage = null;
   let selectedImage = null;
-  let selectedImage3D = null;
-  let image3DPreviewUrl = null;
 
   const updateCamera = () => {
     if (!camera || !THREE) return;
@@ -284,15 +318,107 @@ export async function render(container) {
     updateCamera();
     modelStatus.textContent = "Drag the model to rotate it; use the wheel to zoom.";
 
-    const resize = new ResizeObserver(() => {
+    const resizeRenderer = () => {
       if (!active || !renderer) return;
+      if (fourViewCanvas) {
+        camera.aspect = 1;
+        camera.updateProjectionMatrix();
+        renderer.setSize(FOUR_VIEW_TILE_SIZE, FOUR_VIEW_TILE_SIZE, false);
+        return;
+      }
       const width = Math.max(1, viewer.clientWidth);
       const height = Math.max(1, viewer.clientHeight);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+    };
+    const resize = new ResizeObserver(() => {
+      resizeRenderer();
     });
     resize.observe(viewer);
+
+    const syncFullscreen = () => {
+      const isFullscreen = document.fullscreenElement === viewer;
+      if (isFullscreen && !fourViewCanvas) {
+        fourViewCanvas = document.createElement("canvas");
+        fourViewCanvas.className = "technology-four-view";
+        fourViewCanvas.setAttribute(
+          "aria-label",
+          "Four-view fullscreen model playback",
+        );
+        fourViewContext = fourViewCanvas.getContext("2d");
+        if (!fourViewContext) {
+          fourViewCanvas = null;
+          exportStatus.textContent =
+            "Could not create the fullscreen four-view display.";
+          document.exitFullscreen().catch((error) => {
+            exportStatus.textContent =
+              `Could not close fullscreen after a display error: ${error.message}`;
+          });
+          return;
+        }
+        fourViewCanvas.width = FOUR_VIEW_TILE_SIZE * 3;
+        fourViewCanvas.height = FOUR_VIEW_TILE_SIZE * 3;
+        fullscreenExitButton = document.createElement("button");
+        fullscreenExitButton.type = "button";
+        fullscreenExitButton.className = "technology-fullscreen-exit";
+        fullscreenExitButton.textContent = "Exit 4-view";
+        fullscreenExitButton.setAttribute("aria-label", "Exit fullscreen 4-view");
+        fullscreenExitButton.addEventListener(
+          "click",
+          () => {
+            document.exitFullscreen().catch((error) => {
+              exportStatus.textContent =
+                error instanceof Error && error.message
+                  ? `Could not exit fullscreen: ${error.message}`
+                  : "Could not exit fullscreen. Press Escape to close it.";
+            });
+          },
+          { signal },
+        );
+        viewer.append(fourViewCanvas, fullscreenExitButton);
+        renderer.domElement.hidden = true;
+        viewer.classList.add("is-four-view");
+        fullscreenButton.setAttribute("aria-pressed", "true");
+        exportStatus.textContent =
+          "Four-view fullscreen playback is active. Press Escape to exit.";
+      } else if (!isFullscreen && fourViewCanvas) {
+        fourViewCanvas.remove();
+        fullscreenExitButton.remove();
+        fourViewCanvas = null;
+        fourViewContext = null;
+        fullscreenExitButton = null;
+        renderer.domElement.hidden = false;
+        viewer.classList.remove("is-four-view");
+        fullscreenButton.setAttribute("aria-pressed", "false");
+        exportStatus.textContent = "Four-view fullscreen playback closed.";
+      }
+      resizeRenderer();
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen, { signal });
+    fullscreenButton.addEventListener(
+      "click",
+      async () => {
+        if (!renderer || !camera || !model) {
+          exportStatus.textContent = "The 3D viewer is not ready yet.";
+          return;
+        }
+        if (!viewer.requestFullscreen) {
+          exportStatus.textContent =
+            "Fullscreen playback is not supported by this browser.";
+          return;
+        }
+        try {
+          await viewer.requestFullscreen();
+        } catch (error) {
+          exportStatus.textContent =
+            error instanceof Error && error.message
+              ? `Could not enter fullscreen: ${error.message}`
+              : "Could not enter fullscreen. Please try again.";
+        }
+      },
+      { signal },
+    );
 
     const renderFrame = () => {
       if (!active) return;
@@ -300,7 +426,39 @@ export async function render(container) {
         model.rotation.y += 0.005;
         model.rotation.x += 0.002;
       }
-      renderer.render(scene, camera);
+      if (fourViewCanvas) {
+        const oldAngle = cameraAngle;
+        fourViewContext.fillStyle = "#000";
+        fourViewContext.fillRect(
+          0,
+          0,
+          fourViewCanvas.width,
+          fourViewCanvas.height,
+        );
+        for (const view of FOUR_VIEWS) {
+          cameraAngle = view.angle;
+          updateCamera();
+          renderer.render(scene, camera);
+          fourViewContext.save();
+          fourViewContext.translate(
+            (view.cell[0] + 0.5) * FOUR_VIEW_TILE_SIZE,
+            (view.cell[1] + 0.5) * FOUR_VIEW_TILE_SIZE,
+          );
+          fourViewContext.rotate(view.rotation);
+          fourViewContext.drawImage(
+            renderer.domElement,
+            -FOUR_VIEW_TILE_SIZE / 2,
+            -FOUR_VIEW_TILE_SIZE / 2,
+            FOUR_VIEW_TILE_SIZE,
+            FOUR_VIEW_TILE_SIZE,
+          );
+          fourViewContext.restore();
+        }
+        cameraAngle = oldAngle;
+        updateCamera();
+      } else {
+        renderer.render(scene, camera);
+      }
       animationFrame = requestAnimationFrame(renderFrame);
     };
     renderFrame();
@@ -308,6 +466,7 @@ export async function render(container) {
     viewer.addEventListener(
       "pointerdown",
       (event) => {
+        if (event.target.closest(".technology-fullscreen-exit")) return;
         dragging = true;
         previousPointer = { x: event.clientX, y: event.clientY };
         viewer.setPointerCapture(event.pointerId);
@@ -506,7 +665,7 @@ export async function render(container) {
           exportStatus.textContent = "The 3D viewer is not ready yet.";
           return;
         }
-        const size = 480;
+        const size = FOUR_VIEW_TILE_SIZE;
         const output = document.createElement("canvas");
         output.width = size * 3;
         output.height = size * 3;
@@ -519,12 +678,6 @@ export async function render(container) {
         const oldAngle = cameraAngle;
         const oldAspect = camera.aspect;
         const oldSize = renderer.getSize(new THREE.Vector2());
-        const views = [
-          { angle: 0, cell: [1, 0], rotation: 0 },
-          { angle: 90, cell: [2, 1], rotation: Math.PI / 2 },
-          { angle: 180, cell: [1, 2], rotation: Math.PI },
-          { angle: 270, cell: [0, 1], rotation: -Math.PI / 2 },
-        ];
         try {
           context.fillStyle = "#000";
           context.fillRect(0, 0, output.width, output.height);
@@ -532,7 +685,7 @@ export async function render(container) {
           renderer.setSize(size, size, false);
           camera.aspect = 1;
           camera.updateProjectionMatrix();
-          for (const view of views) {
+          for (const view of FOUR_VIEWS) {
             cameraAngle = view.angle;
             updateCamera();
             renderer.render(model.parent, camera);
@@ -594,6 +747,13 @@ export async function render(container) {
   const jsonOutput = container.querySelector("[data-json-output]");
   const accountIdInput = container.querySelector("[data-account-id]");
   const apiTokenInput = container.querySelector("[data-api-token]");
+  const image3DGenerate = container.querySelector("[data-generate-3d]");
+  const image3DStatus = container.querySelector("[data-image-3d-status]");
+  const image3DProvider = container.querySelector("[data-3d-provider]");
+  const image3DProviderLabel = container.querySelector("[data-3d-provider-label]");
+  const image3DProviderHelp = container.querySelector("[data-3d-provider-help]");
+  
+  image3DProviderLabel.textContent = "Cloudflare Workers AI";
   const loadImageFile = (file) =>
     new Promise((resolve, reject) => {
       const image = new Image();
@@ -605,7 +765,11 @@ export async function render(container) {
         preview.replaceChildren(image);
         image.alt = "Selected artifact image preview";
         generateButton.disabled = false;
+        image3DGenerate.disabled = false;
         aiStatus.textContent = "Image ready. Generate exhibit JSON when ready.";
+        image3DStatus.textContent = image3DProvider.value === "hunyuan"
+          ? "Image ready. Enter Tencent credentials to generate a 3D model."
+          : "Image ready. Generate a Three.js Group with Workers AI.";
         resolve(true);
       };
       image.onerror = () => {
@@ -630,10 +794,14 @@ export async function render(container) {
       selectedImage = imageInput.files?.[0] || null;
       loadedImage = null;
       generateButton.disabled = true;
+      image3DGenerate.disabled = true;
+      hunyuanResults.replaceChildren();
       jsonOutput.textContent = "Generated exhibit JSON will appear here.";
       if (!selectedImage) {
         preview.textContent = "No image selected";
         aiStatus.textContent = "Select an image to generate exhibit data.";
+        image3DStatus.textContent =
+          "Select an image above to generate a Three.js Group model.";
         return;
       }
       if (
@@ -642,11 +810,13 @@ export async function render(container) {
         selectedImage = null;
         preview.textContent = "No image selected";
         aiStatus.textContent = "Choose a JPEG, PNG, or WebP image.";
+        image3DStatus.textContent = "Choose a JPEG, PNG, or WebP image.";
         return;
       }
       loadImageFile(selectedImage).catch((error) => {
         preview.textContent = "No image selected";
         aiStatus.textContent = error.message;
+        image3DStatus.textContent = error.message;
       });
     },
     { signal },
@@ -669,7 +839,9 @@ export async function render(container) {
       if (!active || error.name === "AbortError") return;
       preview.textContent = "No image selected";
       aiStatus.textContent = error.message;
+      image3DStatus.textContent = error.message;
     });
+
   generateButton.addEventListener(
     "click",
     async () => {
@@ -740,49 +912,327 @@ export async function render(container) {
     { signal },
   );
 
-  const image3DInput = container.querySelector("[data-image-3d-file]");
-  const image3DPreview = container.querySelector("[data-image-3d-preview]");
-  const image3DGenerate = container.querySelector("[data-generate-3d]");
-  const image3DStatus = container.querySelector("[data-image-3d-status]");
-
-  image3DInput.addEventListener(
-    "change",
-    () => {
-      selectedImage3D = image3DInput.files?.[0] || null;
-      if (image3DPreviewUrl) URL.revokeObjectURL(image3DPreviewUrl);
-      image3DPreviewUrl = null;
-      image3DGenerate.disabled = true;
-
-      if (!selectedImage3D) {
-        image3DPreview.textContent = "No image selected";
-        image3DStatus.textContent = "No image-to-3D API connected.";
-        return;
+  const applyGeneratedModel = (parts, minimumParts, isFallback = false) => {
+    if (!THREE || !model || !modelContent) {
+      throw new Error("The 3D viewer is not ready yet.");
+    }
+    if (!Array.isArray(parts) || parts.length > 12) {
+      throw new Error("Workers AI returned an invalid Three.js Group.");
+    }
+    if (!isFallback && parts.length < minimumParts) {
+      throw new Error("Workers AI returned an invalid Three.js Group.");
+    }
+    if (parts.filter((part) => part?.shape === "sphere").length > 3) {
+      throw new Error("Workers AI returned a sphere-heavy Three.js Group.");
+    }
+    const generated = new THREE.Group();
+    for (const part of parts) {
+      if (
+        !part ||
+        !["sphere", "box", "cylinder"].includes(part.shape) ||
+        !Array.isArray(part.position) ||
+        part.position.length !== 3 ||
+        !Array.isArray(part.scale) ||
+        part.scale.length !== 3 ||
+        typeof part.color !== "string"
+      ) {
+        throw new Error("Workers AI returned an invalid Three.js Group.");
       }
-      if (!["image/jpeg", "image/png", "image/webp"].includes(selectedImage3D.type)) {
-        selectedImage3D = null;
-        image3DInput.value = "";
-        image3DPreview.textContent = "No image selected";
-        image3DStatus.textContent = "Choose a JPEG, PNG, or WebP image.";
-        return;
+      const geometry =
+        part.shape === "box"
+          ? new THREE.BoxGeometry(1, 1, 1)
+          : part.shape === "cylinder"
+            ? new THREE.CylinderGeometry(0.5, 0.5, 1, 16)
+            : new THREE.SphereGeometry(0.5, 20, 16);
+      const material = new THREE.MeshStandardMaterial({
+        color: part.color,
+        roughness: 0.8,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(...part.position);
+      mesh.scale.set(...part.scale);
+      generated.add(mesh);
+    }
+    generated.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(generated);
+    const size = bounds.getSize(new THREE.Vector3());
+    const largest = Math.max(size.x, size.y, size.z);
+    if (!Number.isFinite(largest) || largest <= 0) {
+      disposeModel(THREE, generated);
+      throw new Error("Workers AI returned a model with no displayable geometry.");
+    }
+    generated.scale.multiplyScalar(2.8 / largest);
+    generated.updateMatrixWorld(true);
+    generated.position.sub(
+      new THREE.Box3()
+        .setFromObject(generated)
+        .getCenter(new THREE.Vector3()),
+    );
+    model.remove(modelContent);
+    disposeModel(THREE, modelContent);
+    modelContent = generated;
+    model.add(modelContent);
+    model.rotation.set(0, 0, 0);
+    targetY = 0;
+    cameraAngle = 0;
+    updateCamera();
+    modelStatus.textContent =
+      "Workers AI generated a Three.js Group from the selected image.";
+  };
+
+  const generateWithHunyuan = async () => {
+    const secretId = hunyuanSecretId.value.trim();
+    const secretKey = hunyuanSecretKey.value;
+    const region = hunyuanRegion.value;
+    if (!secretId || !secretKey) {
+      image3DStatus.textContent = "Enter your Tencent Cloud SecretId and SecretKey.";
+      (secretId ? hunyuanSecretKey : hunyuanSecretId).focus();
+      return;
+    }
+
+    image3DGenerate.disabled = true;
+    image3DProvider.disabled = true;
+    hunyuanResults.replaceChildren();
+    try {
+      const maxDimension = 768;
+      let scale = Math.min(
+        1,
+        maxDimension / Math.max(loadedImage.width, loadedImage.height),
+      );
+      if (Math.min(loadedImage.width, loadedImage.height) * scale < 128) {
+        scale = 128 / Math.min(loadedImage.width, loadedImage.height);
+      }
+      if (Math.max(loadedImage.width, loadedImage.height) * scale > 5000) {
+        throw new Error("The image aspect ratio is outside Tencent's supported size.");
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(loadedImage.width * scale));
+      canvas.height = Math.max(1, Math.round(loadedImage.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not prepare the image.");
+      context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", 0.85),
+      );
+      if (!blob) throw new Error("Could not prepare the image.");
+      if (blob.size > 4 * 1024 * 1024) {
+        throw new Error("The prepared image is larger than 4 MB.");
       }
 
-      image3DPreviewUrl = URL.createObjectURL(selectedImage3D);
-      image3DPreview.replaceChildren();
-      const image = document.createElement("img");
-      image.src = image3DPreviewUrl;
-      image.alt = "Image-to-3D input preview";
-      image3DPreview.append(image);
-      image3DStatus.textContent = "Input ready. 3D generation API is not connected.";
-      image3DGenerate.disabled = false;
-    },
-    { signal },
-  );
+      image3DStatus.textContent = "Submitting the image to Tencent Hunyuan 3D Rapid…";
+      const form = new FormData();
+      form.append("image", blob, "image.jpg");
+      form.append("secret_id", secretId);
+      form.append("secret_key", secretKey);
+      form.append("region", region);
+      const upload = await serializeUpload(form);
+      const submitResponse = await fetch(HUNYUAN_SUBMIT_PATH, {
+        method: "POST",
+        ...upload,
+        signal,
+      });
+      const submitResult = await submitResponse.json().catch(() => ({}));
+      if (!submitResponse.ok) {
+        throw new Error(
+          submitResult.error || `Tencent request failed (HTTP ${submitResponse.status}).`,
+        );
+      }
+      const jobId = submitResult.data?.job_id;
+      if (typeof jobId !== "string" || !jobId) {
+        throw new Error("Tencent returned no valid job ID.");
+      }
+
+      const deadline = Date.now() + 15 * 60 * 1000;
+      let completed = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        const query = await serializeJson({
+          job_id: jobId,
+          secret_id: secretId,
+          secret_key: secretKey,
+          region,
+        });
+        const queryResponse = await fetch(HUNYUAN_QUERY_PATH, {
+          method: "POST",
+          ...query,
+          signal,
+        });
+        const queryResult = await queryResponse.json().catch(() => ({}));
+        if (!queryResponse.ok) {
+          throw new Error(
+            queryResult.error || `Tencent query failed (HTTP ${queryResponse.status}).`,
+          );
+        }
+        const data = queryResult.data;
+        if (!data || !["WAIT", "RUN", "FAIL", "DONE"].includes(data.status)) {
+          throw new Error("Tencent returned an invalid job status.");
+        }
+        if (data.status === "FAIL") {
+          throw new Error("Tencent Hunyuan failed to generate the model. Check model access and account quota.");
+        }
+        if (data.status === "DONE") {
+          const files = Array.isArray(data.files) ? data.files : [];
+          for (const [index, file] of files.entries()) {
+            if (typeof file?.url !== "string") continue;
+            const url = new URL(file.url);
+            if (url.protocol !== "https:") continue;
+            const link = document.createElement("a");
+            link.href = url.href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = `Download Tencent 3D result ${index + 1}${file.type ? ` (${file.type})` : ""}`;
+            hunyuanResults.append(link);
+          }
+          if (files.length) {
+            const note = document.createElement("p");
+            note.className = "technology-status";
+            note.textContent =
+              "If the download is a ZIP, extract its GLB file and import it in the 3D model studio.";
+            hunyuanResults.append(note);
+            image3DStatus.textContent =
+              "Tencent Hunyuan finished generating the model.";
+          } else {
+            image3DStatus.textContent =
+              "Tencent Hunyuan finished, but returned no downloadable model URL.";
+          }
+          completed = true;
+          break;
+        }
+        image3DStatus.textContent =
+          `Tencent Hunyuan is processing the image (${data.status}). Checking again…`;
+      }
+      if (!completed) {
+        throw new Error("The Tencent job is still running. Try again later with the same JobId.");
+      }
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Tencent Hunyuan 3D request failed.");
+        image3DStatus.textContent = error.message;
+      }
+    } finally {
+      hunyuanSecretId.value = "";
+      hunyuanSecretKey.value = "";
+      image3DProvider.disabled = false;
+      if (active) image3DGenerate.disabled = !loadedImage;
+    }
+  };
 
   image3DGenerate.addEventListener(
     "click",
-    () => {
-      image3DStatus.textContent =
-        "Preview only: connect Stable Fast 3D or Hunyuan3D-2mv on the backend before generation.";
+    async () => {
+      if (!loadedImage || !selectedImage) {
+        image3DStatus.textContent =
+          "Select an image above before generating a 3D model.";
+        return;
+      }
+      if (image3DProvider.value === "hunyuan") {
+        await generateWithHunyuan();
+        return;
+      }
+      const accountId = accountIdInput.value.trim();
+      const apiToken = apiTokenInput.value.trim();
+      if (!/^[a-f\d]{32}$/i.test(accountId)) {
+        image3DStatus.textContent =
+          "Enter a valid 32-character Cloudflare Account ID in the Image-to-JSON assistant.";
+        accountIdInput.focus();
+        return;
+      }
+      if (!apiToken) {
+        image3DStatus.textContent =
+          "Enter your Cloudflare API token in the Image-to-JSON assistant.";
+        apiTokenInput.focus();
+        return;
+      }
+      image3DGenerate.disabled = true;
+      const stages = [
+        {
+          name: "silhouette",
+          minimumParts: 3,
+          label: "Step 1/3: building the silhouette",
+        },
+        {
+          name: "structure",
+          minimumParts: 6,
+          label: "Step 2/3: adding the main structures",
+        },
+        {
+          name: "details",
+          minimumParts: 8,
+          label: "Step 3/3: refining visible details",
+        },
+      ];
+      let completedParts = [];
+      let activeStage = "";
+      try {
+        const scale = Math.min(
+          1,
+          768 / Math.max(loadedImage.width, loadedImage.height),
+        );
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(loadedImage.width * scale));
+        canvas.height = Math.max(1, Math.round(loadedImage.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Could not prepare the image.");
+        context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", 0.8),
+        );
+        if (!blob) throw new Error("Could not prepare the image.");
+        for (const [index, stage] of stages.entries()) {
+          activeStage = stage.label;
+          image3DStatus.textContent = `${stage.label}…`;
+          const data = new FormData();
+          data.append("image", blob, "image.jpg");
+          data.append("account_id", accountId);
+          data.append("api_token", apiToken);
+          data.append("task", "threejs_group");
+          data.append("stage", stage.name);
+          data.append("previous_parts", JSON.stringify(completedParts));
+          const upload = await serializeUpload(data);
+          const response = await fetch("/api/technology/generate-exhibit", {
+            method: "POST",
+            ...upload,
+            signal,
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok)
+            throw new Error(
+              result.error || `Request failed (HTTP ${response.status}).`,
+            );
+          if (
+            !result.data ||
+            typeof result.data !== "object" ||
+            Array.isArray(result.data) ||
+            (result.data.stage !== undefined &&
+              result.data.stage !== stage.name)
+          ) {
+            throw new Error("The server returned an invalid 3D model step.");
+          }
+          applyGeneratedModel(
+            result.data.parts,
+            stage.minimumParts,
+            !!result.data.fallback
+          );
+          completedParts = result.data.parts;
+          if (result.data.fallback) {
+            image3DStatus.textContent = `${stage.label} complete (fallback model).`;
+          } else {
+            image3DStatus.textContent = `${stage.label} complete (${index + 1}/${stages.length}).`;
+          }
+        }
+        activeStage = "";
+        image3DStatus.textContent =
+          "Three.js Group generated step by step and loaded into the model viewer.";
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          console.error("Image-to-3D generation failed.", error);
+          image3DStatus.textContent = activeStage
+            ? `${activeStage} failed. The latest completed stage remains in the preview. ${error.message}`
+            : error.message;
+        }
+      } finally {
+        if (active) image3DGenerate.disabled = !loadedImage;
+      }
     },
     { signal },
   );
@@ -792,6 +1242,10 @@ export async function render(container) {
   const rfidRefresh = container.querySelector("[data-rfid-refresh]");
   const rfidReady = container.querySelector("[data-rfid-ready]");
   const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
+  const rfidExamplePost = container.querySelector("[data-rfid-example-post]");
+  const rfidEventGet = container.querySelector("[data-rfid-event-get]");
+  const rfidEvent = container.querySelector("[data-rfid-event]");
+  const rfidEventMessage = container.querySelector("[data-rfid-event-message]");
   let rfidPolling;
 
   const refreshRfidStatus = async () => {
@@ -811,6 +1265,52 @@ export async function render(container) {
   };
 
   rfidRefresh.addEventListener("click", refreshRfidStatus, { signal });
+  rfidExamplePost.addEventListener(
+    "click",
+    async () => {
+      rfidExamplePost.disabled = true;
+      try {
+        const response = await fetch("/api/rfid/device-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "rfid_event",
+            uid: "04833912EE1B90",
+            result: "accepted",
+            exhibit_id: "helmet-001",
+          }),
+          signal,
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidEvent.textContent = JSON.stringify(result, null, 2);
+        rfidEventMessage.textContent = "Example RFID event POST received. Use GET to retrieve the latest event.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
+      } finally {
+        if (active) rfidExamplePost.disabled = false;
+      }
+    },
+    { signal },
+  );
+  rfidEventGet.addEventListener(
+    "click",
+    async () => {
+      rfidEventGet.disabled = true;
+      try {
+        const response = await fetch("/api/rfid/device-event", { signal });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidEvent.textContent = JSON.stringify(result, null, 2);
+        rfidEventMessage.textContent = "Latest RFID event returned by GET.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
+      } finally {
+        if (active) rfidEventGet.disabled = false;
+      }
+    },
+    { signal },
+  );
   rfidReady.addEventListener(
     "click",
     async () => {
@@ -842,7 +1342,6 @@ export async function render(container) {
     active = false;
     controller.abort();
     if (rfidPolling) window.clearInterval(rfidPolling);
-    if (image3DPreviewUrl) URL.revokeObjectURL(image3DPreviewUrl);
     cancelAnimationFrame(animationFrame);
     if (modelContent) disposeModel(THREE, modelContent);
     if (renderer) {

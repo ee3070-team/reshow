@@ -12,6 +12,11 @@ using LM35::LM35IC;
 // Hardware SPI pins are fixed on the Mega: MOSI=51, MISO=50, SCK=52.
 const uint8_t rfidSsPin = 53;   // RC522 SDA/SS
 const uint8_t rfidRstPin = 49;  // RC522 RST
+const uint8_t doorRelayPin = 47; // Relay module IN
+const bool doorRelayActiveLow = true; // Set false for a HIGH-trigger relay module
+const unsigned long doorUnlockDuration = 3000;
+bool doorUnlocked = false;
+unsigned long doorUnlockedAt = 0;
 
 // Temperature Sensor Pins and Variables
 const int tempPin = A1;
@@ -200,6 +205,25 @@ void sendRfidEventToESP32(const char *uid, bool allowed) {
   Serial.println(uid);
 }
 
+void setDoorUnlocked(bool unlocked) {
+  const uint8_t activeLevel = doorRelayActiveLow ? LOW : HIGH;
+  const uint8_t lockedLevel = doorRelayActiveLow ? HIGH : LOW;
+  digitalWrite(doorRelayPin, unlocked ? activeLevel : lockedLevel);
+  doorUnlocked = unlocked;
+  if (unlocked) {
+    doorUnlockedAt = millis();
+    Serial.println("Door unlocked; it will relock automatically.");
+  } else {
+    Serial.println("Door locked.");
+  }
+}
+
+void updateDoorLock() {
+  if (doorUnlocked && millis() - doorUnlockedAt >= doorUnlockDuration) {
+    setDoorUnlocked(false);
+  }
+}
+
 void checkRfidReader() {
   if (!rfidReader.PICC_IsNewCardPresent() || !rfidReader.PICC_ReadCardSerial()) {
     return;
@@ -222,6 +246,9 @@ void checkRfidReader() {
   if (!repeatedRead) {
     const bool allowed = strcmp(uid, allowedRfidUid) == 0;
     sendRfidEventToESP32(uid, allowed);
+    if (allowed && !doorUnlocked) {
+      setDoorUnlocked(true);
+    }
     strncpy(lastRfidUid, uid, sizeof(lastRfidUid) - 1);
     lastRfidUid[sizeof(lastRfidUid) - 1] = '\0';
     lastRfidScanAt = now;
@@ -273,6 +300,9 @@ void setup() {
   Serial.begin(115200);
   // Communicate with ESP32
   Serial2.begin(9600);
+  pinMode(doorRelayPin, OUTPUT);
+  digitalWrite(doorRelayPin, doorRelayActiveLow ? HIGH : LOW);
+  setDoorUnlocked(false);
   pinMode(rfidSsPin, OUTPUT);
   SPI.begin();
   rfidReader.PCD_Init();
@@ -343,6 +373,7 @@ void sendDataToESP32() {
 void loop() {
   checkSerialCommands();
   checkRfidReader();
+  updateDoorLock();
   proximityUltrasonicSensor();
   updateLighting();
   currentTime = millis();
