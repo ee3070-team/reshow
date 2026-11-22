@@ -1,9 +1,11 @@
 import argparse
 import base64
+import binascii
 import hashlib
-import hmac
 import json
+import os
 import re
+import secrets
 import ssl
 import threading
 import time
@@ -23,35 +25,19 @@ MAX_IMAGE_SIZE = 4 * 1024 * 1024
 MAX_REQUEST_SIZE = MAX_IMAGE_SIZE + 32 * 1024
 MAX_RESPONSE_SIZE = 256 * 1024
 MAX_RFID_EVENT_SIZE = 4096
-MAX_HUNYUAN_QUERY_SIZE = 8192
+TRIPO_API = "https://openapi.tripo3d.ai/v3"
+TRIPO_MODEL = "v3.1-20260211"
 RFID_EVENT_FILE = ROOT / "hardware" / "rfid-events.jsonl"
-HUNYUAN_SUBMIT_PATH = "/api/technology/hunyuan/submit"
-HUNYUAN_QUERY_PATH = "/api/technology/hunyuan/query"
-HUNYUAN_REGIONS = {
-    "ap-guangzhou",
-    "ap-shanghai",
-    "ap-nanjing",
-    "ap-beijing",
-    "ap-chengdu",
-    "ap-chongqing",
-    "ap-hongkong",
-    "ap-singapore",
-    "ap-jakarta",
-    "ap-bangkok",
-    "ap-seoul",
-    "ap-tokyo",
-    "na-ashburn",
-    "na-siliconvalley",
-    "sa-saopaulo",
-    "eu-frankfurt",
-}
+EPAPER_DESCRIPTION_FILE = ROOT / ".reshow-epaper-description.json"
 RFID_EVENT_LOCK = threading.Lock()
 RFID_WORKFLOW = {
     "phase": "idle",
     "uid": None,
     "exhibit_id": None,
+    "edit_id": None,
 }
 RFID_LATEST_DEVICE_EVENT = None
+EPAPER_DELIVERED_DESCRIPTION = None
 PROMPT = """Analyze the attached image and identify the visible artifact. Return exactly one valid JSON object and no Markdown or extra text, using precisely these two keys:
 {
   "name": "A short, specific title for the visible image",
@@ -61,23 +47,27 @@ Do not return a general image summary instead of this JSON. Do not infer facts t
 THREEJS_GROUP_PROMPT = """Analyze the attached artifact image and build a recognizable low-poly Three.js model from its silhouette and visible details, not a generic blob. Return exactly one valid JSON object and no Markdown, with this schema:
 {"parts":[{"shape":"sphere","position":[0,0,0],"scale":[1,1,1],"color":"#aabbcc"}]}
 Include 8 to 12 parts. Each part must have exactly the keys shape, position, scale, and color. shape must be sphere, box, or cylinder. position must contain three numbers from -2.5 to 2.5. scale must contain three numbers greater than 0 and no greater than 3. color must be a six-digit hex color. Use boxes and cylinders for the main body, frame, rim, visor, handle, or base. Use at most three spheres, only for small rounded details or when the artifact itself is spherical; never replace a non-spherical artifact with one large sphere. Make parts different sizes and place them to form a clear silhouette instead of stacking them at the origin. Use a restrained palette of two to four colors based on the image. Keep the model upright with its main axis on Y. Do not include JavaScript, HTML, explanations, or facts not visible in the image."""
+# The prompts ask for the full number of parts, but the free model often returns
+# fewer (or stops early), so the accepted ranges start at the smallest usable
+# count. Anything the model did return is kept instead of falling back to the
+# local demo model.
 THREEJS_GROUP_STAGES = {
     "silhouette": {
         "previous": (0, 0),
-        "new": (3, 4),
-        "total": (3, 4),
+        "new": (1, 4),
+        "total": (1, 4),
         "instruction": "Build only the object's main silhouette from 3 to 4 large parts.",
     },
     "structure": {
-        "previous": (3, 4),
-        "new": (3, 4),
-        "total": (6, 8),
+        "previous": (1, 4),
+        "new": (1, 4),
+        "total": (2, 8),
         "instruction": "Add 3 to 4 major structural features that make this specific object recognizable.",
     },
     "details": {
-        "previous": (6, 8),
-        "new": (2, 4),
-        "total": (8, 12),
+        "previous": (2, 8),
+        "new": (1, 4),
+        "total": (3, 12),
         "instruction": "Add 2 to 4 small, visible details that refine this specific object.",
     },
 }
@@ -87,6 +77,14 @@ class UploadError(ValueError):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+def read_epaper_description():
+    stored = json.loads(EPAPER_DESCRIPTION_FILE.read_text(encoding="utf-8"))
+    description = stored["description"]
+    if not isinstance(description, str) or not re.fullmatch(r"[\x20-\x7e]{1,180}", description):
+        raise ValueError("Invalid stored description")
+    return description
 
 
 def decode_json_response(response):
@@ -130,215 +128,120 @@ def cloudflare_request(endpoint, token, payload, timeout=40):
         raise RuntimeError("Cloudflare Workers AI could not complete the request. Try again.") from error
 
 
-def validate_hunyuan_credentials(secret_id, secret_key, region):
-    if not isinstance(secret_id, str) or not re.fullmatch(r"[A-Za-z0-9]{1,128}", secret_id):
-        raise UploadError(400, "Enter a valid Tencent Cloud SecretId.")
-    if (
-        not isinstance(secret_key, str)
-        or not secret_key
-        or len(secret_key) > 4096
-        or "\r" in secret_key
-        or "\n" in secret_key
-    ):
-        raise UploadError(400, "Enter a valid Tencent Cloud SecretKey.")
-    if not isinstance(region, str) or region not in HUNYUAN_REGIONS:
-        raise UploadError(400, "Choose a supported Tencent Hunyuan region.")
-
-
-def parse_hunyuan_multipart(content_type, body):
-    fields = {}
-    image = None
-    seen = set()
-    for part in multipart_message(content_type, body).iter_parts():
-        name = part.get_param("name", header="content-disposition")
-        if (
-            part.get_content_disposition() != "form-data"
-            or name not in ("image", "secret_id", "secret_key", "region")
-            or name in seen
-        ):
-            raise UploadError(400, "Upload exactly one image and Tencent credentials.")
-        seen.add(name)
-        if name == "image":
-            image = uploaded_image(part)
-        else:
-            fields[name] = uploaded_credential(part)
-    if seen != {"image", "secret_id", "secret_key", "region"} or image is None:
-        raise UploadError(400, "Upload exactly one image and Tencent credentials.")
-    validate_hunyuan_credentials(
-        fields["secret_id"], fields["secret_key"], fields["region"]
-    )
-    return image, fields["secret_id"], fields["secret_key"], fields["region"]
-
-
-def parse_hunyuan_query(body):
-    if not body or len(body) > MAX_HUNYUAN_QUERY_SIZE:
-        raise UploadError(400, "The Tencent Hunyuan query is invalid.")
-    try:
-        fields = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise UploadError(400, "The Tencent Hunyuan query is invalid.") from error
-    if not isinstance(fields, dict) or set(fields) != {
-        "job_id", "secret_id", "secret_key", "region"
-    }:
-        raise UploadError(400, "The Tencent Hunyuan query is invalid.")
-    validate_hunyuan_credentials(
-        fields["secret_id"], fields["secret_key"], fields["region"]
-    )
-    if (
-        not isinstance(fields["job_id"], str)
-        or not fields["job_id"]
-        or len(fields["job_id"]) > 128
-        or "\r" in fields["job_id"]
-        or "\n" in fields["job_id"]
-    ):
-        raise UploadError(400, "The Tencent Hunyuan job ID is invalid.")
-    return fields["job_id"], fields["secret_id"], fields["secret_key"], fields["region"]
-
-
-def build_hunyuan_request(action, payload, secret_id, secret_key, region, timestamp=None):
-    host = "hunyuan.intl.tencentcloudapi.com"
-    service = "hunyuan"
-    version = "2023-09-01"
-    timestamp = int(time.time()) if timestamp is None else timestamp
-    date = time.strftime("%Y-%m-%d", time.gmtime(timestamp))
-    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    canonical_headers = (
-        "content-type:application/json; charset=utf-8\n"
-        f"host:{host}\n"
-    )
-    signed_headers = "content-type;host"
-    canonical_request = "\n".join(
-        (
-            "POST",
-            "/",
-            "",
-            canonical_headers,
-            signed_headers,
-            hashlib.sha256(body).hexdigest(),
-        )
-    )
-    credential_scope = f"{date}/{service}/tc3_request"
-    string_to_sign = "\n".join(
-        (
-            "TC3-HMAC-SHA256",
-            str(timestamp),
-            credential_scope,
-            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
-        )
-    )
-    secret_date = hmac.new(
-        ("TC3" + secret_key).encode("utf-8"), date.encode("utf-8"), hashlib.sha256
-    ).digest()
-    secret_service = hmac.new(
-        secret_date, service.encode("utf-8"), hashlib.sha256
-    ).digest()
-    secret_signing = hmac.new(
-        secret_service, b"tc3_request", hashlib.sha256
-    ).digest()
-    signature = hmac.new(
-        secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    authorization = (
-        "TC3-HMAC-SHA256 "
-        f"Credential={secret_id}/{credential_scope}, "
-        f"SignedHeaders={signed_headers}, Signature={signature}"
-    )
-    return Request(
-        f"https://{host}/",
+def tripo_request(path, token, body=None, content_type="application/json"):
+    request = Request(
+        TRIPO_API + path,
         data=body,
-        headers={
-            "Authorization": authorization,
-            "Content-Type": "application/json; charset=utf-8",
-            "Host": host,
-            "X-TC-Action": action,
-            "X-TC-Version": version,
-            "X-TC-Timestamp": str(timestamp),
-            "X-TC-Region": region,
-        },
-        method="POST",
-    )
-
-
-def hunyuan_api_request(action, payload, secret_id, secret_key, region):
-    request = build_hunyuan_request(
-        action, payload, secret_id, secret_key, region
+        headers={"Authorization": "Bearer " + token, "Content-Type": content_type},
+        method="POST" if body is not None else "GET",
     )
     try:
         with build_opener(NoRedirects()).open(request, timeout=25) as response:
-            body = response.read(MAX_RESPONSE_SIZE + 1)
+            raw = response.read(MAX_RESPONSE_SIZE + 1)
+            if len(raw) > MAX_RESPONSE_SIZE:
+                raise RuntimeError("Tripo returned an oversized response.")
+            result = decode_json_response(raw)
     except HTTPError as error:
-        error.close()
         raise RuntimeError(
-            "Tencent Hunyuan could not complete the request. Check credentials, permissions, and model access."
+            f"Tripo rejected the request (HTTP {error.code}). Check your API key, balance, and model access."
         ) from error
     except OSError as error:
         raise RuntimeError(
-            "Tencent Hunyuan could not complete the request. Try again."
+            "Could not reach Tripo. If a generation was submitted, check your Tripo task history before retrying; it may still be charged."
         ) from error
-    if len(body) > MAX_RESPONSE_SIZE:
-        raise RuntimeError("Tencent Hunyuan returned an oversized response.")
-    result = decode_json_response(body).get("Response")
-    if not isinstance(result, dict):
-        raise RuntimeError("Tencent Hunyuan returned an invalid response.")
-    if isinstance(result.get("Error"), dict):
-        raise RuntimeError(
-            "Tencent Hunyuan rejected the request. Check credentials, permissions, and model access."
-        )
-    return result
+    if result.get("code") != 0 or not isinstance(result.get("data"), dict):
+        code = result.get("code")
+        suffix = f" (code {code})" if isinstance(code, int) else ""
+        raise RuntimeError("Tripo could not complete the request" + suffix + ". Check your balance and task history.")
+    return result["data"]
 
 
-def submit_hunyuan_job(image, secret_id, secret_key, region):
-    result = hunyuan_api_request(
-        "SubmitHunyuanTo3DRapidJob",
-        {
-            "ImageBase64": base64.b64encode(image).decode("ascii"),
-            "ResultFormat": "GLB",
-        },
-        secret_id,
-        secret_key,
-        region,
+def process_tripo_request(body):
+    try:
+        request = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise UploadError(400, "Invalid Tripo request.") from error
+    if not isinstance(request, dict):
+        raise UploadError(400, "Invalid Tripo request.")
+    token = request.get("api_key")
+    if not isinstance(token, str) or len(token) > 4096 or not re.fullmatch(r"[A-Za-z0-9._~+/\-]+=*", token):
+        raise UploadError(400, "Enter a valid Tripo API key.")
+    action = request.get("action")
+    if action == "status":
+        task_id = request.get("task_id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+            raise UploadError(400, "Invalid Tripo task ID.")
+        data = tripo_request("/tasks/" + task_id, token)
+        status = data.get("status")
+        if not isinstance(status, str):
+            raise RuntimeError("Tripo returned an invalid task status.")
+        result = {"task_id": task_id, "status": status, "progress": data.get("progress")}
+        if isinstance(data.get("type"), str):
+            result["type"] = data["type"]
+        if status == "success":
+            output = data.get("output")
+            model_url = output.get("model_url") if isinstance(output, dict) else None
+            if not isinstance(model_url, str):
+                raise RuntimeError("Tripo completed the task without a model URL.")
+            try:
+                url = urlsplit(model_url)
+                valid_url = url.scheme == "https" and url.hostname and not url.username and not url.password
+            except ValueError:
+                valid_url = False
+            if not valid_url:
+                raise RuntimeError("Tripo returned an invalid model URL.")
+            result["model_url"] = model_url
+            credits = data.get("credits_consumed")
+            if isinstance(credits, (int, float)) and not isinstance(credits, bool):
+                result["credits_consumed"] = credits
+        elif status in ("failed", "cancelled", "banned", "expired"):
+            code = data.get("error_code")
+            result["error"] = "Tripo task " + status + (f" (code {code})." if isinstance(code, int) else ".")
+        return result
+    if action not in ("image", "retexture"):
+        raise UploadError(400, "Choose a supported Tripo generation mode.")
+    if action == "retexture":
+        source_task_id = request.get("source_task_id")
+        if not isinstance(source_task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_task_id):
+            raise UploadError(400, "Enter a valid source generation task ID.")
+        prompt = request.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 1024:
+            raise UploadError(400, "Enter a texture description of up to 1024 characters.")
+        path = "/models/texture"
+        payload = {
+            "input": source_task_id,
+            "texture_prompt": {"text": prompt.strip()},
+            "texture_quality": "standard",
+            "pbr": True,
+        }
+    else:
+        encoded = request.get("image")
+        if not isinstance(encoded, str) or len(encoded) > MAX_REQUEST_SIZE:
+            raise UploadError(400, "Choose a valid image.")
+        try:
+            image = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise UploadError(400, "The image could not be decoded.") from error
+        if not image.startswith(b"\xff\xd8\xff") or len(image) > MAX_IMAGE_SIZE:
+            raise UploadError(400, "Choose a JPEG image smaller than 4 MB.")
+        boundary = "reshow-" + secrets.token_hex(16)
+        upload = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.jpg"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n"
+        ).encode("ascii") + image + f"\r\n--{boundary}--\r\n".encode("ascii")
+        uploaded = tripo_request("/files", token, upload, "multipart/form-data; boundary=" + boundary)
+        file_token = uploaded.get("file_token")
+        if not isinstance(file_token, str) or not file_token:
+            raise RuntimeError("Tripo did not return an image upload token.")
+        path = "/generation/image-to-model"
+        payload = {"model": TRIPO_MODEL, "input": file_token, "texture": True, "pbr": True, "texture_quality": "standard"}
+    created = tripo_request(
+        path, token, json.dumps(payload).encode("utf-8"),
     )
-    job_id = result.get("JobId")
-    if not isinstance(job_id, str) or not job_id or len(job_id) > 128:
-        raise RuntimeError("Tencent Hunyuan returned no valid job ID.")
-    return {"job_id": job_id}
-
-
-def query_hunyuan_job(job_id, secret_id, secret_key, region):
-    result = hunyuan_api_request(
-        "QueryHunyuanTo3DRapidJob",
-        {"JobId": job_id},
-        secret_id,
-        secret_key,
-        region,
-    )
-    status = result.get("Status")
-    if status not in ("WAIT", "RUN", "FAIL", "DONE"):
-        raise RuntimeError("Tencent Hunyuan returned an unknown job status.")
-    files = []
-    if status == "DONE":
-        result_files = result.get("ResultFile3Ds")
-        if isinstance(result_files, list):
-            for item in result_files:
-                if not isinstance(item, dict):
-                    continue
-                url = item.get("Url")
-                if not isinstance(url, str):
-                    continue
-                parsed_url = urlsplit(url)
-                if (
-                    parsed_url.scheme != "https"
-                    or not parsed_url.hostname
-                    or parsed_url.username
-                    or parsed_url.password
-                ):
-                    continue
-                file = {"url": url}
-                file_type = item.get("Type")
-                if isinstance(file_type, str) and len(file_type) <= 64:
-                    file["type"] = file_type
-                files.append(file)
-    return {"job_id": job_id, "status": status, "files": files}
+    task_id = created.get("task_id")
+    if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise RuntimeError("Tripo returned no valid task ID. Check task history before retrying; the request may have been charged.")
+    return {"task_id": task_id}
 
 
 def extract_json_object(text):
@@ -392,6 +295,90 @@ def create_exhibit_name(description):
     return name[:1].upper() + name[1:] if name else "Image-based exhibit"
 
 
+def vision_endpoint(account_id):
+    return (
+        "https://api.cloudflare.com/client/v4/accounts/"
+        + account_id
+        + "/ai/run/@cf/meta/llama-3.2-11b-vision-instruct"
+    )
+
+
+def describe_result(result):
+    # Structural summary only; never echo upstream text or credentials.
+    if isinstance(result, dict):
+        notes = [
+            "result object with keys: " + (", ".join(sorted(result)[:10]) or "(none)")
+        ]
+        response = result.get("response")
+        if isinstance(response, str):
+            notes.append("response is a string of length " + str(len(response)))
+        elif isinstance(response, dict):
+            notes.append(
+                "response object with keys: " + (", ".join(sorted(response)[:10]) or "(none)")
+            )
+        else:
+            notes.append("response type: " + type(response).__name__)
+        usage = result.get("usage")
+        if isinstance(usage, dict):
+            completion = usage.get("completion_tokens")
+            if isinstance(completion, int):
+                notes.append("completion_tokens: " + str(completion))
+        calls = result.get("tool_calls")
+        if isinstance(calls, list):
+            notes.append("tool_calls: " + str(len(calls)))
+        return "; ".join(notes)
+    if isinstance(result, list):
+        return "result list of length " + str(len(result))
+    if result is None:
+        return "result is null"
+    return "result type: " + type(result).__name__
+
+
+GENERATED_TEXT_KEYS = (
+    "response",
+    "generated_text",
+    "text",
+    "content",
+    "message",
+    "answer",
+    "output",
+    "arguments",
+    "choices",
+)
+
+
+def _find_text(value, key):
+    if isinstance(value, dict):
+        if key in value and isinstance(value[key], str) and value[key].strip():
+            return value[key]
+        for item in value.values():
+            found = _find_text(item, key)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_text(item, key)
+            if found:
+                return found
+    return None
+
+
+def extract_generated_text(value):
+    # Workers AI returns the generated answer as a plain string, nested inside a
+    # chat-style object, or as an already-parsed JSON object. Prefer well-known
+    # keys, then fall back to the raw JSON so callers can still locate the object
+    # they expect (for example a {"parts": [...]} array).
+    if isinstance(value, str):
+        return value
+    for key in GENERATED_TEXT_KEYS:
+        found = _find_text(value, key)
+        if found:
+            return found
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(",", ":"))
+    return None
+
+
 def generate_vision_text(
     image_bytes,
     account_id,
@@ -401,11 +388,7 @@ def generate_vision_text(
     timeout=40,
     retries=2,
 ):
-    endpoint = (
-        "https://api.cloudflare.com/client/v4/accounts/"
-        + account_id
-        + "/ai/run/@cf/meta/llama-3.2-11b-vision-instruct"
-    )
+    endpoint = vision_endpoint(account_id)
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -433,16 +416,16 @@ def generate_vision_text(
                 )
 
             result = response.get("result")
-            generated = (
-                result.get("response") if isinstance(result, dict) else None
-            )
+            generated = extract_generated_text(result)
             if (
                 isinstance(generated, str)
                 and generated.strip()
                 and len(generated) <= 16000
             ):
                 return generated.strip()
-            last_error = RuntimeError("Cloudflare returned no generated text.")
+            last_error = RuntimeError(
+                "Cloudflare returned no generated text (" + describe_result(result) + ")."
+            )
         except RuntimeError as error:
             last_error = error
         if attempt < retries:
@@ -473,44 +456,67 @@ def generate_exhibit(image_bytes, account_id, api_token):
     }
 
 
+def invalid_model(reason):
+    return RuntimeError(
+        "Workers AI returned an invalid 3D model (" + reason + "). Try again."
+    )
+
+
+def preview_text(text):
+    collapsed = " ".join(str(text).split())
+    return collapsed[:200] + ("..." if len(collapsed) > 200 else "")
+
+
 def validate_model_parts(parts, minimum, maximum):
-    if not isinstance(parts, list) or not minimum <= len(parts) <= maximum:
-        raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+    if not isinstance(parts, list):
+        raise invalid_model("parts is " + type(parts).__name__ + ", not a list")
+    if not minimum <= len(parts) <= maximum:
+        raise invalid_model(
+            "got "
+            + str(len(parts))
+            + " parts, expected "
+            + str(minimum)
+            + " to "
+            + str(maximum)
+        )
 
     validated = []
-    for part in parts:
-        if not isinstance(part, dict) or set(part) != {
-            "shape",
-            "position",
-            "scale",
-            "color",
-        }:
-            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+    for index, part in enumerate(parts):
+        label = "part " + str(index)
+        if not isinstance(part, dict):
+            raise invalid_model(label + " is " + type(part).__name__)
+        if not {"shape", "position", "scale", "color"}.issubset(part):
+            raise invalid_model(label + " keys: " + ", ".join(sorted(part)))
         if part["shape"] not in ("sphere", "box", "cylinder"):
-            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+            raise invalid_model(label + " shape: " + str(part["shape"])[:40])
         position = part["position"]
         scale = part["scale"]
-        if (
-            not isinstance(position, list)
-            or len(position) != 3
-            or not isinstance(scale, list)
-            or len(scale) != 3
-            or any(
-                not isinstance(component, (int, float))
-                or isinstance(component, bool)
-                or not -2.5 <= component <= 2.5
-                for component in position
-            )
-            or any(
-                not isinstance(component, (int, float))
-                or isinstance(component, bool)
-                or not 0 < component <= 3
-                for component in scale
-            )
-            or not isinstance(part["color"], str)
-            or not re.fullmatch(r"#[a-fA-F0-9]{6}", part["color"])
+        if not isinstance(position, list) or len(position) != 3:
+            raise invalid_model(label + " position: " + json.dumps(position)[:60])
+        if not isinstance(scale, list) or len(scale) != 3:
+            raise invalid_model(label + " scale: " + json.dumps(scale)[:60])
+        if any(
+            not isinstance(component, (int, float))
+            or isinstance(component, bool)
+            or not -2.5 <= component <= 2.5
+            for component in position
         ):
-            raise RuntimeError("Workers AI returned an invalid 3D model. Try again.")
+            raise invalid_model(
+                label + " position out of range: " + json.dumps(position)[:60]
+            )
+        if any(
+            not isinstance(component, (int, float))
+            or isinstance(component, bool)
+            or not 0 < component <= 3
+            for component in scale
+        ):
+            raise invalid_model(
+                label + " scale out of range: " + json.dumps(scale)[:60]
+            )
+        if not isinstance(part["color"], str) or not re.fullmatch(
+            r"#[a-fA-F0-9]{6}", part["color"]
+        ):
+            raise invalid_model(label + " color: " + str(part["color"])[:40])
         validated.append(
             {
                 "shape": part["shape"],
@@ -524,9 +530,42 @@ def validate_model_parts(parts, minimum, maximum):
     return validated
 
 
-def extract_model_parts(text, minimum=8, maximum=12):
+PART_KEYS = ("shape", "position", "scale", "color")
+
+
+def salvage_model_parts(text):
+    # The free model does not always answer with {"parts": [...]}. It sometimes
+    # returns a bare array or a single part, and it often runs out of tokens in
+    # the middle of the array. Collect every complete part object so a truncated
+    # answer is still usable instead of falling back to the local demo model.
     decoder = json.JSONDecoder()
-    value = None
+    parts = []
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index] not in "{[":
+            index += 1
+            continue
+        try:
+            candidate, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            index += 1
+            continue
+        if isinstance(candidate, dict) and all(key in candidate for key in PART_KEYS):
+            parts.append(candidate)
+        elif isinstance(candidate, list):
+            parts.extend(
+                entry
+                for entry in candidate
+                if isinstance(entry, dict) and all(key in entry for key in PART_KEYS)
+            )
+        index += end
+    return parts
+
+
+def extract_model_parts(text, minimum=1, maximum=12):
+    decoder = json.JSONDecoder()
+    wrapper = None
     for index, character in enumerate(text):
         if character != "{":
             continue
@@ -535,10 +574,16 @@ def extract_model_parts(text, minimum=8, maximum=12):
         except json.JSONDecodeError:
             continue
         if isinstance(candidate, dict) and "parts" in candidate:
-            value = candidate
+            wrapper = candidate["parts"]
             break
-    parts = value.get("parts") if isinstance(value, dict) else None
-    return validate_model_parts(parts, minimum, maximum)
+    if wrapper is not None:
+        return validate_model_parts(
+            wrapper if isinstance(wrapper, list) else [wrapper], minimum, maximum
+        )
+    parts = salvage_model_parts(text)
+    if parts:
+        return validate_model_parts(parts, minimum, maximum)
+    raise invalid_model("the response was: " + preview_text(text))
 
 
 FALLBACK_MODEL_PARTS = [
@@ -566,11 +611,12 @@ def generate_model_group(image_bytes, account_id, api_token):
             "stage": "silhouette",
             "parts": extract_model_parts(generated),
         }
-    except Exception:
+    except Exception as error:
         return {
             "stage": "silhouette",
             "parts": FALLBACK_MODEL_PARTS,
             "fallback": True,
+            "reason": str(error),
         }
 
 
@@ -595,7 +641,7 @@ Return exactly one valid JSON object and no Markdown, using this schema:
 Return only {minimum_new} to {maximum_new} NEW parts in the parts array; do not repeat the existing parts. Keep the object upright with its main axis on Y and align new parts to the existing coordinates. Each part must have exactly the keys shape, position, scale, and color. shape must be sphere, box, or cylinder. position must contain three numbers from -2.5 to 2.5. scale must contain three numbers greater than 0 and no greater than 3. color must be a six-digit hex color. Prefer boxes and cylinders for structural features. Use spheres only for small rounded details or when the artifact itself is spherical. Match the image's restrained two-to-four color palette. Do not include JavaScript, HTML, explanations, or facts not visible in the image."""
     try:
         generated = generate_vision_text(
-            image_bytes, account_id, api_token, prompt, 650, timeout=55
+            image_bytes, account_id, api_token, prompt, 900, timeout=55
         )
         new_parts = extract_model_parts(generated, minimum_new, maximum_new)
         combined = validate_model_parts(
@@ -604,7 +650,7 @@ Return only {minimum_new} to {maximum_new} NEW parts in the parts array; do not 
             settings["total"][1],
         )
         return {"stage": stage, "parts": combined, "fallback": False}
-    except Exception:
+    except Exception as error:
         combined = list(previous_parts)
         if len(combined) < settings["total"][0]:
             combined = list(FALLBACK_MODEL_PARTS[: settings["total"][0]])
@@ -612,6 +658,7 @@ Return only {minimum_new} to {maximum_new} NEW parts in the parts array; do not 
             "stage": stage,
             "parts": combined,
             "fallback": True,
+            "reason": str(error),
         }
 
 
@@ -757,6 +804,46 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 status = dict(RFID_WORKFLOW)
             self.send_json(200, {"data": status})
             return
+        if path == "/api/rfid/epaper-status":
+            with RFID_EVENT_LOCK:
+                body = RFID_WORKFLOW["phase"].encode("ascii")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=us-ascii")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/rfid/epaper-description":
+            with RFID_EVENT_LOCK:
+                try:
+                    description = read_epaper_description()
+                except FileNotFoundError:
+                    self.send_json(404, {"error": "No e-paper description has been saved yet."})
+                    return
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(500, {"error": "Could not read the saved e-paper description."})
+                    return
+            body = description.encode("ascii")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=us-ascii")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/rfid/epaper-delivery":
+            with RFID_EVENT_LOCK:
+                try:
+                    description = read_epaper_description()
+                    state = "confirmed" if EPAPER_DELIVERED_DESCRIPTION == description else "pending"
+                except FileNotFoundError:
+                    state = "not_saved"
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(500, {"error": "Could not read the saved e-paper description."})
+                    return
+            self.send_json(200, {"data": {"state": state}})
+            return
         if path == "/api/rfid/device-event":
             with RFID_EVENT_LOCK:
                 event = dict(RFID_LATEST_DEVICE_EVENT) if RFID_LATEST_DEVICE_EVENT else None
@@ -768,47 +855,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
-        global RFID_LATEST_DEVICE_EVENT
+        global RFID_LATEST_DEVICE_EVENT, EPAPER_DELIVERED_DESCRIPTION
         path = urlsplit(self.path).path
-        if path in (HUNYUAN_SUBMIT_PATH, HUNYUAN_QUERY_PATH):
-            origin = urlsplit(self.headers.get("Origin", ""))
-            scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
-            host = self.headers.get("Host", "").lower()
-            if (
-                origin.scheme != scheme
-                or origin.netloc.lower() != host
-                or origin.path not in ("", "/")
-                or origin.query
-                or origin.fragment
-            ):
-                self.send_json(403, {"error": "Use the ReShow website to submit Tencent Hunyuan jobs."})
-                return
-            try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-            except ValueError:
-                self.send_json(400, {"error": "Invalid request length."})
-                return
-            maximum = MAX_REQUEST_SIZE if path == HUNYUAN_SUBMIT_PATH else MAX_HUNYUAN_QUERY_SIZE
-            if content_length <= 0 or content_length > maximum:
-                self.send_json(413, {"error": "The Tencent Hunyuan request is too large."})
-                return
-            body = self.rfile.read(content_length)
-            try:
-                if path == HUNYUAN_SUBMIT_PATH:
-                    result = submit_hunyuan_job(
-                        *parse_hunyuan_multipart(
-                            self.headers.get("Content-Type", ""), body
-                        )
-                    )
-                else:
-                    result = query_hunyuan_job(*parse_hunyuan_query(body))
-                self.send_json(200, {"data": result})
-            except UploadError as error:
-                self.send_json(error.status, {"error": str(error)})
-            except RuntimeError as error:
-                self.send_json(502, {"error": str(error)})
-            return
-
         if path == "/api/rfid/device-event":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
@@ -823,11 +871,12 @@ class StudioHandler(SimpleHTTPRequestHandler):
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self.send_json(400, {"error": "Invalid RFID device event JSON."})
                 return
-            if not isinstance(event, dict) or set(event) not in (
-                {"type", "uid", "result"},
-                {"type", "uid", "result", "exhibit_id"},
+            if (
+                not isinstance(event, dict)
+                or not {"type", "uid", "result"} <= set(event)
+                or not set(event) <= {"type", "uid", "result", "exhibit_id", "role"}
             ):
-                self.send_json(400, {"error": "RFID event must contain type, uid, result, and optional exhibit_id."})
+                self.send_json(400, {"error": "RFID event must contain type, uid, result, and optional exhibit_id and role."})
                 return
             uid = event.get("uid")
             result = event.get("result")
@@ -853,6 +902,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
             ):
                 self.send_json(400, {"error": "Invalid exhibit_id."})
                 return
+            role = event.get("role")
+            if role is not None and role not in ("door", "edit", "epaper"):
+                self.send_json(400, {"error": "RFID role must be door, edit or epaper."})
+                return
             normalized_event = {
                 "type": "rfid_event",
                 "uid": uid.upper(),
@@ -860,8 +913,21 @@ class StudioHandler(SimpleHTTPRequestHandler):
             }
             if exhibit_id is not None:
                 normalized_event["exhibit_id"] = exhibit_id.strip()
+            if role is not None:
+                normalized_event["role"] = role
             with RFID_EVENT_LOCK:
                 RFID_LATEST_DEVICE_EVENT = normalized_event
+                if normalized_event["result"] == "accepted":
+                    if role == "edit":
+                        if RFID_WORKFLOW["phase"] == "pending_edit":
+                            RFID_WORKFLOW.update({"phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None})
+                    elif RFID_WORKFLOW["phase"] == "idle":
+                        RFID_WORKFLOW.update({
+                            "phase": "pending_edit",
+                            "uid": normalized_event["uid"],
+                            "exhibit_id": normalized_event.get("exhibit_id"),
+                            "edit_id": secrets.token_hex(16),
+                        })
             self.send_json(200, normalized_event)
             return
 
@@ -905,19 +971,11 @@ class StudioHandler(SimpleHTTPRequestHandler):
                         "phase": "pending_edit",
                         "uid": uid.upper(),
                         "exhibit_id": exhibit_id.strip(),
+                        "edit_id": secrets.token_hex(16),
                     })
                 elif phase == "second_scan_confirmed":
-                    if (
-                        RFID_WORKFLOW["phase"] != "ready_to_confirm"
-                        or RFID_WORKFLOW["uid"] != uid.upper()
-                    ):
-                        self.send_json(409, {"error": "The second scan is not confirmed by staff."})
-                        return
-                    RFID_WORKFLOW.update({
-                        "phase": "idle",
-                        "uid": uid.upper(),
-                    })
-                    RFID_WORKFLOW["exhibit_id"] = None
+                    self.send_json(409, {"error": "The workflow now finishes when staff marks the update complete; a second scan is not used."})
+                    return
                 record = {
                     "uid": uid.upper(),
                     "result": result,
@@ -947,10 +1005,118 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     self.send_json(409, {"error": "The ESP32 has not assigned an exhibit ID."})
                     return
                 RFID_WORKFLOW.update({
-                    "phase": "ready_to_confirm",
+                    "phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None,
                 })
                 workflow = dict(RFID_WORKFLOW)
             self.send_json(200, {"data": workflow})
+            return
+
+        if path == "/api/rfid/publish-description":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if content_length <= 0 or content_length > MAX_RFID_EVENT_SIZE:
+                    raise ValueError("Invalid request length")
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Invalid description request."})
+                return
+            if not isinstance(payload, dict):
+                self.send_json(400, {"error": "Invalid description request."})
+                return
+            edit_id = payload.get("edit_id")
+            exhibit_id = payload.get("exhibit_id")
+            description = payload.get("description")
+            if (not isinstance(exhibit_id, str) or not exhibit_id.strip() or len(exhibit_id) > 100
+                    or not isinstance(description, str) or not re.fullmatch(r"[\x20-\x7e]{1,180}", description)
+                    or not description.strip()):
+                self.send_json(400, {"error": "Select an exhibit and enter 1–180 printable English characters."})
+                return
+            with RFID_EVENT_LOCK:
+                if (RFID_WORKFLOW["phase"] != "pending_edit"
+                        or not isinstance(edit_id, str) or edit_id != RFID_WORKFLOW["edit_id"]):
+                    self.send_json(409, {"error": "This RFID edit session has ended. Scan a card again."})
+                    return
+                temp_path = EPAPER_DESCRIPTION_FILE.with_name(EPAPER_DESCRIPTION_FILE.name + "." + secrets.token_hex(8) + ".tmp")
+                try:
+                    temp_path.write_text(json.dumps({"exhibit_id": exhibit_id, "description": description}), encoding="utf-8")
+                    os.replace(temp_path, EPAPER_DESCRIPTION_FILE)
+                except OSError:
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    self.send_json(500, {"error": "Could not save the e-paper description."})
+                    return
+                RFID_WORKFLOW.update({"phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None})
+                EPAPER_DELIVERED_DESCRIPTION = None
+                workflow = dict(RFID_WORKFLOW)
+            self.send_json(200, {"data": workflow})
+            return
+
+        if path == "/api/rfid/epaper-delivery":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if content_length <= 0 or content_length > 180:
+                    raise ValueError("Invalid description length")
+                description = self.rfile.read(content_length).decode("ascii")
+            except (ValueError, UnicodeDecodeError):
+                self.send_json(400, {"error": "Invalid e-paper delivery confirmation."})
+                return
+            if not re.fullmatch(r"[\x20-\x7e]{1,180}", description):
+                self.send_json(400, {"error": "Invalid e-paper delivery confirmation."})
+                return
+            with RFID_EVENT_LOCK:
+                try:
+                    current = read_epaper_description()
+                except FileNotFoundError:
+                    self.send_json(409, {"error": "No description is awaiting delivery."})
+                    return
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(500, {"error": "Could not read the saved e-paper description."})
+                    return
+                if current != description:
+                    self.send_json(409, {"error": "The saved description has changed."})
+                    return
+                EPAPER_DELIVERED_DESCRIPTION = description
+            self.send_json(200, {"data": {"state": "confirmed"}})
+            return
+
+        if path == "/api/technology/agree-terms":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(400, {"error": "Invalid request length."})
+                return
+            if content_length <= 0 or content_length > 8192:
+                self.send_json(400, {"error": "Enter the Cloudflare Account ID and API token first."})
+                return
+            try:
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(400, {"error": "Enter the Cloudflare Account ID and API token first."})
+                return
+            account_id = payload.get("account_id") if isinstance(payload, dict) else None
+            api_token = payload.get("api_token") if isinstance(payload, dict) else None
+            if not isinstance(account_id, str) or not re.fullmatch(r"[a-fA-F0-9]{32}", account_id):
+                self.send_json(400, {"error": "Enter a valid 32-character Cloudflare Account ID."})
+                return
+            if not isinstance(api_token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,4096}", api_token):
+                self.send_json(400, {"error": "Enter a valid Cloudflare API token."})
+                return
+            try:
+                status, response = cloudflare_request(
+                    vision_endpoint(account_id),
+                    api_token,
+                    {"prompt": "agree"},
+                    timeout=30,
+                )
+                if not 200 <= status < 300 or not response.get("success"):
+                    raise RuntimeError(
+                        f"Cloudflare Workers AI rejected the model terms (HTTP {status}). "
+                        "Check your account, token permissions and model access."
+                    )
+            except RuntimeError as error:
+                self.send_json(502, {"error": str(error)})
+                return
+            self.send_json(200, {"data": {"agreed": True}})
             return
 
         if path != "/api/technology/generate-exhibit":
@@ -970,9 +1136,13 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return
 
         try:
+            body = self.rfile.read(content_length)
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json":
+                self.send_json(200, {"data": process_tripo_request(body)})
+                return
             image, account_id, api_token, task, stage, previous_parts = parse_multipart_request(
                 self.headers.get("Content-Type", ""),
-                self.rfile.read(content_length),
+                body,
             )
             if task == "threejs_group":
                 generated = (
@@ -995,7 +1165,6 @@ class StudioHandler(SimpleHTTPRequestHandler):
             self.send_json(error.status, {"error": str(error)})
         except RuntimeError as error:
             self.send_json(502, {"error": str(error)})
-
 
 
 def main():

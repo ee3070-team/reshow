@@ -51,6 +51,19 @@
   border-radius: 0;
   background: #000;
 }
+.technology-viewer:fullscreen,
+.technology-viewer.is-pseudo-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+.technology-viewer.is-pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
 .technology-viewer.is-four-view > .technology-four-view {
   object-fit: contain;
 }
@@ -72,6 +85,16 @@
   color: var(--muted);
   font-size: 13px;
 }
+.technology-settings > summary {
+  color: var(--navy);
+  cursor: pointer;
+  font-weight: 600;
+}
+.technology-settings-content {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
 .technology-import {
   display: grid;
   gap: 7px;
@@ -86,6 +109,9 @@
   color: var(--navy);
   font-size: 13px;
   font-weight: 600;
+}
+.technology-field[hidden] {
+  display: none;
 }
 .technology-field input {
   max-width: 100%;
@@ -164,32 +190,6 @@
   font-size: 13px;
   font-weight: 400;
 }
-.technology-hunyuan-credentials {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: #f8fafc;
-}
-.technology-hunyuan-credentials[hidden] {
-  display: none;
-}
-.technology-hunyuan-credentials > p {
-  color: var(--muted);
-  font-size: 12px;
-}
-.technology-hunyuan-results {
-  display: grid;
-  gap: 8px;
-}
-.technology-hunyuan-results a {
-  width: fit-content;
-  color: var(--teal-dark);
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
 .technology-token-input {
   display: flex;
   align-items: center;
@@ -249,6 +249,18 @@
 }
 .technology-rfid .actions {
   flex-wrap: wrap;
+}
+.technology-rfid form {
+  display: grid;
+  gap: 10px;
+}
+.technology-rfid form select,
+.technology-rfid form textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #9caac0;
+  border-radius: 5px;
+  font: inherit;
 }
 .rfid-phase-guide {
   display: grid;

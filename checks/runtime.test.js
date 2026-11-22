@@ -33,35 +33,29 @@ test("3D studio supports fullscreen four-view playback", async () => {
   assert.match(styles, /\.technology-fullscreen-exit/);
 });
 
-test("3D generation supports Workers AI and Tencent without changing JSON generation", async () => {
+test("studio retains JSON and Tripo generation without Workers AI 3D generation", async () => {
   const showcase = await readFile("js/pages/technology-showcase.js", "utf8");
   assert.match(showcase, /Image-to-JSON assistant/);
-  assert.match(showcase, /Image-to-3D assistant/);
-  assert.match(showcase, /data-generate-3d[^>]*>Generate Three\.js Group/);
-  assert.match(showcase, /data-3d-provider/);
-  assert.match(showcase, /Tencent Hunyuan 3D Rapid/);
-  assert.match(showcase, /HUNYUAN_SUBMIT_PATH/);
-  assert.match(showcase, /HUNYUAN_QUERY_PATH/);
-  assert.match(showcase, /data-hunyuan-secret-key/);
-  assert.match(showcase, /serializeJson\(\{/);
+  assert.match(showcase, /Tripo 3D generation/);
+  assert.match(showcase, /data-tripo-retexture/);
+  assert.match(showcase, /data-tripo-source/);
+  assert.doesNotMatch(showcase, /data-tripo-mode|Text to 3D/);
+  assert.doesNotMatch(showcase, /Image-to-3D assistant|data-generate-3d|data-model-chat|threejs_group/);
+  assert.doesNotMatch(showcase, /data-agree-terms|\/api\/technology\/agree-terms/);
+  assert.doesNotMatch(showcase, /Gemini|data-gemini/);
   const jsonGenerationStart = showcase.indexOf("generateButton.addEventListener(");
-  const jsonGenerationEnd = showcase.indexOf("image3DGenerate.addEventListener(");
+  const jsonGenerationEnd = showcase.indexOf("const rfidStatus");
   assert.ok(jsonGenerationStart >= 0 && jsonGenerationEnd > jsonGenerationStart);
   const jsonGeneration = showcase.slice(jsonGenerationStart, jsonGenerationEnd);
   assert.match(jsonGeneration, /data\.append\("api_token", apiToken\)/);
   assert.doesNotMatch(jsonGeneration, /data\.append\("task"/);
-  assert.match(showcase, /data\.append\("task", "threejs_group"\)/);
-  assert.match(showcase, /data\.append\("stage", stage\.name\)/);
-  assert.match(showcase, /data\.append\("previous_parts", JSON\.stringify\(completedParts\)\)/);
-  assert.match(showcase, /applyGeneratedModel\(result\.data\.parts, stage\.minimumParts\)/);
-  assert.match(showcase, /for \(const \[index, stage\] of stages\.entries\(\)\)/);
-  assert.match(showcase, /result\.data\.stage !== stage\.name/);
-  const modelGenerationStart = showcase.indexOf("image3DGenerate.addEventListener(");
-  const modelGenerationEnd = showcase.indexOf("const rfidStatus");
-  assert.ok(modelGenerationStart >= 0 && modelGenerationEnd > modelGenerationStart);
-  const modelGeneration = showcase.slice(modelGenerationStart, modelGenerationEnd);
-  assert.match(modelGeneration, /!loadedImage \|\| !selectedImage/);
-  assert.match(modelGeneration, /context\.drawImage\(loadedImage,/);
-  assert.match(showcase, /data-image-3d-status/);
-  assert.match(showcase, /hunyuanSecretKey\.value = ""/);
+});
+
+test("RFID panel explains door and e-paper card roles", async () => {
+  const showcase = await readFile("js/pages/technology-showcase.js", "utf8");
+  assert.match(showcase, /<dt>Door card<\/dt><dd>Opens the door for about 3 seconds/);
+  assert.match(showcase, /<dt>E-paper card<\/dt><dd>Does not open the door/);
+  assert.match(showcase, /updates the e-paper automatically\. No second tap is needed/);
+  assert.match(showcase, /data-rfid-edit/);
+  assert.match(showcase, /data-rfid-description/);
 });

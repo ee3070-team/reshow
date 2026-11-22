@@ -209,9 +209,16 @@ In `server.py`:
 - `do_GET()` handles workflow-status and latest-event requests
 - `do_POST()` receives RFID events and staff-ready requests
 
+For the current local workflow, see the [RFID state machine](rfid-state-machine.svg).
+Older two-scan descriptions below are historical and do not describe the current
+Mega and ESP32 demo.
+
 The 3D & AI studio includes **Send example RFID event** and **GET latest RFID
 event** buttons for testing this same-shaped POST/GET pair against the local
-server. The example event is only a demo and does not change `phase`.
+server. It also has **Test door card** and **Test e-paper card** buttons. These
+simulated events change the shared workflow state but do not operate hardware;
+use them only when no real workflow is in progress. To test the flow, press door
+or e-paper, then mark the manual update finished.
 
 ## Small vocabulary
 

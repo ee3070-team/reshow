@@ -26,6 +26,8 @@ Use the same origin/port to keep saved demo records. Data is stored in that brow
 - **Staff access:** sign in through Cognito for live website account administration. An Administrator can manage live invitations, roles and account status. The separate expandable browser-local demo edits sample staff/cards and historical accepted/denied attempts; these sample roles and cards do not grant live website access.
 - **3D & AI studio:** explore and adjust the 3D model, import a `.glb` or a trusted JavaScript module exporting a `THREE.Group`, `THREE.Object3D`, or `THREE.Scene`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
 
+Expand or collapse **Model settings** to show or hide model import, zoom, lighting, and rotation speed controls. Use the X and Y rotation speed sliders to change how many radians the bunny or currently loaded model rotates per animation frame. Set an axis to zero to stop it, or use a negative value to reverse it. The pause/resume button, dragging the viewer, and the front/side/back camera buttons remain available.
+
 Three.js module imports use this ES module contract:
 
 ```js
@@ -41,40 +43,32 @@ Alternatively, export the object as `createModel`, `createGroup`, `default`, or
 module executes in the browser. `.ts` files are not directly executed by the
 canvas; compile TypeScript to JavaScript first.
 
-The **3D & AI studio** tab keeps exhibit JSON generation in the **Image-to-JSON assistant** and model generation in the nested **Image-to-3D assistant**. Both use the image selected in the Image-to-JSON assistant. Workers AI remains the default 3D provider and uses the Cloudflare Account ID and API token above to build a Three.js Group in three passes. Alternatively, select **Tencent Hunyuan 3D Rapid**, enter a Tencent SecretId/SecretKey, and choose a supported region. The API submits one image-only GLB job, then the tab polls its status; Tencent may charge for each generated model. Credentials are sent in POST bodies to the ReShow API for the current request only, never stored in browser storage or written to disk. Production requests use CloudFront HTTPS and the API does not cache or log request bodies. The Hunyuan result link may download a ZIP; extract its GLB file and import it in the 3D model studio. Use a Tencent sub-account with only the required Hunyuan permissions, and do not share or commit its keys.
+The **3D & AI studio** tab keeps exhibit JSON generation in the **Image-to-JSON assistant**. The separate **Tripo 3D generation** section accepts a Tripo API key for the current page session. It sends the key and prompt or selected image to the same-origin API, which forwards them to Tripo; they are not saved. Use only HTTPS or localhost, and do not paste the key into chat or source code. The key is held in the browser while the page is open, not exclusively on the server.
 
-For Workers AI, the browser builds the `THREE.Group` from validated primitive shapes without executing AI-generated JavaScript. Three passes use three Workers AI requests; free allowance and any charges depend on the Cloudflare plan. Enable the `@cf/meta/llama-3.2-11b-vision-instruct` model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. Images are processed in memory and are not saved.
+Tripo generates a standard textured PBR model from the selected image (currently about $0.30 per task). After the image task succeeds, its ID is filled in as the source for text-guided retexturing (currently about $0.10 per task). You can enter a previous image-generation task ID as the source; keep that ID for further retexturing, since a retexture task has its own ID. Check [Tripo API pricing](https://developers.tripo3d.ai/en/pricing) before submitting; prices may change. The resulting GLB is loaded into the viewer when possible, and a temporary download link is provided. If direct loading fails, download and import the GLB. Model links expire after about five minutes. Generation continues if the page closes; retain the task ID and use **Check existing task** rather than submitting again. If submission fails before an ID is received, check Tripo task history before retrying because the request may already have been accepted. API credits and payment are separate from an App Store subscription.
+
+For Workers AI, enable the `@cf/meta/llama-3.2-11b-vision-instruct` model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. Images are processed in memory and are not saved.
 
 There is no Settings tab or remote unlock action. Layouts target desktop widths of 1280, 1440 and 1920 pixels. Exhibit illustrations are local editable SVG assets; model metadata in the Exhibits tab is illustrative.
 
-## RFID two-scan exhibit-change workflow
+## Local RFID exhibit-change workflow
 
-The RFID hardware is implemented in [hardware/hardware.ino](hardware/hardware.ino).
-ESP32 reads the card UID directly. With Wi-Fi enabled, it does not need a computer
-or USB serial bridge. The simple data flow is:
+The [Mega sketch](hardware_updated/hardware_updated_RFID_lock/hardware_updated_RFID_lock.ino)
+reads cards and controls the relay and e-paper; the [ESP32 bridge](NO-PUSH-explaination/wifi_updated/wifi_updated_RFID/wifi_updated_RFID.ino)
+sends events to the local server:
 
 ```text
-RFID card -> ESP32 -> Wi-Fi -> server
-                           -> database
+RFID card -> Mega -> ESP32 -> Wi-Fi -> local server
+                  <- ESP32 <- RFID status
 ```
 
-The ESP32 currently needs four configuration values:
-
-```cpp
-const char wifiSsid[] = "YOUR_WIFI_NAME";
-const char wifiPassword[] = "YOUR_WIFI_PASSWORD";
-const char serverUrl[] = "https://server.example/api/rfid/access-event";
-const char rfidStatusUrl[] = "https://server.example/api/rfid/status";
-```
-
-`allowedRfidUid` contains the card allowed to open and confirm the change. The
-remaining relay pins and reader pins are defined near the top of the Arduino sketch.
+Configure card roles in the Mega sketch's `rfid_cards.h` and the ESP32's Wi-Fi and local RFID URL in the bridge sketch.
 
 For local testing, ESP32 and the computer running `server.py` can be on the same
 ordinary Wi-Fi or phone hotspot:
 
 ```text
-ESP32 -> http://computer-ip:8000 -> server.py -> rfid-events.jsonl
+ESP32 -> http://computer-ip:8000 -> server.py
 ```
 
 For cloud testing, ESP32 should call HTTPS CloudFront/Lambda APIs. `server.py` is
@@ -84,8 +78,8 @@ GET and POST have different jobs:
 
 | Method | Meaning | ReShow RFID use |
 |---|---|---|
-| GET | Read current status | ESP32 polls `/api/rfid/status` |
-| POST | Submit a new event or command | ESP32 posts scans; staff posts staff-ready confirmation |
+| GET | Read saved description or status | ESP32 periodically reads `/api/rfid/epaper-description`; an e-paper scan reads status if no description has been saved |
+| POST | Submit a new event or command | ESP32 posts scans; the webpage saves a description or finishes the workflow |
 
 A GET request should not itself change an exhibit. A POST request should validate
 the card, phase, exhibit and revision before changing server state.
@@ -94,37 +88,38 @@ The school network may use enterprise or captive-portal authentication that ESP3
 cannot use directly. A phone hotspot or normal router is easier for local testing.
 Do not commit Wi-Fi passwords or device secrets to GitHub.
 
-See the simple illustrated walkthrough in
-[NO-PUSH-explaination.md](NO-PUSH-explaination/NO-PUSH-explaination.md), and its
-flow diagram at [rfid-two-scan.svg](NO-PUSH-explaination/rfid-two-scan.svg).
+The local workflow uses one start scan:
 
-The ESP32 RFID sketch can protect exhibit changes with two card scans:
+![RFID state machine](NO-PUSH-explaination/rfid-state-machine.svg)
 
 ```text
-First accepted scan
-  -> ESP32 opens the door
+Door card or e-paper card
+  -> door card triggers the Mega relay for 3 seconds
+  -> e-paper card does not trigger the relay; both RGB LEDs turn green for about 1 second
   -> server state: pending_edit
 
-Staff member manually edits and confirms the exhibit
-  -> POST /api/rfid/staff-ready
-  -> server state: ready_to_confirm
-
-Second accepted scan
-  -> ESP32 checks server state
-  -> ESP32 closes the door
-  -> server state: idle / confirmed
+Staff selects an existing exhibit in the RFID panel and edits its description
+  -> Save description and finish
+  -> server state: idle
+  -> ESP32 polls the server and sends the description to the Mega
+  -> e-paper updates automatically (no second scan)
 ```
 
-ESP32 events are sent to `POST /api/rfid/access-event`. The ESP32 polls `GET /api/rfid/status` once per second for staff confirmation. The staff-ready request identifies the exhibit and revision:
+The green LEDs confirm that the Mega recognized an e-paper card locally, not that the server or e-paper has updated. Normal lighting resumes after the indication.
 
-```json
-{
-  "exhibit_id": "ex-014",
-  "revision": 12
-}
-```
+The description must be 1–180 printable English characters; the current display font does not support Chinese. The website stores the exhibit profile in browser-local demo storage. The server separately persists the most recently published e-paper description in a local ignored file; if server publication fails after the profile is saved, the page reports the partial failure and the description can be retried while the session is pending. The fixed hardware exhibit ID is not a website exhibit ID, so staff must explicitly select the correct website exhibit.
 
-The allowed RFID UID is defined in [hardware/hardware.ino](hardware/hardware.ino). The first scan is not confirmation: the server remains in `pending_edit` until staff sends `/api/rfid/staff-ready`, and the second scan is required to close the door and finish confirmation. The local workflow is stored in server memory and is reset when the server restarts. It is not yet a staff-authenticated production API, and it must not be exposed without real authorization.
+The ESP32 checks the saved description about every 10 seconds, forwards changes to the Mega, and retries if the update fails; unchanged text is not repeatedly displayed. The Mega acknowledges after updating the display, and the ESP32 reports that confirmation to the server. The webpage shows whether confirmation is still pending or was last received; this is not a live connection or visual check. If either board restarts, the ESP32 sends the saved text again. Before any description is saved, the e-paper card displays the workflow status instead. **Mark manual update finished** and a configured `edit` card still finish a pending edit without publishing a description. Subsequent start scans during a pending edit do not replace the active workflow, although a door card still triggers the relay locally. The local workflow and confirmation are stored in server memory and reset when the server restarts; the saved description survives a server restart and is confirmed again by the ESP32. It is not an authenticated production API; use only a trusted network.
+
+For local testing without cards, the **3D & AI studio** RFID panel has **Test door card** and **Test e-paper card** buttons. Press either, select an exhibit, and save its description; the status moves from `idle` to `pending_edit` and back to `idle`. These simulated taps change shared server state but do not operate hardware. Restart the local server and upload both updated Mega and ESP32 sketches before testing the physical display. The ESP32 must use the computer's current reachable LAN address in its RFID URL.
+
+The [Mega RFID-lock sketch](hardware_updated/hardware_updated_RFID_lock/hardware_updated_RFID_lock.ino) also shows a startup test on a GDEH0154D67 e-paper display, then puts it to sleep. Install **GxEPD2** and **Adafruit GFX Library** in Arduino Library Manager, in addition to the sketch's existing libraries. Connect CS=43, DC=41, RST=39, BUSY=37, DIN=MOSI=51, and CLK=SCK=52; share ground. RFID and e-paper share SPI but use separate chip selects. Before connecting a 5 V Mega, verify that the specific Waveshare driver board supports 5 V signals and supply; older boards require 3.3 V and level shifting.
+
+The Mega sketch also supports an I2C SSD1306 128x64 OLED for local temperature and relative light readings and warnings, rotated 90 degrees counterclockwise. `T` is temperature and `L` is relative light. Install **Adafruit SSD1306** and **Adafruit GFX Library** using Arduino Library Manager. Connect SDA to Mega SDA (pin 20), SCL to SCL (pin 21), and ground to ground. Check the OLED module's supply and I2C voltage requirements before wiring: a 3.3 V-only module needs appropriate power and level shifting for the Mega. The sketch checks addresses 0x3C and 0x3D and reports initialization errors in the 115200 baud serial monitor. Readings and warnings refresh with the existing sensor sampling interval (currently 30 seconds); warnings use the existing fixed limits immediately, not the proposal's sustained-duration logic.
+
+For the local server demonstration, an `epaper` card sends an event then requests the current server RFID phase. The ESP32 returns that phase to the Mega, which displays it on the e-paper; this is a status demonstration, not exhibit data. A card with an empty role is denied. Connect Mega TX2 (pin 16) through a 5 V-to-3.3 V level shifter to ESP32 GPIO18, ESP32 GPIO17 to Mega RX2 (pin 17), and common ground; level-shift the latter to 5 V for guaranteed Mega input levels. Upload both sketches, configure the ESP32 RFID URL to the computer's LAN IP, and run `server.py --bind 0.0.0.0` only on a trusted network; the local RFID API has no production authentication. Allow the chosen port through the firewall if necessary. Restart the local server after code changes.
+
+For the `wifi` card in the Mega sketch, upload both that sketch and the ESP32 RFID bridge. A scan queues a fixed test message without the UID for POST to the bridge's httpbin URL, not the ReShow RFID endpoint or door relay. View the ESP32 serial monitor at 115200 baud for the HTTP status and echoed response; queued events are processed at most once per 10 seconds, and a disconnected network or earlier failed event can delay the test. The public HTTP endpoint is unencrypted: never send secrets or private information. httpbin echoes the POST immediately; it does not save it for a later GET.
 
 For cloud testing, the ESP32 constants use:
 
@@ -144,7 +139,7 @@ The backend team should implement the following before allowing ESP32 to use the
 1. Add `GET /api/rfid/status` and return the current workflow state.
 2. Add `POST /api/rfid/access-event` and validate the RFID UID, scan phase, card permission and device identity.
 3. Add `POST /api/rfid/staff-ready` only for authenticated staff with permission to edit the exhibit.
-4. Store `pending_edit`, `ready_to_confirm`, exhibit ID, revision and card UID in a database such as DynamoDB.
+4. Store the workflow state, exhibit ID, revision and card UID in a database such as DynamoDB.
 5. Use the database for confirmation instead of a Python process-local variable, so Lambda and server restarts do not lose the workflow.
 6. Require staff authentication for staff-ready actions; plain RFID UID alone must not change an exhibit or grant website access.
 7. Verify the ESP32 as a registered device. Do not keep a shared device secret in public browser JavaScript or GitHub.

@@ -9,19 +9,13 @@ from pathlib import Path
 import re
 
 from server import (
-    HUNYUAN_QUERY_PATH,
-    HUNYUAN_SUBMIT_PATH,
-    MAX_HUNYUAN_QUERY_SIZE,
     MAX_REQUEST_SIZE,
     UploadError,
     generate_exhibit,
     generate_model_group,
     generate_model_group_step,
-    parse_hunyuan_multipart,
-    parse_hunyuan_query,
     parse_multipart_request,
-    query_hunyuan_job,
-    submit_hunyuan_job,
+    process_tripo_request,
 )
 
 GENERATE_PATH = "/api/technology/generate-exhibit"
@@ -75,6 +69,8 @@ def generate(event):
         checksum = headers.get("x-amz-content-sha256", "")
         if not re.fullmatch(r"[0-9a-f]{64}", checksum) or not hmac.compare_digest(checksum, digest):
             raise UploadError(400, "The image upload checksum is invalid.")
+        if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json":
+            return response(200, {"data": process_tripo_request(body)})
         image, account, token, task, stage, previous_parts = parse_multipart_request(
             headers.get("content-type", ""), body
         )
@@ -96,34 +92,6 @@ def generate(event):
         return response(502, {"error": str(error)})
 
 
-def generate_hunyuan(event, path):
-    headers = {key.lower(): value for key, value in event.get("headers", {}).items()}
-    allowed_origin = os.environ.get("RESHOW_ALLOWED_ORIGIN")
-    if not allowed_origin:
-        return response(503, {"error": "The API origin is not configured."})
-    if headers.get("origin") != allowed_origin:
-        return response(403, {"error": "Use the ReShow website to submit Tencent Hunyuan jobs."})
-    try:
-        body = request_body(event)
-        if path == HUNYUAN_QUERY_PATH and len(body) > MAX_HUNYUAN_QUERY_SIZE:
-            raise UploadError(413, "The Tencent Hunyuan query is too large.")
-        digest = hashlib.sha256(body).hexdigest()
-        checksum = headers.get("x-amz-content-sha256", "")
-        if not re.fullmatch(r"[0-9a-f]{64}", checksum) or not hmac.compare_digest(checksum, digest):
-            raise UploadError(400, "The request checksum is invalid.")
-        if path == HUNYUAN_SUBMIT_PATH:
-            result = submit_hunyuan_job(
-                *parse_hunyuan_multipart(headers.get("content-type", ""), body)
-            )
-        else:
-            result = query_hunyuan_job(*parse_hunyuan_query(body))
-        return response(200, {"data": result})
-    except UploadError as error:
-        return response(error.status, {"error": str(error)})
-    except RuntimeError as error:
-        return response(502, {"error": str(error)})
-
-
 def handler(event, _context):
     method = event.get("requestContext", {}).get("http", {}).get("method")
     path = event.get("rawPath")
@@ -133,8 +101,4 @@ def handler(event, _context):
         if method == "POST":
             return generate(event)
         return response(405, {"error": "Use POST to generate exhibit data."})
-    if path in (HUNYUAN_SUBMIT_PATH, HUNYUAN_QUERY_PATH):
-        if method == "POST":
-            return generate_hunyuan(event, path)
-        return response(405, {"error": "Use POST to submit or query Tencent Hunyuan jobs."})
     return response(404, {"error": "Not found."})

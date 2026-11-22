@@ -51,24 +51,86 @@ def event(body=None, path=lambda_handler.GENERATE_PATH, content_type=CONTENT_TYP
             "isBase64Encoded": True, "body": base64.b64encode(body).decode()}
 
 
-def hunyuan_multipart(secret_id="a" * 36, secret_key="test-tencent-key", region="ap-hongkong", image=IMAGE):
-    body = b""
-    fields = [
-        ("secret_id", secret_id),
-        ("secret_key", secret_key),
-        ("region", region),
-    ]
-    for name, value in fields:
-        body += b'--reshow-test\r\nContent-Disposition: form-data; name="' + name.encode() + b'"\r\n\r\n' + value.encode() + b"\r\n"
-    body += b'--reshow-test\r\nContent-Disposition: form-data; name="image"; filename="image.jpg"\r\nContent-Type: image/jpeg\r\n\r\n' + image + b"\r\n"
-    return body + b"--reshow-test--\r\n"
-
-
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.environment = patch.dict(os.environ, {"RESHOW_ALLOWED_ORIGIN": ORIGIN})
         self.environment.start()
         self.addCleanup(self.environment.stop)
+
+    def test_tripo_retexture_uses_source_task_and_text(self):
+        body = json.dumps({
+            "action": "retexture", "api_key": TOKEN,
+            "source_task_id": "image-task-123", "prompt": "  worn leather  ",
+        }).encode()
+        with patch.object(server, "tripo_request", return_value={"task_id": "task-123"}) as outbound:
+            result = lambda_handler.handler(event(body, content_type="application/json"), None)
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(json.loads(result["body"])["data"], {"task_id": "task-123"})
+        path, token, payload = outbound.call_args.args
+        self.assertEqual(path, "/models/texture")
+        self.assertEqual(token, TOKEN)
+        self.assertEqual(json.loads(payload), {
+            "input": "image-task-123", "texture_prompt": {"text": "worn leather"},
+            "texture_quality": "standard", "pbr": True,
+        })
+
+    def test_tripo_image_upload_and_status(self):
+        body = json.dumps({
+            "action": "image", "api_key": TOKEN,
+            "image": base64.b64encode(IMAGE).decode(),
+        }).encode()
+        with patch.object(server, "tripo_request", side_effect=[
+            {"file_token": "file-123"}, {"task_id": "task-123"},
+        ]) as outbound:
+            result = lambda_handler.handler(event(body, content_type="application/json"), None)
+        self.assertEqual(result["statusCode"], 200)
+        self.assertEqual(outbound.call_args_list[0].args[0], "/files")
+        self.assertIn(IMAGE, outbound.call_args_list[0].args[2])
+        self.assertEqual(outbound.call_args_list[1].args[0], "/generation/image-to-model")
+        self.assertEqual(json.loads(outbound.call_args_list[1].args[2]), {
+            "model": server.TRIPO_MODEL, "input": "file-123", "texture": True,
+            "pbr": True, "texture_quality": "standard",
+        })
+        body = json.dumps({"action": "status", "api_key": TOKEN, "task_id": "task-123"}).encode()
+        reply = {"status": "success", "type": "image_to_model", "progress": 100, "credits_consumed": 30,
+                 "output": {"model_url": "https://cdn.tripo3d.ai/model.glb"}}
+        with patch.object(server, "tripo_request", return_value=reply):
+            result = lambda_handler.handler(event(body, content_type="application/json"), None)
+        self.assertEqual(json.loads(result["body"])["data"]["model_url"], reply["output"]["model_url"])
+        self.assertEqual(json.loads(result["body"])["data"]["credits_consumed"], 30)
+        self.assertEqual(json.loads(result["body"])["data"]["type"], "image_to_model")
+
+    def test_tripo_rejects_bad_inputs_and_untrusted_result_urls(self):
+        for request in [
+            {"action": "text", "api_key": TOKEN, "prompt": "A rabbit"},
+            {"action": "image", "api_key": TOKEN, "image": "not-base64"},
+            {"action": "status", "api_key": TOKEN, "task_id": "../account"},
+            {"action": "retexture", "api_key": TOKEN, "source_task_id": "../account", "prompt": "gold"},
+            {"action": "retexture", "api_key": TOKEN, "source_task_id": "task-123", "prompt": " "},
+            {"action": "retexture", "api_key": TOKEN, "source_task_id": "task-123", "prompt": "x" * 1025},
+        ]:
+            with self.subTest(request=request), patch.object(server, "tripo_request") as outbound:
+                body = json.dumps(request).encode()
+                self.assertEqual(lambda_handler.handler(event(body, content_type="application/json"), None)["statusCode"], 400)
+                outbound.assert_not_called()
+        with patch.object(server, "tripo_request", return_value={
+            "status": "success", "output": {"model_url": "http://example.com/model.glb"},
+        }):
+            body = json.dumps({"action": "status", "api_key": TOKEN, "task_id": "task-123"}).encode()
+            self.assertEqual(lambda_handler.handler(event(body, content_type="application/json"), None)["statusCode"], 502)
+
+    def test_tripo_transport_never_echoes_upstream_secrets_or_follows_redirects(self):
+        opener = unittest.mock.MagicMock()
+        opener.open.side_effect = server.HTTPError(
+            "https://openapi.tripo3d.ai/v3/generation/text-to-model",
+            401, "Bearer " + TOKEN, {}, None,
+        )
+        with patch.object(server, "build_opener", return_value=opener) as build:
+            with self.assertRaises(RuntimeError) as caught:
+                server.tripo_request("/generation/text-to-model", TOKEN, b"{}")
+        self.assertIn("HTTP 401", str(caught.exception))
+        self.assertNotIn(TOKEN, str(caught.exception))
+        self.assertIsInstance(build.call_args.args[0], server.NoRedirects)
 
     def test_real_post_parses_binary_image_and_generates_without_accepting_terms(self):
         with patch.object(server, "cloudflare_request", return_value=(200, {
@@ -170,68 +232,6 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result["statusCode"], 400)
         self.assertIn("3D model step is invalid", result["body"])
         outbound.assert_not_called()
-
-    def test_tencent_hunyuan_submit_sends_glb_image_without_exposing_credentials(self):
-        body = hunyuan_multipart()
-        with patch.object(server, "hunyuan_api_request", return_value={"JobId": "job-123"}) as outbound:
-            result = lambda_handler.handler(
-                event(body, path=server.HUNYUAN_SUBMIT_PATH), None
-            )
-        self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(json.loads(result["body"]), {"data": {"job_id": "job-123"}})
-        action, payload, secret_id, secret_key, region = outbound.call_args.args
-        self.assertEqual(action, "SubmitHunyuanTo3DRapidJob")
-        self.assertEqual(payload["ImageBase64"], base64.b64encode(IMAGE).decode("ascii"))
-        self.assertEqual(payload["ResultFormat"], "GLB")
-        self.assertEqual((secret_id, secret_key, region), ("a" * 36, "test-tencent-key", "ap-hongkong"))
-        self.assertNotIn(secret_id, result["body"])
-        self.assertNotIn(secret_key, result["body"])
-
-    def test_tencent_hunyuan_query_returns_only_safe_result_links(self):
-        body = json.dumps({
-            "job_id": "job-123",
-            "secret_id": "a" * 36,
-            "secret_key": "test-tencent-key",
-            "region": "ap-hongkong",
-        }).encode("utf-8")
-        with patch.object(server, "hunyuan_api_request", return_value={
-            "Status": "DONE",
-            "ResultFile3Ds": [
-                {"Type": "GLB", "Url": "https://models.example/result.zip"},
-                {"Type": "GLB", "Url": "javascript:alert(1)"},
-            ],
-        }) as outbound:
-            result = lambda_handler.handler(
-                event(
-                    body,
-                    path=server.HUNYUAN_QUERY_PATH,
-                    content_type="application/json",
-                ),
-                None,
-            )
-        self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(json.loads(result["body"])["data"], {
-            "job_id": "job-123",
-            "status": "DONE",
-            "files": [{"url": "https://models.example/result.zip", "type": "GLB"}],
-        })
-        self.assertEqual(outbound.call_args.args[0], "QueryHunyuanTo3DRapidJob")
-
-    def test_tencent_tc3_request_signs_fixed_endpoint_without_sending_the_secret_key(self):
-        request = server.build_hunyuan_request(
-            "SubmitHunyuanTo3DRapidJob",
-            {"ImageBase64": "dGVzdA==", "ResultFormat": "GLB"},
-            "a" * 36,
-            "test-tencent-key",
-            "ap-hongkong",
-            timestamp=1700000000,
-        )
-        self.assertEqual(request.full_url, "https://hunyuan.intl.tencentcloudapi.com/")
-        self.assertEqual(request.get_header("X-tc-action"), "SubmitHunyuanTo3DRapidJob")
-        self.assertEqual(request.get_header("X-tc-region"), "ap-hongkong")
-        self.assertIn("Credential=" + "a" * 36, request.get_header("Authorization"))
-        self.assertNotIn("test-tencent-key", request.get_header("Authorization"))
-        self.assertEqual(len(request.get_header("Authorization").rsplit("Signature=", 1)[1]), 64)
 
     def test_workers_ai_rejects_invalid_threejs_group_parts(self):
         valid_part = {
@@ -474,8 +474,17 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         cls.httpd.server_close()
 
     def setUp(self):
+        self.epaper_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.epaper_dir.cleanup)
+        patcher = patch.object(server, "EPAPER_DESCRIPTION_FILE", Path(self.epaper_dir.name) / "description.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         with server.RFID_EVENT_LOCK:
             server.RFID_LATEST_DEVICE_EVENT = None
+            server.EPAPER_DELIVERED_DESCRIPTION = None
+            server.RFID_WORKFLOW.update({
+                "phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None,
+            })
 
     def request(self, method, path, body=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -486,47 +495,6 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         result = response.status, json.loads(response.read())
         connection.close()
         return result
-
-    def test_local_hunyuan_submit_requires_same_origin_and_routes_to_tencent(self):
-        body = hunyuan_multipart()
-        with patch.object(server, "hunyuan_api_request", return_value={"JobId": "local-job"}) as outbound:
-            connection = http.client.HTTPConnection(
-                "127.0.0.1", self.port, timeout=5
-            )
-            connection.request(
-                "POST",
-                server.HUNYUAN_SUBMIT_PATH,
-                body=body,
-                headers={
-                    "Content-Type": CONTENT_TYPE,
-                    "Origin": f"http://127.0.0.1:{self.port}",
-                },
-            )
-            response = connection.getresponse()
-            status, result = response.status, json.loads(response.read())
-            connection.close()
-        self.assertEqual(status, 200)
-        self.assertEqual(result["data"]["job_id"], "local-job")
-        outbound.assert_called_once()
-
-        with patch.object(server, "hunyuan_api_request") as outbound:
-            connection = http.client.HTTPConnection(
-                "127.0.0.1", self.port, timeout=5
-            )
-            connection.request(
-                "POST",
-                server.HUNYUAN_SUBMIT_PATH,
-                body=body,
-                headers={
-                    "Content-Type": CONTENT_TYPE,
-                    "Origin": "https://attacker.example",
-                },
-            )
-            response = connection.getresponse()
-            self.assertEqual(response.status, 403)
-            response.read()
-            connection.close()
-        outbound.assert_not_called()
 
     def test_local_server_generates_and_routes_threejs_group_task(self):
         parts = [
@@ -587,6 +555,136 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         })
         self.assertEqual(status, 400)
         self.assertEqual(self.request("GET", "/api/rfid/device-event"), (200, accepted))
+
+    def test_device_card_roles_drive_local_workflow(self):
+        denied = {"type": "rfid_event", "uid": "DEADBEEF", "result": "denied"}
+        self.assertEqual(self.request("POST", "/api/rfid/device-event", denied), (200, denied))
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
+        for role in ("door", "epaper"):
+            card = {
+                "type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": role,
+            }
+            self.assertEqual(self.request("POST", "/api/rfid/device-event", card), (200, card))
+            workflow = self.request("GET", "/api/rfid/status")[1]["data"]
+            self.assertEqual(workflow["phase"], "pending_edit")
+            self.assertEqual(workflow["uid"], card["uid"])
+            self.assertEqual(workflow["exhibit_id"], "helmet-001")
+            self.assertTrue(workflow["edit_id"])
+            other = {**card, "uid": "11223344"}
+            self.assertEqual(self.request("POST", "/api/rfid/device-event", other), (200, other))
+            self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["uid"], card["uid"])
+            status, response = self.request("POST", "/api/rfid/staff-ready", {})
+            self.assertEqual((status, response["data"]), (200, {
+                "phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None,
+            }))
+            self.assertEqual(self.request("POST", "/api/rfid/staff-ready", {})[0], 409)
+
+    def test_edit_card_finishes_pending_workflow(self):
+        door = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": "door"}
+        edit = {**door, "uid": "AABBCCDD", "role": "edit"}
+        self.request("POST", "/api/rfid/device-event", door)
+        self.assertEqual(self.request("POST", "/api/rfid/device-event", edit), (200, edit))
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
+
+    def test_legacy_second_scan_cannot_finish_update(self):
+        door = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": "door"}
+        self.request("POST", "/api/rfid/device-event", door)
+        legacy = {"uid": door["uid"], "result": "accepted", "door": "closed",
+                  "phase": "second_scan_confirmed", "exhibit_id": "helmet-001"}
+        self.assertEqual(self.request("POST", "/api/rfid/access-event", legacy)[0], 409)
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "pending_edit")
+
+    def test_epaper_status_returns_current_phase_as_plain_text(self):
+        door = {
+            "type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+            "exhibit_id": "helmet-001", "role": "door",
+        }
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request("GET", "/api/rfid/epaper-status")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"idle")
+            self.assertEqual(self.request("POST", "/api/rfid/device-event", door), (200, door))
+            connection.request("GET", "/api/rfid/epaper-status")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"pending_edit")
+        finally:
+            connection.close()
+
+    def test_description_is_saved_for_epaper_only_for_current_session(self):
+        card = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": "door"}
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-description")[0], 404)
+        self.request("POST", "/api/rfid/device-event", card)
+        edit_id = self.request("GET", "/api/rfid/status")[1]["data"]["edit_id"]
+        payload = {"edit_id": edit_id, "exhibit_id": "ex-014", "description": "A blue vase."}
+        for invalid in ("", "Hello\nworld", "中文", "x" * 181):
+            self.assertEqual(self.request("POST", "/api/rfid/publish-description", {**payload, "description": invalid})[0], 400)
+        self.assertEqual(self.request("POST", "/api/rfid/publish-description", {**payload, "edit_id": "stale"})[0], 409)
+        self.assertEqual(self.request("POST", "/api/rfid/publish-description", payload)[0], 200)
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
+        self.assertEqual(self.request("POST", "/api/rfid/publish-description", payload)[0], 409)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request("GET", "/api/rfid/epaper-description")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"A blue vase.")
+        finally:
+            connection.close()
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
+        self.request("POST", "/api/rfid/device-event", {**card, "role": "epaper"})
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "pending_edit")
+        self.assertEqual(json.loads(server.EPAPER_DESCRIPTION_FILE.read_text(encoding="utf-8"))["exhibit_id"], "ex-014")
+
+    def test_description_write_failure_does_not_finish_edit(self):
+        card = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": "epaper"}
+        self.request("POST", "/api/rfid/device-event", card)
+        edit_id = self.request("GET", "/api/rfid/status")[1]["data"]["edit_id"]
+        payload = {"edit_id": edit_id, "exhibit_id": "ex-014", "description": "A blue vase."}
+        with patch.object(server.os, "replace", side_effect=OSError("test failure")):
+            self.assertEqual(self.request("POST", "/api/rfid/publish-description", payload)[0], 500)
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["edit_id"], edit_id)
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-description")[0], 404)
+
+    def test_delivery_confirmation_tracks_latest_saved_description(self):
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "not_saved")
+        card = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
+                "exhibit_id": "helmet-001", "role": "epaper"}
+
+        def save(description):
+            self.request("POST", "/api/rfid/device-event", card)
+            edit_id = self.request("GET", "/api/rfid/status")[1]["data"]["edit_id"]
+            return self.request("POST", "/api/rfid/publish-description", {
+                "edit_id": edit_id, "exhibit_id": "ex-014", "description": description,
+            })[0]
+
+        def confirm(description):
+            connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            try:
+                connection.request("POST", "/api/rfid/epaper-delivery", description.encode("ascii"),
+                                   {"Content-Type": "text/plain"})
+                response = connection.getresponse()
+                response.read()
+                return response.status
+            finally:
+                connection.close()
+
+        self.assertEqual(save("Blue vase"), 200)
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "pending")
+        self.assertEqual(confirm("Blue vase"), 200)
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "confirmed")
+        self.assertEqual(save("Green vase"), 200)
+        self.assertEqual(confirm("Blue vase"), 409)
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "pending")
+        self.assertEqual(confirm("Green vase"), 200)
+        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "confirmed")
 
 
 if __name__ == "__main__":
