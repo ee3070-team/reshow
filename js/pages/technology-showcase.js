@@ -1435,7 +1435,7 @@ export async function render(container, ctx) {
     { signal },
   );
 
-  refreshRfidStatus();
+  void refreshRfidStatus();
   rfidPolling = window.setInterval(refreshRfidStatus, 3000);
 
   return () => {
