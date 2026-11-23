@@ -1,0 +1,166 @@
+{
+  "data_kind": "synthetic_demo",
+  "hardware_connected": false,
+  "description": "One hour with overlapping and carry-in activity, confirmed quiet, missing data and partial coverage. All intervals are half-open [start,end). Coverage is an explicit producer completion assertion.",
+  "query": {
+    "event_id": "analytics-event-01",
+    "interval_minutes": 15,
+    "timezone": "Asia/Hong_Kong"
+  },
+  "exhibits": [
+    {
+      "exhibit_id": "analytics-artifact-01",
+      "name": "Synthetic analytics exhibit 1",
+      "description": "Synthetic No. 9 and No. 10 acceptance fixture; no human study or hardware measurement.",
+      "tag_id": "ANALYTICS-TAG-01",
+      "temperature_min_c": 18,
+      "temperature_max_c": 28,
+      "brightness_min_raw": 600,
+      "brightness_max_raw": 3000
+    },
+    {
+      "exhibit_id": "analytics-artifact-02",
+      "name": "Synthetic analytics exhibit 2",
+      "description": "Synthetic No. 9 and No. 10 acceptance fixture; no human study or hardware measurement.",
+      "tag_id": "ANALYTICS-TAG-02",
+      "temperature_min_c": 18,
+      "temperature_max_c": 28,
+      "brightness_min_raw": 600,
+      "brightness_max_raw": 3000
+    }
+  ],
+  "events": [
+    {
+      "event_id": "analytics-event-01",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:00:00Z",
+      "end": "2026-10-25T01:00:00Z",
+      "name": "Synthetic No. 9 and No. 10 demonstration"
+    }
+  ],
+  "proximity-events": [
+    {
+      "proximity_event_id": "analytics-proximity-carry",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-24T23:55:00Z",
+      "end": "2026-10-25T00:05:00Z"
+    },
+    {
+      "proximity_event_id": "analytics-proximity-b",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:03:00Z",
+      "end": "2026-10-25T00:10:00Z"
+    },
+    {
+      "proximity_event_id": "analytics-proximity-c",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:05:00Z",
+      "end": "2026-10-25T00:07:00Z"
+    }
+  ],
+  "display-history": [
+    {
+      "display_id": "analytics-display-01",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:00:00Z",
+      "end": "2026-10-25T00:30:00Z",
+      "exhibit_id": "analytics-artifact-01"
+    },
+    {
+      "display_id": "analytics-display-02",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:30:00Z",
+      "end": "2026-10-25T01:00:00Z",
+      "exhibit_id": "analytics-artifact-02"
+    }
+  ],
+  "warnings": [
+    {
+      "warning_id": "analytics-warning-01",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:08:00Z",
+      "end": "2026-10-25T00:12:00Z",
+      "exhibit_id": "analytics-artifact-01",
+      "warning_type": "temperature",
+      "message": "Synthetic sustained temperature warning supplied for report integration testing."
+    }
+  ],
+  "coverage": [
+    {
+      "coverage_id": "analytics-coverage-01",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:00:00Z",
+      "end": "2026-10-25T00:30:00Z",
+      "streams": [
+        "proximity",
+        "display",
+        "warnings"
+      ]
+    },
+    {
+      "coverage_id": "analytics-coverage-02",
+      "device_id": "analytics-demo-01",
+      "source": "demo",
+      "start": "2026-10-25T00:45:00Z",
+      "end": "2026-10-25T00:50:00Z",
+      "streams": [
+        "proximity",
+        "display",
+        "warnings"
+      ]
+    }
+  ],
+  "expected": {
+    "range_seconds": 3600,
+    "occupied_seconds": 600,
+    "event_starts": 2,
+    "overlapping_events": 3,
+    "coverage_seconds": 2100,
+    "missing_seconds": 1500,
+    "warning_count": 1,
+    "warning_seconds": 240,
+    "display_seconds": 3600,
+    "bucket_statuses": [
+      "recorded_activity",
+      "confirmed_quiet",
+      "missing",
+      "partial"
+    ],
+    "bucket_occupied_seconds": [
+      600,
+      0,
+      null,
+      0
+    ],
+    "bucket_coverage_seconds": [
+      900,
+      900,
+      0,
+      300
+    ],
+    "bucket_event_starts": [
+      2,
+      0,
+      null,
+      0
+    ],
+    "missing_periods": [
+      {
+        "start": "2026-10-25T00:30:00Z",
+        "end": "2026-10-25T00:45:00Z"
+      },
+      {
+        "start": "2026-10-25T00:50:00Z",
+        "end": "2026-10-25T01:00:00Z"
+      }
+    ]
+  }
+}

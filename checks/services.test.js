@@ -1,7 +1,9 @@
-import test from 'node:test';
+import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateActivity, generateReport, saveStaff } from '../js/services.js';
+import { aggregateActivity, generateReport, saveStaff, signIn, getSession, resetDemo } from '../js/services.js';
 import { esc } from '../js/ui.js';
+
+before(() => signIn('sarah.chen@reshow.demo'));
 
 test('activity excludes missing/future observations from totals but counts missing coverage', () => {
   const result = aggregateActivity([
@@ -35,4 +37,28 @@ test('staff email validation accepts normal addresses and rejects malformed boun
   }
   const saved = await saveStaff({ name: 'Validation test', email: 'valid+tag@example.com', role: 'Viewer' });
   assert.equal(saved.email, 'valid+tag@example.com');
+});
+
+test('an expiry during a staff write reports sign-in and preserves the record', async () => {
+  const user = await getSession();
+  const now = Date.now;
+  let time = now();
+  Date.now = () => time;
+  try {
+    const pending = saveStaff({ ...user, role: 'Viewer' });
+    time += 9 * 60 * 60 * 1000;
+    await assert.rejects(pending, /Sign in to continue/);
+    assert.equal(await getSession(), null);
+  } finally {
+    Date.now = now;
+    assert.equal((await signIn('sarah.chen@reshow.demo')).role, 'Administrator');
+  }
+});
+
+test('resetting Demo explicitly ends a custom-account session', async () => {
+  await saveStaff({ name: 'Custom admin', email: 'custom@example.invalid', role: 'Administrator' });
+  await signIn('custom@example.invalid');
+  assert.equal(await resetDemo(), null);
+  assert.equal(await getSession(), null);
+  assert.equal((await signIn('sarah.chen@reshow.demo')).role, 'Administrator');
 });

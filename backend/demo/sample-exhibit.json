@@ -1,0 +1,10 @@
+{
+  "brightness_max_raw": 3000,
+  "brightness_min_raw": 600,
+  "description": "Synthetic demonstration profile.",
+  "exhibit_id": "demo-artifact-01",
+  "name": "ReShow demonstration artifact",
+  "tag_id": "DEMO-TAG-001",
+  "temperature_max_c": 28,
+  "temperature_min_c": 18
+}
