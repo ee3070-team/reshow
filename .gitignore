@@ -38,3 +38,7 @@ Thumbs.db
 
 # Local firmware download bundle; source is tracked for review
 /firmware/*.zip
+
+# Local display dependencies, compiler output and proposal renderings
+/tmp/firmware/
+/tmp/pdfs/

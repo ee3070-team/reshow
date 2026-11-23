@@ -1,5 +1,21 @@
 ReShow: sensors -> Mega 2560 -> ESP32-S3 -> existing AWS API
-Prepared 4 November 2026; review update 10 November 2026, Hong Kong time
+Prepared 4 November 2026; display integration 17 November 2026, Hong Kong time
+
+DISPLAY INTEGRATION UPDATE
+
+Read DISPLAYS.md first for the merged GDEH0154D67 e-paper and SSD1306 OLED
+firmware, additional libraries, exact pins, warning codes and online-label setup.
+The e-paper is on the ESP32-S3; the OLED is on the Mega. RFID is not included.
+The original V1 sensor telemetry format and pins are unchanged.
+
+The API contract rechecked on 17 November now documents a device-scoped hardware
+token for POST /api/device-status and POST /api/readings. The earlier statement
+below that only a demo producer is documented is historical. Label polling and
+acknowledgements STILL need backend permission changes; see DISPLAYS.md.
+
+The following notes describe the original telemetry integration. Their no-extra-
+library and no-label statements are superseded by DISPLAYS.md. Warning limits
+are now in Mega2560_Sensors/WarningState.h, with sustained OLED warning logic.
 
 FILES
 

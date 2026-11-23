@@ -397,4 +397,11 @@ its view is disposed. Both entry shells use revision `20261110-review-1`.
 The firmware ZIP is a local convenience bundle and is not tracked; review and use
 the source under `firmware/ReShow/`.
 
+The merged Mega/ESP firmware now includes the GDEH0154D67 1.54-inch e-paper label
+and SSD1306 OLED warnings, without RFID. See [display wiring and setup](firmware/ReShow/DISPLAYS.md)
+for libraries, warning codes, text limits and the required device-scoped AWS
+label permissions. The existing sensor upload path and frontend label workflow
+are retained. No physical hardware or authenticated cloud delivery is claimed by
+the local build/tests.
+
 The repository test suite also opens the real home and callback shells in headless Chromium, verifying that the sign-in UI renders and normalized relative imports share the same versioned API module. CI requires Chromium; local runs without a browser explicitly skip that one integration test. The test uses a temporary profile and a loopback server restricted to public runtime paths.
