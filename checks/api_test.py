@@ -152,7 +152,7 @@ class ApiTests(unittest.TestCase):
             {"shape": "box" if index % 2 else "cylinder",
              "position": [0, index / 10, 0],
              "scale": [0.5, 0.5, 0.5], "color": "#aabbcc"}
-            for index in range(8)
+            for index in range(7)
         ]
         with patch.object(server, "cloudflare_request", return_value=(200, {
             "success": True, "result": {"response": json.dumps({"parts": parts})},
@@ -161,7 +161,9 @@ class ApiTests(unittest.TestCase):
                 event(multipart(task="threejs_group")), None
             )
         self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(json.loads(result["body"])["data"]["parts"], parts)
+        data = json.loads(result["body"])["data"]
+        self.assertEqual(data["parts"], parts)
+        self.assertFalse(data.get("fallback", False))
         payload = outbound.call_args.args[2]
         self.assertIn("Three.js model", payload["prompt"])
         self.assertEqual(payload["max_tokens"], 900)
@@ -233,7 +235,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("3D model step is invalid", result["body"])
         outbound.assert_not_called()
 
-    def test_workers_ai_rejects_invalid_threejs_group_parts(self):
+    def test_workers_ai_uses_fallback_for_invalid_threejs_group_parts(self):
         valid_part = {
             "shape": "box",
             "position": [0, 0, 0],
@@ -241,17 +243,13 @@ class ApiTests(unittest.TestCase):
             "color": "#aabbcc",
         }
         cases = [
-            [dict(valid_part) for _ in range(7)],
-            [dict(valid_part) for _ in range(8)],
-            [dict(valid_part) for _ in range(8)],
-            [{"shape": "sphere", "position": [0, 0, 0],
-              "scale": [0.5, 0.5, 0.5], "color": "#aabbcc"}
-             for _ in range(8)],
+            ("got 0 parts, expected 1 to 12", []),
+            ("scale out of range", [dict(valid_part, scale=[4, 0.5, 0.5])]),
+            ("shape: run_javascript", [dict(valid_part, shape="run_javascript")]),
+            ("sphere-heavy", [dict(valid_part, shape="sphere") for _ in range(4)]),
         ]
-        cases[1][0]["scale"] = [4, 0.5, 0.5]
-        cases[2][0]["shape"] = "run_javascript"
-        for parts in cases:
-            with self.subTest(parts=parts):
+        for reason, parts in cases:
+            with self.subTest(reason=reason):
                 with patch.object(server, "cloudflare_request", return_value=(200, {
                     "success": True,
                     "result": {"response": json.dumps({"parts": parts})},
@@ -259,10 +257,12 @@ class ApiTests(unittest.TestCase):
                     result = lambda_handler.handler(
                         event(multipart(task="threejs_group")), None
                     )
-                self.assertEqual(result["statusCode"], 502)
-                self.assertIn("3D model", result["body"])
-                if parts is cases[-1]:
-                    self.assertIn("sphere-heavy", result["body"])
+                self.assertEqual(result["statusCode"], 200)
+                data = json.loads(result["body"])["data"]
+                self.assertIs(data["fallback"], True)
+                self.assertEqual(data["parts"], server.FALLBACK_MODEL_PARTS)
+                self.assertEqual(server.validate_model_parts(data["parts"], 1, 12), data["parts"])
+                self.assertIn(reason, data["reason"])
                 outbound.assert_called_once()
 
     def test_parser_rejects_unknown_workers_ai_task(self):
