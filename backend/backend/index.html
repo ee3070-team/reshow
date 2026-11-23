@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReShow EE3070 · Backend API documentation</title>
+<link rel="stylesheet" href="/assets/swagger-ui-5.34.0.css">
+<style>
+body{margin:0;background:#fafafa;color:#172536;font:15px/1.5 system-ui,sans-serif}.intro{background:#102536;color:#f1f6fa;padding:28px max(24px,calc((100vw - 1460px)/2));border-bottom:4px solid #7bd9b3}.intro h1{font-size:26px;margin:0 0 8px}.intro p{max-width:1080px;margin:7px 0;color:#d3e2ee}.intro a{color:#a5eacb}.intro code{background:#1c3a50;padding:2px 5px;border-radius:3px}.intro small{color:#a9c1d3}.swagger-ui .topbar{display:none}#swagger-ui{max-width:1500px;margin:auto}.swagger-ui .info{margin:28px 0}.swagger-ui .scheme-container{background:#fff}.swagger-ui .info .title{font-size:28px}
+</style>
+</head>
+<body>
+<header class="intro">
+<h1>ReShow · EE3070 backend API</h1>
+<p>Cognito staff login and enforced website permissions include Operator exhibit scans and safe exhibition activity for Operators and Viewers, alongside exhibit-filtered reports, current-day cutoffs, private images, immutable report snapshots, and explicit recovery for pending device commands.</p>
+<p>Staff applications use <code>/staff-api</code> with a Cognito <strong>access token</strong>. Synthetic producers use the restricted demo credential. Hardware producers use a private device token for <code>POST /api/device-status</code> and <code>POST /api/readings</code>, with <code>source: "device"</code> and their registered device ID.</p>
+<p>For interactive staff or demo requests, select the matching scheme in <strong>Authorize</strong> and paste its token without the <code>Bearer</code> prefix. Credentials remain in this tab's memory and are cleared on reload. Keep hardware tokens in the hardware producer process.</p>
+<p>Staff image upload uses <code>POST /staff-api/media/upload-requests</code>. Send the returned form to S3 with <code>file</code> last, then call <code>POST /staff-api/media/{media_id}/complete</code> with <code>{}</code>. Use <code>GET /staff-api/media/{media_id}</code> for a fresh signed read URL.</p>
+<p><a href="/openapi.json" download="openapi.json">Download OpenAPI 3.0 JSON</a> · <a href="/auth/config">Public login configuration</a> · <a href="/api/health">Service health</a></p>
+<small>Coverage is a producer completion assertion. Quiet, partial, missing, unknown-assignment and future intervals remain distinct. Occupancy describes zone activity, not visitors. Brightness values are relative percentages or raw ADC units, never lux. Device execution and durable recovery fences require producer implementation. Website permissions and physical cards are separate. The frontend's six demonstration data screens remain local; its live account panel uses staff authentication.</small>
+</header>
+<div id="swagger-ui"></div>
+<noscript>Enable JavaScript to use interactive Swagger UI, or download /openapi.json for your API client.</noscript>
+<script src="/assets/swagger-ui-5.34.0-bundle.js"></script>
+<script>
+'use strict';
+window.ui = SwaggerUIBundle({
+  url: '/openapi.json',
+  dom_id: '#swagger-ui',
+  deepLinking: true,
+  persistAuthorization: false,
+  validatorUrl: null,
+  withCredentials: false,
+  supportedSubmitMethods: ['get', 'post', 'patch', 'put', 'options'],
+  displayRequestDuration: true,
+  tryItOutEnabled: false,
+  docExpansion: 'list',
+  defaultModelsExpandDepth: 1,
+  presets: [SwaggerUIBundle.presets.apis],
+  layout: 'BaseLayout'
+});
+</script>
+</body>
+</html>

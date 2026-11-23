@@ -1,0 +1,134 @@
+[
+  {
+    "brightness_raw": 620,
+    "device_id": "ec2-demo-01",
+    "distance_cm": null,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": false,
+    "reading_id": "demo-01895a1c1f344c9b-001",
+    "recorded_at": "2026-10-26T06:46:03.366000Z",
+    "source": "demo",
+    "temperature_c": 22.2
+  },
+  {
+    "brightness_raw": 1762,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 68,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-002",
+    "recorded_at": "2026-10-26T06:47:03.366000Z",
+    "source": "demo",
+    "temperature_c": 22.8
+  },
+  {
+    "brightness_raw": 1774,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 71,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-003",
+    "recorded_at": "2026-10-26T06:48:03.366000Z",
+    "source": "demo",
+    "temperature_c": 23.2
+  },
+  {
+    "brightness_raw": 1786,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 74,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-004",
+    "recorded_at": "2026-10-26T06:49:03.366000Z",
+    "source": "demo",
+    "temperature_c": 23.4
+  },
+  {
+    "brightness_raw": 644,
+    "device_id": "ec2-demo-01",
+    "distance_cm": null,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": false,
+    "reading_id": "demo-01895a1c1f344c9b-005",
+    "recorded_at": "2026-10-26T06:50:03.366000Z",
+    "source": "demo",
+    "temperature_c": 23.3
+  },
+  {
+    "brightness_raw": 1810,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 80,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-006",
+    "recorded_at": "2026-10-26T06:51:03.366000Z",
+    "source": "demo",
+    "temperature_c": 22.9
+  },
+  {
+    "brightness_raw": 1822,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 83,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-007",
+    "recorded_at": "2026-10-26T06:52:03.366000Z",
+    "source": "demo",
+    "temperature_c": 22.4
+  },
+  {
+    "brightness_raw": 1834,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 86,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-008",
+    "recorded_at": "2026-10-26T06:53:03.366000Z",
+    "source": "demo",
+    "temperature_c": 21.8
+  },
+  {
+    "brightness_raw": 668,
+    "device_id": "ec2-demo-01",
+    "distance_cm": null,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": false,
+    "reading_id": "demo-01895a1c1f344c9b-009",
+    "recorded_at": "2026-10-26T06:54:03.366000Z",
+    "source": "demo",
+    "temperature_c": 21.3
+  },
+  {
+    "brightness_raw": 1858,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 92,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-010",
+    "recorded_at": "2026-10-26T06:55:03.366000Z",
+    "source": "demo",
+    "temperature_c": 21
+  },
+  {
+    "brightness_raw": 1870,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 95,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-011",
+    "recorded_at": "2026-10-26T06:56:03.366000Z",
+    "source": "demo",
+    "temperature_c": 21
+  },
+  {
+    "brightness_raw": 1882,
+    "device_id": "ec2-demo-01",
+    "distance_cm": 98,
+    "exhibit_id": "demo-artifact-01",
+    "occupied": true,
+    "reading_id": "demo-01895a1c1f344c9b-012",
+    "recorded_at": "2026-10-26T06:57:03.366000Z",
+    "source": "demo",
+    "temperature_c": 21.4
+  }
+]

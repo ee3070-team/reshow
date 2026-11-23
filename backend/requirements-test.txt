@@ -1,0 +1,4 @@
+-r requirements-runtime.txt
+boto3==1.43.115
+jsonschema==4.26.0
+openapi-spec-validator==0.9.0

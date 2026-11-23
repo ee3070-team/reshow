@@ -1,0 +1,896 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "EE3070 ReShow demo: HTTPS API, Lambda, DynamoDB and a separate SSM-managed dummy-data EC2 instance.",
+  "Parameters": {
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "SubnetId": {
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "LatestAmiId": {
+      "Type": "AWS::EC2::Image::Id",
+      "Default": "ami-00148f0945cd46c39"
+    },
+    "ArtifactBucket": {
+      "Type": "String"
+    },
+    "BackendKey": {
+      "Type": "String"
+    },
+    "ApiToken": {
+      "Type": "String",
+      "NoEcho": true,
+      "MinLength": 32
+    },
+    "TokenParameterName": {
+      "Type": "String",
+      "Default": "/ee3070/reshow/demo/api-token"
+    },
+    "EndpointParameterName": {
+      "Type": "String",
+      "Default": "/ee3070/reshow/demo/api-base-url"
+    }
+  },
+  "Resources": {
+    "ReadingsTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "TableName": {
+          "Fn::Sub": "${AWS::StackName}-readings"
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "PK",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "SK",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "GSI1PK",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "GSI1SK",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "PK",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "SK",
+            "KeyType": "RANGE"
+          }
+        ],
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "device-readings-index",
+            "KeySchema": [
+              {
+                "AttributeName": "GSI1PK",
+                "KeyType": "HASH"
+              },
+              {
+                "AttributeName": "GSI1SK",
+                "KeyType": "RANGE"
+              }
+            ],
+            "Projection": {
+              "ProjectionType": "ALL"
+            }
+          }
+        ],
+        "SSESpecification": {
+          "SSEEnabled": true
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "ApiLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-api"
+        },
+        "RetentionInDays": 7
+      }
+    },
+    "ApiRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ReadAndWriteDemoReadings",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:PutItem",
+                    "dynamodb:GetItem",
+                    "dynamodb:Query",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "ReadingsTable",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "${ReadingsTable.Arn}/index/device-readings-index"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${ArtifactBucket}/media/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${ArtifactBucket}/report-snapshots/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ApiLogGroup",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminGetUser",
+                    "cognito-idp:AdminDisableUser",
+                    "cognito-idp:AdminEnableUser",
+                    "cognito-idp:AdminUserGlobalSignOut"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "StaffUserPool",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "Runtime": "python3.13",
+        "Architectures": [
+          "arm64"
+        ],
+        "Handler": "app.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ApiRole",
+            "Arn"
+          ]
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ArtifactBucket"
+          },
+          "S3Key": {
+            "Ref": "BackendKey"
+          }
+        },
+        "Timeout": 20,
+        "MemorySize": 2048,
+        "ReservedConcurrentExecutions": 2,
+        "Environment": {
+          "Variables": {
+            "TABLE_NAME": {
+              "Ref": "ReadingsTable"
+            },
+            "API_TOKEN": {
+              "Ref": "ApiToken"
+            },
+            "ASSET_BUCKET": {
+              "Ref": "ArtifactBucket"
+            },
+            "AUTH_ENFORCED": "true",
+            "COGNITO_USER_POOL_ID": {
+              "Ref": "StaffUserPool"
+            },
+            "COGNITO_CLIENT_ID": {
+              "Ref": "StaffBrowserClient"
+            },
+            "COGNITO_ISSUER": {
+              "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${StaffUserPool}"
+            },
+            "COGNITO_DOMAIN": {
+              "Fn::Sub": "https://${StaffPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+            },
+            "HTTP_API_ID": {
+              "Ref": "HttpApi"
+            },
+            "FRONTEND_ORIGIN": "https://dkbznu9f5nh9n.cloudfront.net"
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "ProtocolType": "HTTP",
+        "Tags": {
+          "Project": "EE3070"
+        },
+        "CorsConfiguration": {
+          "AllowOrigins": [
+            "https://dkbznu9f5nh9n.cloudfront.net",
+            "http://localhost:8000"
+          ],
+          "AllowHeaders": [
+            "Authorization",
+            "Content-Type",
+            "If-Match"
+          ],
+          "AllowMethods": [
+            "GET",
+            "POST",
+            "PATCH",
+            "PUT",
+            "OPTIONS"
+          ],
+          "ExposeHeaders": [
+            "Location",
+            "Content-Disposition",
+            "ETag"
+          ],
+          "MaxAge": 600
+        }
+      }
+    },
+    "ApiIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 25000
+      }
+    },
+    "ApiRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "$default",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "ApiIntegration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "ApiStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 5,
+          "ThrottlingRateLimit": 2.0
+        },
+        "Tags": {
+          "Project": "EE3070"
+        },
+        "RouteSettings": {
+          "ANY /staff-api/{proxy+}": {
+            "ThrottlingRateLimit": 5.0,
+            "ThrottlingBurstLimit": 10
+          },
+          "ANY /staff-api": {
+            "ThrottlingRateLimit": 5.0,
+            "ThrottlingBurstLimit": 10
+          },
+          "OPTIONS /staff-api/{proxy+}": {
+            "ThrottlingRateLimit": 10.0,
+            "ThrottlingBurstLimit": 20
+          },
+          "OPTIONS /staff-api": {
+            "ThrottlingRateLimit": 10.0,
+            "ThrottlingBurstLimit": 20
+          }
+        },
+        "AccessLogSettings": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "ApiAccessLogGroup",
+              "Arn"
+            ]
+          },
+          "Format": "{\"requestId\":\"$context.requestId\",\"requestTimeEpoch\":\"$context.requestTimeEpoch\",\"httpMethod\":\"$context.httpMethod\",\"routeKey\":\"$context.routeKey\",\"status\":\"$context.status\",\"integrationStatus\":\"$context.integration.integrationStatus\",\"applicationStatus\":\"$context.integration.status\",\"errorResponseType\":\"$context.error.responseType\",\"integrationLatency\":\"$context.integration.latency\",\"responseLatency\":\"$context.responseLatency\"}"
+        }
+      },
+      "DependsOn": [
+        "StaffApiRoute",
+        "StaffApiRootRoute",
+        "StaffApiOptionsRoute",
+        "StaffApiRootOptionsRoute"
+      ]
+    },
+    "ApiPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+        }
+      }
+    },
+    "SimulatorRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "ReadDemoApiConfiguration",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "ssm:GetParameter",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameterName}"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EndpointParameterName}"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "RestrictManagedPolicyParameterReads",
+                  "Effect": "Deny",
+                  "Action": [
+                    "ssm:GetParameter",
+                    "ssm:GetParameters"
+                  ],
+                  "NotResource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameterName}"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EndpointParameterName}"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "SimulatorProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "SimulatorRole"
+          }
+        ]
+      }
+    },
+    "SimulatorSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "EE3070 demo simulator: no inbound; outbound HTTPS for SSM and demo API.",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0",
+            "Description": "AWS Systems Manager, package repositories and HTTPS demo API"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    },
+    "SimulatorInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": {
+          "Ref": "LatestAmiId"
+        },
+        "InstanceType": "t4g.micro",
+        "CreditSpecification": {
+          "CPUCredits": "standard"
+        },
+        "IamInstanceProfile": {
+          "Ref": "SimulatorProfile"
+        },
+        "MetadataOptions": {
+          "HttpTokens": "required",
+          "HttpEndpoint": "enabled",
+          "HttpPutResponseHopLimit": 1
+        },
+        "NetworkInterfaces": [
+          {
+            "DeviceIndex": "0",
+            "AssociatePublicIpAddress": true,
+            "SubnetId": {
+              "Ref": "SubnetId"
+            },
+            "GroupSet": [
+              {
+                "Ref": "SimulatorSecurityGroup"
+              }
+            ]
+          }
+        ],
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/xvda",
+            "Ebs": {
+              "VolumeType": "gp3",
+              "VolumeSize": 8,
+              "Encrypted": true,
+              "DeleteOnTermination": true
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": "#!/bin/bash\nset -euo pipefail\ndnf install -y python3\ninstall -d -m 0755 /opt/ee3070-reshow\nprintf '%s\\n' 'EE3070 ReShow on-demand simulator; managed through SSM.' > /opt/ee3070-reshow/README\nsystemctl enable --now amazon-ssm-agent\n"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          },
+          {
+            "Key": "Name",
+            "Value": "ee3070-reshow-demo"
+          }
+        ]
+      }
+    },
+    "StaffUserPool": {
+      "Type": "AWS::Cognito::UserPool",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "UserPoolName": {
+          "Fn::Sub": "${AWS::StackName}-staff"
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": true
+        },
+        "AliasAttributes": [
+          "email"
+        ],
+        "UsernameConfiguration": {
+          "CaseSensitive": false
+        },
+        "AutoVerifiedAttributes": [
+          "email"
+        ],
+        "AccountRecoverySetting": {
+          "RecoveryMechanisms": [
+            {
+              "Name": "verified_email",
+              "Priority": 1
+            }
+          ]
+        },
+        "Policies": {
+          "PasswordPolicy": {
+            "MinimumLength": 12,
+            "RequireLowercase": true,
+            "RequireUppercase": true,
+            "RequireNumbers": true,
+            "RequireSymbols": true,
+            "TemporaryPasswordValidityDays": 7
+          }
+        },
+        "MfaConfiguration": "OPTIONAL",
+        "EnabledMfas": [
+          "SOFTWARE_TOKEN_MFA"
+        ],
+        "UserPoolTags": {
+          "Project": "EE3070"
+        }
+      }
+    },
+    "StaffResourceServer": {
+      "Type": "AWS::Cognito::UserPoolResourceServer",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "StaffUserPool"
+        },
+        "Identifier": "reshow",
+        "Name": "ReShow staff API",
+        "Scopes": [
+          {
+            "ScopeName": "staff",
+            "ScopeDescription": "Use the ReShow website API under current application permissions"
+          }
+        ]
+      }
+    },
+    "StaffBrowserClient": {
+      "Type": "AWS::Cognito::UserPoolClient",
+      "DependsOn": "StaffResourceServer",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "StaffUserPool"
+        },
+        "ClientName": "ReShow browser PKCE",
+        "GenerateSecret": false,
+        "AllowedOAuthFlows": [
+          "code"
+        ],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthScopes": [
+          "reshow/staff"
+        ],
+        "CallbackURLs": [
+          "https://dkbznu9f5nh9n.cloudfront.net/auth/callback.html",
+          "http://localhost:8000/auth/callback.html"
+        ],
+        "LogoutURLs": [
+          "https://dkbznu9f5nh9n.cloudfront.net/",
+          "http://localhost:8000/"
+        ],
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "EnableTokenRevocation": true,
+        "PreventUserExistenceErrors": "ENABLED",
+        "AccessTokenValidity": 15,
+        "IdTokenValidity": 15,
+        "RefreshTokenValidity": 1,
+        "TokenValidityUnits": {
+          "AccessToken": "minutes",
+          "IdToken": "minutes",
+          "RefreshToken": "days"
+        },
+        "ExplicitAuthFlows": [
+          "ALLOW_REFRESH_TOKEN_AUTH"
+        ],
+        "AuthSessionValidity": 3
+      }
+    },
+    "StaffPoolDomain": {
+      "Type": "AWS::Cognito::UserPoolDomain",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "StaffUserPool"
+        },
+        "Domain": {
+          "Fn::Sub": "reshow-${AWS::AccountId}-${AWS::Region}"
+        }
+      }
+    },
+    "StaffJwtAuthorizer": {
+      "Type": "AWS::ApiGatewayV2::Authorizer",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "Name": "ReShow-staff-access-tokens",
+        "AuthorizerType": "JWT",
+        "IdentitySource": [
+          "$request.header.Authorization"
+        ],
+        "JwtConfiguration": {
+          "Audience": [
+            {
+              "Ref": "StaffBrowserClient"
+            }
+          ],
+          "Issuer": {
+            "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${StaffUserPool}"
+          }
+        }
+      }
+    },
+    "StaffApiRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "ANY /staff-api/{proxy+}",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "StaffJwtAuthorizer"
+        },
+        "AuthorizationScopes": [
+          "reshow/staff"
+        ],
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "ApiIntegration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "StaffApiRootRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "ANY /staff-api",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "StaffJwtAuthorizer"
+        },
+        "AuthorizationScopes": [
+          "reshow/staff"
+        ],
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "ApiIntegration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "StaffApiOptionsRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "OPTIONS /staff-api/{proxy+}",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "ApiIntegration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "StaffApiRootOptionsRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "OPTIONS /staff-api",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Join": [
+            "/",
+            [
+              "integrations",
+              {
+                "Ref": "ApiIntegration"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "ApiAccessLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/vendedlogs/apigateway/${AWS::StackName}-http"
+        },
+        "RetentionInDays": 14,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": "EE3070"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ApiBaseUrl": {
+      "Description": "Public HTTPS endpoint; data requests require the bearer token.",
+      "Value": {
+        "Fn::GetAtt": [
+          "HttpApi",
+          "ApiEndpoint"
+        ]
+      }
+    },
+    "InstanceId": {
+      "Description": "On-demand dummy-data simulator, accessible through SSM.",
+      "Value": {
+        "Ref": "SimulatorInstance"
+      }
+    },
+    "TableName": {
+      "Value": {
+        "Ref": "ReadingsTable"
+      }
+    },
+    "FunctionName": {
+      "Value": {
+        "Ref": "ApiFunction"
+      }
+    },
+    "HttpApiId": {
+      "Value": {
+        "Ref": "HttpApi"
+      }
+    },
+    "ArtifactBucket": {
+      "Value": {
+        "Ref": "ArtifactBucket"
+      }
+    },
+    "TokenParameterName": {
+      "Value": {
+        "Ref": "TokenParameterName"
+      }
+    },
+    "EndpointParameterName": {
+      "Value": {
+        "Ref": "EndpointParameterName"
+      }
+    },
+    "StaffUserPoolId": {
+      "Value": {
+        "Ref": "StaffUserPool"
+      }
+    },
+    "StaffBrowserClientId": {
+      "Value": {
+        "Ref": "StaffBrowserClient"
+      }
+    },
+    "StaffIssuer": {
+      "Value": {
+        "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${StaffUserPool}"
+      }
+    },
+    "StaffLoginDomain": {
+      "Value": {
+        "Fn::Sub": "https://${StaffPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+      }
+    },
+    "StaffApiPrefix": {
+      "Value": "/staff-api"
+    },
+    "StaffCallbackUrl": {
+      "Value": "https://dkbznu9f5nh9n.cloudfront.net/auth/callback.html"
+    }
+  }
+}

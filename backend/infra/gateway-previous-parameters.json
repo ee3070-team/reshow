@@ -1,0 +1,34 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "SubnetId",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "LatestAmiId",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "ArtifactBucket",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "BackendKey",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "ApiToken",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "TokenParameterName",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "EndpointParameterName",
+    "UsePreviousValue": true
+  }
+]
