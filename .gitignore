@@ -9,6 +9,7 @@
 node_modules/
 __pycache__/
 *.log
+/.reshow-epaper-description.json
 .DS_Store
 Thumbs.db
 

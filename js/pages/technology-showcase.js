@@ -1,10 +1,17 @@
-import { icon } from "../ui.js";
+import { confirmAction, icon } from "../ui.js";
 import { serializeUpload } from "../technology-upload.js";
 
 const THREE_URL =
   "js/vendor/three-r128/three.min.js";
 const GLTF_LOADER_URL =
   "js/vendor/three-r128/GLTFLoader.js";
+const FOUR_VIEW_TILE_SIZE = 480;
+const FOUR_VIEWS = [
+  { angle: 0, cell: [1, 0], rotation: 0 },
+  { angle: 90, cell: [2, 1], rotation: Math.PI / 2 },
+  { angle: 180, cell: [1, 2], rotation: Math.PI },
+  { angle: 270, cell: [0, 1], rotation: -Math.PI / 2 },
+];
 let threeReady;
 
 function loadScript(src) {
@@ -46,6 +53,36 @@ function disposeModel(THREE, model) {
   });
 }
 
+async function loadThreeGroupModule(file, THREE) {
+  if (file.size > 1024 * 1024) {
+    throw new Error("Choose a Three.js Group module smaller than 1 MB.");
+  }
+  const source = await file.text();
+  const fileUrl = URL.createObjectURL(
+    new Blob([source], { type: "text/javascript" }),
+  );
+  try {
+    const module = await import(/* webpackIgnore: true */ fileUrl);
+    const factory =
+      module.createModel ||
+      module.createGroup ||
+      module.default ||
+      module.model;
+    const candidate =
+      typeof factory === "function"
+        ? await factory(THREE)
+        : factory;
+    if (!candidate?.isObject3D && !candidate?.isScene) {
+      throw new Error(
+        "The module must export a THREE.Group, THREE.Object3D, or THREE.Scene.",
+      );
+    }
+    return candidate;
+  } finally {
+    URL.revokeObjectURL(fileUrl);
+  }
+}
+
 function addBunny(THREE, group) {
   const materials = {
     fur: new THREE.MeshStandardMaterial({ color: 0xffe9f0, roughness: 0.82 }),
@@ -80,7 +117,7 @@ function addBunny(THREE, group) {
   part(materials.shine, [0, -0.43, -0.54], [0.22, 0.22, 0.22]);
 }
 
-export async function render(container) {
+export async function render(container, ctx) {
   container.innerHTML = `<div class="stack technology-studio">
     <section class="card technology-intro">
       <div>
@@ -94,30 +131,45 @@ export async function render(container) {
         <div class="card-head"><h2>3D model studio</h2><span class="badge">Three.js</span></div>
         <div class="technology-viewer" data-viewer aria-label="Interactive 3D model preview"></div>
         <p class="technology-status" data-model-status role="status" aria-live="polite">Loading the 3D viewer…</p>
-        <div class="technology-import">
-          <label class="technology-field">Import a GLB model
-            <input data-model-file type="file" accept=".glb,model/gltf-binary">
-          </label>
-          <span class="muted small-text">Choose a .glb file that includes the model and textures.</span>
-        </div>
-        <div class="technology-controls">
-          <label>Zoom <output data-zoom-value>5.6</output>
-            <input data-zoom type="range" min="3" max="10" step="0.1" value="5.6">
-          </label>
-          <label>Light intensity <output data-light-value>1.0</output>
-            <input data-light type="range" min="0" max="2.5" step="0.1" value="1">
-          </label>
-        </div>
-        <div class="technology-colors">
-          <label>Pink light <input data-light-color="0" type="color" value="#ff69b4"></label>
-          <label>Blue light <input data-light-color="1" type="color" value="#3498db"></label>
-        </div>
+        <details class="technology-settings">
+          <summary>Model settings</summary>
+          <div class="technology-settings-content">
+            <div class="technology-import">
+              <label class="technology-field">Import a GLB or Three.js Group module
+                <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
+              </label>
+              <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
+            </div>
+            <div class="technology-controls">
+              <label>Zoom <output data-zoom-value>5.6</output>
+                <input data-zoom type="range" min="3" max="10" step="0.1" value="5.6">
+              </label>
+              <label>Light intensity <output data-light-value>1.0</output>
+                <input data-light type="range" min="0" max="2.5" step="0.1" value="1">
+              </label>
+            </div>
+            <div class="technology-controls" aria-label="Automatic rotation speed">
+              <label>Rotation speed X <output data-rotation-speed-value="x">0.000</output> rad/frame
+                <input data-rotation-speed="x" type="range" min="-0.05" max="0.05" step="0.001" value="0">
+              </label>
+              <label>Rotation speed Y <output data-rotation-speed-value="y">0.005</output> rad/frame
+                <input data-rotation-speed="y" type="range" min="-0.05" max="0.05" step="0.001" value="0.005">
+              </label>
+            </div>
+            <p class="muted small-text">Set a speed to 0 to stop that axis, or use a negative value to reverse it.</p>
+            <div class="technology-colors">
+              <label>Pink light <input data-light-color="0" type="color" value="#ff69b4"></label>
+              <label>Blue light <input data-light-color="1" type="color" value="#3498db"></label>
+            </div>
+          </div>
+        </details>
         <div class="actions technology-actions">
           <button class="button" type="button" data-rotation aria-pressed="false">Pause rotation</button>
           <button class="button" type="button" data-angle="0">Front</button>
           <button class="button" type="button" data-angle="90">Side</button>
           <button class="button" type="button" data-angle="180">Back</button>
           <button class="button" type="button" data-angle="270">Side</button>
+          <button class="button" type="button" data-fullscreen aria-pressed="false">Play 4-view fullscreen</button>
           <button class="button primary" type="button" data-export>Export four views</button>
         </div>
         <p class="technology-status" data-export-status role="status" aria-live="polite"></p>
@@ -138,10 +190,81 @@ export async function render(container) {
           <span>${icon("upload")}Choose a different JPEG, PNG, or WebP image</span>
           <input data-image-file type="file" accept="image/jpeg,image/png,image/webp">
         </label>
-        <div class="technology-image-preview" data-image-preview role="img" aria-label="Selected image preview">Loading default helmet photo…</div>
+        <div class="technology-image-preview" data-image-preview role="img" aria-label="Selected image preview">No image selected</div>
         <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
         <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
         <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
+        <section class="card technology-ai">
+          <div class="card-head"><h2>Tripo 3D generation</h2><span class="badge info">Pay per task</span></div>
+          <p>Generate a textured GLB from the image selected above (about $0.30 per task), or retexture a generated model using a text description (about $0.10 per task). Prices may change; check Tripo pricing before submitting.</p>
+          <p class="technology-small">Your key is used only for these requests and is not saved. Use HTTPS or localhost. Tripo receives your image or texture description. Closing this page does not cancel a submitted task.</p>
+          <label class="technology-credential">Tripo API key
+            <input data-tripo-key type="password" autocomplete="off" spellcheck="false" placeholder="Enter your Tripo API key">
+          </label>
+          <button class="button primary" data-tripo-generate type="button">Generate textured model from image (~$0.30)</button>
+          <label class="technology-field">Source image-generation task ID
+            <input data-tripo-source type="text" autocomplete="off" placeholder="Filled after image generation succeeds">
+          </label>
+          <label class="technology-field">Describe the new texture
+            <textarea data-tripo-prompt rows="3" maxlength="1024" placeholder="Worn leather with scratches"></textarea>
+          </label>
+          <button class="button" data-tripo-retexture type="button">Retexture with text (~$0.10)</button>
+          <label class="technology-field">Tripo task ID
+            <input data-tripo-task type="text" autocomplete="off" placeholder="Task ID appears after submission">
+          </label>
+          <button class="button small" data-tripo-check type="button">Check existing task</button>
+          <p class="technology-status" data-tripo-status role="status" aria-live="polite"></p>
+          <a data-tripo-download hidden target="_blank" rel="noopener noreferrer">Download GLB from Tripo</a>
+        </section>
+      </section>
+      <section class="card technology-ai technology-rfid">
+        <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
+        <h3>Card roles</h3>
+        <dl class="rfid-phase-guide">
+          <div><dt>Door card</dt><dd>Opens the door for about 3 seconds. When idle, it also starts a manual exhibit update.</dd></div>
+          <div><dt>E-paper card</dt><dd>Does not open the door. It requests the saved description for the e-paper display and, when idle, starts a manual exhibit update.</dd></div>
+        </dl>
+        <p class="technology-status">After saving a description, the ESP32 checks the server and updates the e-paper automatically. No second tap is needed.</p>
+        <p class="technology-status" data-rfid-delivery role="status" aria-live="polite">Checking e-paper delivery…</p>
+        <pre class="technology-json" data-rfid-status aria-live="polite">Loading RFID workflow…</pre>
+        <dl class="rfid-phase-guide">
+          <div><dt>idle</dt><dd>No manual update is in progress. Scan a door or e-paper card to begin.</dd></div>
+          <div><dt>pending_edit</dt><dd>A card was accepted. Select an exhibit and save its description, or finish without changing it.</dd></div>
+        </dl>
+        <label class="technology-credential">Exhibit ID
+          <output data-rfid-exhibit>Waiting for ESP32 scan</output>
+        </label>
+        <form data-rfid-edit>
+          <label class="technology-field">Exhibit to edit
+            <select data-rfid-edit-exhibit required disabled><option value="">Scan a card first</option></select>
+          </label>
+          <label class="technology-field">Description for the exhibit and e-paper
+            <textarea data-rfid-description rows="5" maxlength="180" required disabled></textarea>
+          </label>
+          <p class="technology-small">Use 1–180 printable English characters. Select the exhibit explicitly: the hardware ID may not match the website ID.</p>
+          <button class="button primary" type="submit" data-rfid-save disabled>Save description and finish</button>
+          <p class="technology-status" data-rfid-edit-message role="status" aria-live="polite"></p>
+        </form>
+        <div class="actions">
+          <button class="button" type="button" data-rfid-refresh>Refresh</button>
+          <button class="button primary" type="button" data-rfid-ready>Mark manual update finished</button>
+        </div>
+        <p class="technology-small">Mark manual update finished ends the workflow without sending a description.</p>
+        <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
+        <h3>RFID event GET/POST example</h3>
+        <p class="technology-status">The example POST records a demo event and starts the workflow, exactly like a real card tap. GET returns that event in the same JSON shape.</p>
+        <div class="actions">
+          <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
+          <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
+        </div>
+        <h3>Test card roles</h3>
+        <p class="technology-status">These simulated taps change the server's RFID workflow but do not operate the door or e-paper. Use only when no real workflow is in progress. Test a door or e-paper card, then mark the update finished.</p>
+        <div class="actions">
+          <button class="button" type="button" data-rfid-test-role="door">Test door card</button>
+          <button class="button" type="button" data-rfid-test-role="epaper">Test e-paper card</button>
+        </div>
+        <pre class="technology-json" data-rfid-event aria-live="polite">No RFID event loaded.</pre>
+        <p class="technology-status" data-rfid-event-message role="status" aria-live="polite"></p>
       </section>
     </div>
   </div>`;
@@ -155,6 +278,14 @@ export async function render(container) {
   const zoomValue = container.querySelector("[data-zoom-value]");
   const intensity = container.querySelector("[data-light]");
   const intensityValue = container.querySelector("[data-light-value]");
+  const rotationButton = container.querySelector("[data-rotation]");
+  const rotationControls = Array.from(container.querySelectorAll("[data-rotation-speed]"), (input) => ({
+    input,
+    output: container.querySelector(`[data-rotation-speed-value="${input.dataset.rotationSpeed}"]`),
+  }));
+  const rotationSpeedX = container.querySelector('[data-rotation-speed="x"]');
+  const rotationSpeedY = container.querySelector('[data-rotation-speed="y"]');
+  const fullscreenButton = container.querySelector("[data-fullscreen]");
   let THREE;
   let renderer;
   let camera;
@@ -170,6 +301,9 @@ export async function render(container) {
   let active = true;
   let dragging = false;
   let previousPointer = null;
+  let fourViewCanvas = null;
+  let fourViewContext = null;
+  let fullscreenExitButton = null;
   let loadedImage = null;
   let selectedImage = null;
 
@@ -185,6 +319,11 @@ export async function render(container) {
     camera.lookAt(0, targetY, 0);
   };
 
+  const setAutoRotate = (enabled) => {
+    autoRotate = enabled;
+    rotationButton.textContent = enabled ? "Pause rotation" : "Resume rotation";
+    rotationButton.setAttribute("aria-pressed", String(!enabled));
+  };
   try {
     THREE = await loadThree();
     if (!active) return;
@@ -223,23 +362,182 @@ export async function render(container) {
     updateCamera();
     modelStatus.textContent = "Drag the model to rotate it; use the wheel to zoom.";
 
-    const resize = new ResizeObserver(() => {
+    const resizeRenderer = () => {
       if (!active || !renderer) return;
+      if (fourViewCanvas) {
+        camera.aspect = 1;
+        camera.updateProjectionMatrix();
+        renderer.setSize(FOUR_VIEW_TILE_SIZE, FOUR_VIEW_TILE_SIZE, false);
+        return;
+      }
       const width = Math.max(1, viewer.clientWidth);
       const height = Math.max(1, viewer.clientHeight);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+    };
+    const resize = new ResizeObserver(() => {
+      resizeRenderer();
     });
     resize.observe(viewer);
+
+    const isFourViewMode = () =>
+      document.fullscreenElement === viewer ||
+      viewer.classList.contains("is-pseudo-fullscreen");
+    const leaveFourView = () => {
+      if (viewer.classList.contains("is-pseudo-fullscreen")) {
+        viewer.classList.remove("is-pseudo-fullscreen");
+        syncFullscreen();
+        return;
+      }
+      document.exitFullscreen().catch((error) => {
+        exportStatus.textContent =
+          error instanceof Error && error.message
+            ? `Could not exit fullscreen: ${error.message}`
+            : "Could not exit fullscreen. Press Escape to close it.";
+      });
+    };
+    const syncFullscreen = () => {
+      const isFullscreen = isFourViewMode();
+      if (isFullscreen && !fourViewCanvas) {
+        fourViewCanvas = document.createElement("canvas");
+        fourViewCanvas.className = "technology-four-view";
+        fourViewCanvas.setAttribute(
+          "aria-label",
+          "Four-view fullscreen model playback",
+        );
+        fourViewContext = fourViewCanvas.getContext("2d");
+        if (!fourViewContext) {
+          fourViewCanvas = null;
+          exportStatus.textContent =
+            "Could not create the fullscreen four-view display.";
+          leaveFourView();
+          return;
+        }
+        fourViewCanvas.width = FOUR_VIEW_TILE_SIZE * 3;
+        fourViewCanvas.height = FOUR_VIEW_TILE_SIZE * 3;
+        fullscreenExitButton = document.createElement("button");
+        fullscreenExitButton.type = "button";
+        fullscreenExitButton.className = "technology-fullscreen-exit";
+        fullscreenExitButton.textContent = "Exit 4-view";
+        fullscreenExitButton.setAttribute("aria-label", "Exit fullscreen 4-view");
+        fullscreenExitButton.addEventListener(
+          "click",
+          () => leaveFourView(),
+          { signal },
+        );
+        viewer.append(fourViewCanvas, fullscreenExitButton);
+        renderer.domElement.hidden = true;
+        viewer.classList.add("is-four-view");
+        fullscreenButton.setAttribute("aria-pressed", "true");
+        exportStatus.textContent =
+          "Four-view fullscreen playback is active. Press Escape to exit.";
+      } else if (!isFullscreen && fourViewCanvas) {
+        fourViewCanvas.remove();
+        fullscreenExitButton.remove();
+        fourViewCanvas = null;
+        fourViewContext = null;
+        fullscreenExitButton = null;
+        renderer.domElement.hidden = false;
+        viewer.classList.remove("is-four-view");
+        fullscreenButton.setAttribute("aria-pressed", "false");
+        exportStatus.textContent = "Four-view fullscreen playback closed.";
+      }
+      resizeRenderer();
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen, { signal });
+    const playFourViewInPage = () => {
+      // The Fullscreen API can be refused (for example inside an embedded
+      // preview). Show the same four views as an in-page overlay instead.
+      viewer.classList.add("is-pseudo-fullscreen");
+      syncFullscreen();
+      exportStatus.textContent =
+        "The browser blocked fullscreen, so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
+    };
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape" && viewer.classList.contains("is-pseudo-fullscreen")) {
+          leaveFourView();
+        }
+      },
+      { signal },
+    );
+    fullscreenButton.addEventListener(
+      "click",
+      async () => {
+        if (!renderer || !camera || !model) {
+          exportStatus.textContent = "The 3D viewer is not ready yet.";
+          return;
+        }
+        exportStatus.textContent = "Opening four-view playback…";
+        if (!viewer.requestFullscreen) {
+          playFourViewInPage();
+          return;
+        }
+        try {
+          await Promise.race([
+            viewer.requestFullscreen(),
+            new Promise((resolve) => window.setTimeout(resolve, 900)),
+          ]);
+        } catch (error) {
+          playFourViewInPage();
+          exportStatus.textContent =
+            "The browser blocked fullscreen (" +
+            (error instanceof Error && error.message
+              ? error.message
+              : "unknown reason") +
+            "), so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
+          return;
+        }
+        if (!isFourViewMode()) {
+          // Embedded previews may swallow the request without reporting an
+          // error, so fall back whenever fullscreen did not actually start.
+          playFourViewInPage();
+        }
+      },
+      { signal },
+    );
 
     const renderFrame = () => {
       if (!active) return;
       if (autoRotate && !dragging) {
-        model.rotation.y += 0.005;
-        model.rotation.x += 0.002;
+        model.rotation.y += Number(rotationSpeedY.value);
+        model.rotation.x += Number(rotationSpeedX.value);
       }
-      renderer.render(scene, camera);
+      if (fourViewCanvas) {
+        const oldAngle = cameraAngle;
+        fourViewContext.fillStyle = "#000";
+        fourViewContext.fillRect(
+          0,
+          0,
+          fourViewCanvas.width,
+          fourViewCanvas.height,
+        );
+        for (const view of FOUR_VIEWS) {
+          cameraAngle = view.angle;
+          updateCamera();
+          renderer.render(scene, camera);
+          fourViewContext.save();
+          fourViewContext.translate(
+            (view.cell[0] + 0.5) * FOUR_VIEW_TILE_SIZE,
+            (view.cell[1] + 0.5) * FOUR_VIEW_TILE_SIZE,
+          );
+          fourViewContext.rotate(view.rotation);
+          fourViewContext.drawImage(
+            renderer.domElement,
+            -FOUR_VIEW_TILE_SIZE / 2,
+            -FOUR_VIEW_TILE_SIZE / 2,
+            FOUR_VIEW_TILE_SIZE,
+            FOUR_VIEW_TILE_SIZE,
+          );
+          fourViewContext.restore();
+        }
+        cameraAngle = oldAngle;
+        updateCamera();
+      } else {
+        renderer.render(scene, camera);
+      }
       animationFrame = requestAnimationFrame(renderFrame);
     };
     renderFrame();
@@ -247,6 +545,7 @@ export async function render(container) {
     viewer.addEventListener(
       "pointerdown",
       (event) => {
+        if (event.target.closest(".technology-fullscreen-exit")) return;
         dragging = true;
         previousPointer = { x: event.clientX, y: event.clientY };
         viewer.setPointerCapture(event.pointerId);
@@ -312,15 +611,14 @@ export async function render(container) {
         { signal },
       );
     });
-    container.querySelector("[data-rotation]").addEventListener(
+    rotationControls.forEach(({ input, output }) => {
+      input.addEventListener("input", () => {
+        output.textContent = Number(input.value).toFixed(3);
+      }, { signal });
+    });
+    rotationButton.addEventListener(
       "click",
-      (event) => {
-        autoRotate = !autoRotate;
-        event.currentTarget.textContent = autoRotate
-          ? "Pause rotation"
-          : "Resume rotation";
-        event.currentTarget.setAttribute("aria-pressed", String(!autoRotate));
-      },
+      () => setAutoRotate(!autoRotate),
       { signal },
     );
     container.querySelectorAll("[data-angle]").forEach((button) => {
@@ -335,12 +633,14 @@ export async function render(container) {
     });
     container.querySelector("[data-model-file]").addEventListener(
       "change",
-      (event) => {
+      async (event) => {
         const file = event.currentTarget.files?.[0];
         event.currentTarget.value = "";
         if (!file) return;
-        if (!file.name.toLowerCase().endsWith(".glb")) {
-          modelStatus.textContent = "Choose a .glb model file.";
+        const fileName = file.name.toLowerCase();
+        const groupModule = fileName.endsWith(".js") || fileName.endsWith(".mjs");
+        if (!fileName.endsWith(".glb") && !groupModule) {
+          modelStatus.textContent = "Choose a .glb file or a .js/.mjs Three.js Group module.";
           return;
         }
         if (!THREE.GLTFLoader) {
@@ -348,8 +648,41 @@ export async function render(container) {
           return;
         }
         modelStatus.textContent = `Loading ${file.name}…`;
-        if (file.size > 25 * 1024 * 1024) {
-          modelStatus.textContent = "Choose a GLB model smaller than 25 MB.";
+        if (groupModule) {
+          try {
+            const imported = await loadThreeGroupModule(file, THREE);
+            imported.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(imported);
+            const size = bounds.getSize(new THREE.Vector3());
+            const largest = Math.max(size.x, size.y, size.z);
+            if (!Number.isFinite(largest) || largest <= 0) {
+              disposeModel(THREE, imported);
+              modelStatus.textContent = "This model has no displayable geometry.";
+              return;
+            }
+            imported.scale.multiplyScalar(2.8 / largest);
+            imported.updateMatrixWorld(true);
+            imported.position.sub(
+              new THREE.Box3()
+                .setFromObject(imported)
+                .getCenter(new THREE.Vector3()),
+            );
+            model.remove(modelContent);
+            disposeModel(THREE, modelContent);
+            modelContent = imported;
+            model.add(modelContent);
+            model.rotation.set(0, 0, 0);
+            targetY = 0;
+            cameraAngle = 0;
+            updateCamera();
+            modelStatus.textContent =
+              `Loaded ${file.name}. The model has been centered and resized.`;
+          } catch (error) {
+            modelStatus.textContent =
+              error instanceof Error && error.message
+                ? error.message
+                : "This Three.js Group module could not be loaded.";
+          }
           return;
         }
         const url = URL.createObjectURL(file);
@@ -406,7 +739,7 @@ export async function render(container) {
           exportStatus.textContent = "The 3D viewer is not ready yet.";
           return;
         }
-        const size = 480;
+        const size = FOUR_VIEW_TILE_SIZE;
         const output = document.createElement("canvas");
         output.width = size * 3;
         output.height = size * 3;
@@ -419,12 +752,6 @@ export async function render(container) {
         const oldAngle = cameraAngle;
         const oldAspect = camera.aspect;
         const oldSize = renderer.getSize(new THREE.Vector2());
-        const views = [
-          { angle: 0, cell: [1, 0], rotation: 0 },
-          { angle: 90, cell: [2, 1], rotation: Math.PI / 2 },
-          { angle: 180, cell: [1, 2], rotation: Math.PI },
-          { angle: 270, cell: [0, 1], rotation: -Math.PI / 2 },
-        ];
         try {
           context.fillStyle = "#000";
           context.fillRect(0, 0, output.width, output.height);
@@ -432,7 +759,7 @@ export async function render(container) {
           renderer.setSize(size, size, false);
           camera.aspect = 1;
           camera.updateProjectionMatrix();
-          for (const view of views) {
+          for (const view of FOUR_VIEWS) {
             cameraAngle = view.angle;
             updateCamera();
             renderer.render(model.parent, camera);
@@ -494,26 +821,211 @@ export async function render(container) {
   const jsonOutput = container.querySelector("[data-json-output]");
   const accountIdInput = container.querySelector("[data-account-id]");
   const apiTokenInput = container.querySelector("[data-api-token]");
-  const loadImageFile = (file) =>
-    new Promise((resolve, reject) => {
-      const image = new Image();
-      const url = URL.createObjectURL(file);
-      image.onload = () => {
-        URL.revokeObjectURL(url);
-        if (!active) return resolve(false);
-        loadedImage = image;
-        preview.replaceChildren(image);
-        image.alt = "Selected artifact image preview";
-        generateButton.disabled = false;
-        aiStatus.textContent = "Image ready. Generate exhibit JSON when ready.";
-        resolve(true);
-      };
-      image.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("The selected image could not be decoded."));
-      };
-      image.src = url;
+  const tripoKey = container.querySelector("[data-tripo-key]");
+  const tripoSource = container.querySelector("[data-tripo-source]");
+  const tripoPrompt = container.querySelector("[data-tripo-prompt]");
+  const tripoGenerate = container.querySelector("[data-tripo-generate]");
+  const tripoRetexture = container.querySelector("[data-tripo-retexture]");
+  const tripoTask = container.querySelector("[data-tripo-task]");
+  const tripoCheck = container.querySelector("[data-tripo-check]");
+  const tripoStatus = container.querySelector("[data-tripo-status]");
+  const tripoDownload = container.querySelector("[data-tripo-download]");
+  const tripoRequest = async (payload) => {
+    const body = JSON.stringify(payload);
+    const bytes = new TextEncoder().encode(body);
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    const checksum = Array.from(new Uint8Array(hash), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    const response = await fetch("/api/technology/generate-exhibit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-amz-content-sha256": checksum },
+      body: bytes,
+      signal,
     });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Request failed (HTTP ${response.status}).`);
+    if (!result.data || typeof result.data !== "object") throw new Error("Invalid Tripo response.");
+    return result.data;
+  };
+  const loadTripoModel = (url) => new Promise((resolve, reject) => {
+    if (!THREE?.GLTFLoader || !model || !modelContent) {
+      reject(new Error("The 3D viewer is not ready."));
+      return;
+    }
+    let finished = false;
+    const timer = setTimeout(() => {
+      finished = true;
+      reject(new Error("Loading the GLB timed out. Download it and use Import a GLB."));
+    }, 30000);
+    new THREE.GLTFLoader().load(url, (gltf) => {
+      const imported = gltf.scene;
+      if (finished || !active) {
+        disposeModel(THREE, imported);
+        if (!finished) {
+          finished = true;
+          clearTimeout(timer);
+          resolve();
+        }
+        return;
+      }
+      finished = true;
+      clearTimeout(timer);
+      imported.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(imported);
+      const size = bounds.getSize(new THREE.Vector3());
+      const largest = Math.max(size.x, size.y, size.z);
+      if (!Number.isFinite(largest) || largest <= 0) {
+        disposeModel(THREE, imported);
+        reject(new Error("The model has no displayable geometry."));
+        return;
+      }
+      imported.scale.multiplyScalar(2.8 / largest);
+      imported.updateMatrixWorld(true);
+      imported.position.sub(new THREE.Box3().setFromObject(imported).getCenter(new THREE.Vector3()));
+      model.remove(modelContent);
+      disposeModel(THREE, modelContent);
+      modelContent = imported;
+      model.add(modelContent);
+      model.rotation.set(0, 0, 0);
+      targetY = 0;
+      cameraAngle = 0;
+      updateCamera();
+      modelStatus.textContent = "Tripo model loaded and centered.";
+      resolve();
+    }, undefined, () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      reject(new Error("The browser could not load the GLB directly. Download it and use Import a GLB."));
+    });
+  });
+  const pollTripo = async (key, taskId, action) => {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const result = await tripoRequest({ action: "status", api_key: key, task_id: taskId });
+      if (result.status === "success") {
+        if (action === "image" || result.type === "image_to_model") {
+          tripoSource.value = taskId;
+        }
+        const url = new URL(result.model_url);
+        if (url.protocol !== "https:" || url.username || url.password)
+          throw new Error("Tripo returned an invalid model URL.");
+        tripoDownload.href = url.href;
+        tripoDownload.hidden = false;
+        const cost = typeof result.credits_consumed === "number"
+          ? ` (${result.credits_consumed} credits used)` : "";
+        tripoStatus.textContent = `Task complete${cost}. Loading the GLB…`;
+        try {
+          await loadTripoModel(url.href);
+          if (active) tripoStatus.textContent = `Task complete${cost}. Download the GLB soon; the link expires.`;
+        } catch (error) {
+          if (active) tripoStatus.textContent = `Task complete${cost}. ${error.message} The download link expires soon.`;
+        }
+        return;
+      }
+      if (["failed", "cancelled", "banned", "expired"].includes(result.status))
+        throw new Error(result.error || `Tripo task ${result.status}.`);
+      tripoStatus.textContent = `Task ${taskId}: ${result.status}${Number.isFinite(result.progress) ? ` (${result.progress}%)` : ""}.`;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (!active) return;
+    }
+    throw new Error("Polling timed out. Use Check existing task to resume; do not generate again unless intended.");
+  };
+  const runTripo = async (action) => {
+    const key = tripoKey.value.trim();
+    if (!(window.isSecureContext || ["localhost", "127.0.0.1", "::1"].includes(location.hostname))) {
+      tripoStatus.textContent = "Use HTTPS or localhost before entering your API key.";
+      return;
+    }
+    if (!key) {
+      tripoStatus.textContent = "Enter your Tripo API key.";
+      return;
+    }
+    if (action === "status" && !tripoTask.value.trim()) {
+      tripoStatus.textContent = "Enter an existing Tripo task ID.";
+      return;
+    }
+    if (action === "retexture" && !tripoSource.value.trim()) {
+      tripoStatus.textContent = "Enter the source image-generation task ID first.";
+      return;
+    }
+    if (action === "retexture" && !tripoPrompt.value.trim()) {
+      tripoStatus.textContent = "Describe the new texture first.";
+      return;
+    }
+    if (action === "image" && !loadedImage) {
+      tripoStatus.textContent = "Choose an image above first.";
+      return;
+    }
+    tripoGenerate.disabled = true;
+    tripoRetexture.disabled = true;
+    tripoCheck.disabled = true;
+    tripoDownload.hidden = true;
+    try {
+      let taskId = tripoTask.value.trim();
+      if (action !== "status") {
+        const payload = { action, api_key: key };
+        if (action === "retexture") {
+          payload.source_task_id = tripoSource.value.trim();
+          payload.prompt = tripoPrompt.value.trim();
+        } else {
+          const scale = Math.min(1, 1024 / Math.max(loadedImage.width, loadedImage.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(loadedImage.width * scale));
+          canvas.height = Math.max(1, Math.round(loadedImage.height * scale));
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("Could not prepare the image.");
+          context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height);
+          payload.image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+        }
+        tripoStatus.textContent = "Submitting a paid Tripo task…";
+        tripoTask.value = "";
+        const created = await tripoRequest(payload);
+        if (typeof created.task_id !== "string" || !created.task_id)
+          throw new Error("No task ID returned. Check Tripo task history before retrying.");
+        taskId = created.task_id;
+        tripoTask.value = taskId;
+      }
+      await pollTripo(key, taskId, action);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        tripoStatus.textContent = `${error.message} ${tripoTask.value ? "Use the task ID to check again." : "Check Tripo task history before retrying if submission started."}`;
+      }
+    } finally {
+      if (active) {
+        tripoGenerate.disabled = false;
+        tripoRetexture.disabled = false;
+        tripoCheck.disabled = false;
+      }
+    }
+  };
+  tripoGenerate.addEventListener("click", () => runTripo("image"), { signal });
+  tripoRetexture.addEventListener("click", () => runTripo("retexture"), { signal });
+  tripoCheck.addEventListener("click", () => runTripo("status"), { signal });
+  const loadImageFile = (file) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      if (!active) return;
+      loadedImage = image;
+      preview.replaceChildren(image);
+      image.alt = "Selected artifact image preview";
+      generateButton.disabled = false;
+      aiStatus.textContent = "Image ready. Generate exhibit JSON when ready.";
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      preview.replaceChildren();
+      preview.textContent = "The selected image could not be decoded.";
+      selectedImage = null;
+      loadedImage = null;
+      generateButton.disabled = true;
+      aiStatus.textContent = "The selected image could not be decoded.";
+    };
+    image.src = url;
+  };
   container.querySelector("[data-toggle-token]").addEventListener(
     "click",
     (event) => {
@@ -532,6 +1044,7 @@ export async function render(container) {
       generateButton.disabled = true;
       jsonOutput.textContent = "Generated exhibit JSON will appear here.";
       if (!selectedImage) {
+        preview.replaceChildren();
         preview.textContent = "No image selected";
         aiStatus.textContent = "Select an image to generate exhibit data.";
         return;
@@ -540,36 +1053,15 @@ export async function render(container) {
         !["image/jpeg", "image/png", "image/webp"].includes(selectedImage.type)
       ) {
         selectedImage = null;
+        preview.replaceChildren();
         preview.textContent = "No image selected";
         aiStatus.textContent = "Choose a JPEG, PNG, or WebP image.";
         return;
       }
-      loadImageFile(selectedImage).catch((error) => {
-        preview.textContent = "No image selected";
-        aiStatus.textContent = error.message;
-      });
+      loadImageFile(selectedImage);
     },
     { signal },
   );
-  fetch("assets/helmet.jpg", { signal })
-    .then((response) => {
-      if (!response.ok)
-        throw new Error(`Could not load the default image (HTTP ${response.status}).`);
-      return response.blob();
-    })
-    .then((blob) => {
-      if (!active || selectedImage) return;
-      if (blob.type !== "image/jpeg")
-        throw new Error("The default helmet image is not a JPEG.");
-      const file = new File([blob], "helmet.jpg", { type: blob.type });
-      selectedImage = file;
-      return loadImageFile(file);
-    })
-    .catch((error) => {
-      if (!active || error.name === "AbortError") return;
-      preview.textContent = "No image selected";
-      aiStatus.textContent = error.message;
-    });
   generateButton.addEventListener(
     "click",
     async () => {
@@ -627,11 +1119,12 @@ export async function render(container) {
         )
           throw new Error("The server returned no exhibit JSON.");
         jsonOutput.textContent = JSON.stringify(result.data, null, 2);
+
         aiStatus.textContent = "Exhibit JSON generated from the image.";
       } catch (error) {
         if (error.name !== "AbortError") {
           console.error("Image-to-JSON generation failed.", error);
-          aiStatus.textContent = error.message;
+          aiStatus.textContent = error instanceof Error ? error.message : String(error);
         }
       } finally {
         if (active) generateButton.disabled = !loadedImage;
@@ -640,9 +1133,315 @@ export async function render(container) {
     { signal },
   );
 
+  const rfidStatus = container.querySelector("[data-rfid-status]");
+  const rfidMessage = container.querySelector("[data-rfid-message]");
+  const rfidDelivery = container.querySelector("[data-rfid-delivery]");
+  const rfidRefresh = container.querySelector("[data-rfid-refresh]");
+  const rfidReady = container.querySelector("[data-rfid-ready]");
+  const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
+  const rfidExamplePost = container.querySelector("[data-rfid-example-post]");
+  const rfidEventGet = container.querySelector("[data-rfid-event-get]");
+  const rfidEvent = container.querySelector("[data-rfid-event]");
+  const rfidEventMessage = container.querySelector("[data-rfid-event-message]");
+  const rfidTestButtons = container.querySelectorAll("[data-rfid-test-role]");
+  const rfidForm = container.querySelector("[data-rfid-edit]");
+  const rfidSelect = container.querySelector("[data-rfid-edit-exhibit]");
+  const rfidDescription = container.querySelector("[data-rfid-description]");
+  const rfidSave = container.querySelector("[data-rfid-save]");
+  const rfidEditMessage = container.querySelector("[data-rfid-edit-message]");
+  let rfidEditId = null;
+  let rfidProfiles = [];
+  let rfidSaving = false;
+  let rfidDirty = false;
+  let rfidSelectedId = "";
+  let rfidRefreshSequence = 0;
+  let rfidPolling;
+
+  const syncRfidEditor = async (workflow) => {
+    if (rfidSaving) return;
+    if (workflow.phase === "pending_edit" && !workflow.edit_id) {
+      rfidEditId = null;
+      rfidSelect.disabled = true;
+      rfidDescription.disabled = true;
+      rfidSave.disabled = true;
+      rfidEditMessage.textContent = "The local server needs to be restarted before you can select an exhibit.";
+      return;
+    }
+    const editId = workflow.phase === "pending_edit" ? workflow.edit_id : null;
+    if (editId === rfidEditId) return;
+    rfidEditId = editId;
+    rfidSelect.disabled = true;
+    rfidDescription.disabled = true;
+    rfidSave.disabled = true;
+    if (rfidDirty) {
+      rfidEditMessage.textContent = "The RFID session changed. Unsaved text was kept; copy it before starting another edit.";
+      return;
+    }
+    rfidSelect.replaceChildren(new Option(editId ? "Select an exhibit" : "Scan a card first", ""));
+    rfidSelectedId = "";
+    rfidDescription.value = "";
+    if (!editId) return;
+    try {
+      const profiles = await ctx.api.listExhibits();
+      if (!active || rfidEditId !== editId) return;
+      rfidProfiles = profiles;
+      profiles.forEach((profile) => rfidSelect.add(new Option(`${profile.name} (${profile.id})`, profile.id)));
+      rfidSelect.disabled = false;
+      rfidDescription.disabled = false;
+      rfidSave.disabled = false;
+      rfidEditMessage.textContent = profiles.length ? "Select the exhibit to edit." : "No exhibits are available.";
+    } catch (error) {
+      rfidEditId = null;
+      rfidEditMessage.textContent = `Could not load exhibits: ${error.message}`;
+    }
+  };
+
+  const refreshRfidStatus = async () => {
+    const refreshSequence = ++rfidRefreshSequence;
+    try {
+      const response = await fetch("/api/rfid/status", { signal });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+      const workflow = result.data || {};
+      rfidStatus.textContent = JSON.stringify(workflow, null, 2);
+      rfidExhibit.textContent = workflow.exhibit_id || "Waiting for ESP32 scan";
+      rfidMessage.textContent = "ESP32 workflow status is available.";
+      await syncRfidEditor(workflow);
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      rfidStatus.textContent = '{"phase":"unavailable"}';
+      rfidMessage.textContent = error.message;
+    }
+    try {
+      const response = await fetch("/api/rfid/epaper-delivery", { signal });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      const messages = {
+        not_saved: "No e-paper description has been saved yet.",
+        pending: "Description saved; waiting for the ESP32 and Mega to confirm the display update.",
+        confirmed: "The Mega last confirmed this e-paper update.",
+      };
+      if (!Object.prototype.hasOwnProperty.call(messages, result.data?.state)) throw new Error("Invalid delivery status.");
+      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = messages[result.data.state];
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = `E-paper delivery status unavailable: ${error.message}`;
+    }
+    try {
+      // Show the newest card tap automatically so the panel reacts to the reader
+      // without anyone pressing the GET button.
+      const response = await fetch("/api/rfid/device-event", { signal });
+      if (!response.ok) return;
+      const event = await response.json().catch(() => null);
+      if (!event) return;
+      rfidEvent.textContent = JSON.stringify(event, null, 2);
+      rfidEventMessage.textContent = `Card tap received: ${event.uid} (${event.result}).`;
+    } catch (error) {
+      if (error.name === "AbortError") return;
+    }
+  };
+
+  rfidSelect.addEventListener("change", async () => {
+    const nextId = rfidSelect.value;
+    if (rfidDirty) {
+      const editId = rfidEditId;
+      rfidSelect.disabled = true;
+      rfidDescription.disabled = true;
+      rfidSave.disabled = true;
+      try {
+        const discard = await confirmAction(
+          "Discard unsaved description?",
+          "Switching exhibits will discard your unsaved description.",
+          "Discard changes",
+        );
+        if (!active || rfidEditId !== editId) return;
+        if (!discard) {
+          rfidSelect.value = rfidSelectedId;
+          return;
+        }
+      } catch (error) {
+        if (active && rfidEditId === editId) {
+          rfidSelect.value = rfidSelectedId;
+          rfidEditMessage.textContent = `Could not switch exhibits: ${error.message}`;
+        }
+        return;
+      } finally {
+        if (active && rfidEditId === editId) {
+          rfidSelect.disabled = false;
+          rfidDescription.disabled = false;
+          rfidSave.disabled = false;
+        }
+      }
+    }
+    rfidSelectedId = nextId;
+    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
+    rfidDescription.value = profile?.description || "";
+    rfidDirty = false;
+    ctx.setDirty(false);
+    rfidEditMessage.textContent = profile ? "Edit the description, then save." : "Select an exhibit.";
+  }, { signal });
+  rfidDescription.addEventListener("input", () => {
+    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
+    rfidDirty = rfidDescription.value !== (profile?.description || "");
+    ctx.setDirty(rfidDirty);
+  }, { signal });
+  rfidForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
+    const description = rfidDescription.value.trim();
+    if (!profile || !rfidEditId || !/^[\x20-\x7e]{1,180}$/.test(description)) {
+      rfidEditMessage.textContent = "Select an exhibit and enter 1–180 printable English characters.";
+      return;
+    }
+    const editId = rfidEditId;
+    rfidSaving = true;
+    rfidSelect.disabled = true;
+    rfidDescription.disabled = true;
+    rfidSave.disabled = true;
+    let profileSaved = false;
+    try {
+      await ctx.api.saveExhibit({ ...profile, description });
+      profileSaved = true;
+      const response = await fetch("/api/rfid/publish-description", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ edit_id: editId, exhibit_id: profile.id, description }),
+        signal,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Request failed (HTTP ${response.status}).`);
+      rfidDirty = false;
+      ctx.setDirty(false);
+      rfidEditMessage.textContent = "Description saved on the server. ESP32 will try to update the e-paper automatically.";
+      rfidDelivery.textContent = "Description saved; waiting for the ESP32 and Mega to confirm the display update.";
+      rfidSaving = false;
+      await refreshRfidStatus();
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        rfidEditMessage.textContent = `${profileSaved ? "Exhibit saved locally, but the e-paper update was not saved. " : ""}${error.message}`;
+      }
+    } finally {
+      rfidSaving = false;
+      if (active && rfidEditId === editId) {
+        rfidSelect.disabled = false;
+        rfidDescription.disabled = false;
+        rfidSave.disabled = false;
+      }
+    }
+  }, { signal });
+
+  rfidRefresh.addEventListener("click", refreshRfidStatus, { signal });
+  rfidTestButtons.forEach((button) => {
+    button.addEventListener(
+      "click",
+      async () => {
+        const role = button.dataset.rfidTestRole;
+        rfidTestButtons.forEach((testButton) => { testButton.disabled = true; });
+        rfidEventMessage.textContent = `Sending simulated ${role} card tap…`;
+        try {
+          const response = await fetch("/api/rfid/device-event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "rfid_event",
+              uid: role === "door" ? "A1B2C3D4" : "AABBCCDD",
+              result: "accepted",
+              exhibit_id: "helmet-001",
+              role,
+            }),
+            signal,
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+          rfidEvent.textContent = JSON.stringify(result, null, 2);
+          await refreshRfidStatus();
+          if (active) rfidEventMessage.textContent = `Simulated ${role} card tap sent. Check the workflow status above.`;
+        } catch (error) {
+          if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
+        } finally {
+          if (active) rfidTestButtons.forEach((testButton) => { testButton.disabled = false; });
+        }
+      },
+      { signal },
+    );
+  });
+  rfidExamplePost.addEventListener(
+    "click",
+    async () => {
+      rfidExamplePost.disabled = true;
+      try {
+        const response = await fetch("/api/rfid/device-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "rfid_event",
+            uid: "04833912EE1B90",
+            result: "accepted",
+            exhibit_id: "helmet-001",
+          }),
+          signal,
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidEvent.textContent = JSON.stringify(result, null, 2);
+        rfidEventMessage.textContent = "Example RFID event POST received. Use GET to retrieve the latest event.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
+      } finally {
+        if (active) rfidExamplePost.disabled = false;
+      }
+    },
+    { signal },
+  );
+  rfidEventGet.addEventListener(
+    "click",
+    async () => {
+      rfidEventGet.disabled = true;
+      try {
+        const response = await fetch("/api/rfid/device-event", { signal });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidEvent.textContent = JSON.stringify(result, null, 2);
+        rfidEventMessage.textContent = "Latest RFID event returned by GET.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
+      } finally {
+        if (active) rfidEventGet.disabled = false;
+      }
+    },
+    { signal },
+  );
+  rfidReady.addEventListener(
+    "click",
+    async () => {
+    rfidReady.disabled = true;
+    try {
+      const response = await fetch("/api/rfid/staff-ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+        signal,
+      });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
+        rfidStatus.textContent = JSON.stringify(result.data || {}, null, 2);
+        rfidMessage.textContent = "Manual update finished. The workflow is idle.";
+      } catch (error) {
+        if (error.name !== "AbortError") rfidMessage.textContent = error.message;
+      } finally {
+        if (active) rfidReady.disabled = false;
+      }
+    },
+    { signal },
+  );
+
+  void refreshRfidStatus();
+  rfidPolling = window.setInterval(refreshRfidStatus, 3000);
+
   return () => {
     active = false;
     controller.abort();
+    if (rfidPolling) window.clearInterval(rfidPolling);
     cancelAnimationFrame(animationFrame);
     if (modelContent) disposeModel(THREE, modelContent);
     if (renderer) {

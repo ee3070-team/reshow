@@ -7,10 +7,10 @@ A desktop dashboard for a reusable smart exhibition showcase, with six core work
 Use Python 3.14 or later. Open PowerShell in this project directory and run:
 
 ```powershell
-python server.py --cert-file path/to/trusted-local-cert.pem --key-file path/to/local-key.pem
+python server.py
 ```
 
-Stop any previously running local web server first, then open **https://127.0.0.1:8000** in a desktop browser. If port 8000 is occupied by another application, use `python server.py --cert-file path/to/trusted-local-cert.pem --key-file path/to/local-key.pem --port 8001` and open **https://127.0.0.1:8001**. Use a certificate trusted by your browser whose subject alternative names include the chosen hostname (`127.0.0.1` or `localhost`). The server requires both TLS files and has no plaintext fallback. The server hosts the dashboard and its local showcase API together; do not open `index.html` directly because browsers restrict ES modules on `file:` URLs. Press Ctrl+C in the server terminal to stop it.
+Stop any previously running local web server first, then open **http://127.0.0.1:8000** in a desktop browser. If port 8000 is occupied by another application, use `python server.py --port 8001` and open **http://127.0.0.1:8001**. The default mode is plaintext HTTP for local development and does not show a self-signed certificate warning. For optional local HTTPS, provide both `--cert-file` and `--key-file`; use a certificate trusted by the browser and whose subject alternative names include `127.0.0.1` or `localhost`. The server hosts the dashboard and its local showcase API together; do not open `index.html` directly because browsers restrict ES modules on `file:` URLs. Press Ctrl+C in the server terminal to stop it.
 
 Staff sign-in is configured for the production website using the exact `/auth/callback.html` path. The previous HTTP localhost callback is retained in the account configuration, but the local server now requires HTTPS; a trusted HTTPS local callback must be explicitly configured in Cognito and the client allowlist before local staff sign-in can work. PKCE state/verifier expire after ten minutes in sessionStorage; access and refresh tokens remain in memory and are cleared on logout or expiry. Other demo origins can use the local showcase without staff sign-in.
 
@@ -69,11 +69,173 @@ This is a browser-only simulation, not a security boundary. No passwords are sav
 - **Reports:** choose sections and filters, generate a preview, separately save a live server snapshot, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
 - **Staff access:** administrators manage staff and separate website accounts, register scanned cards, confirm revoke/restore, and filter historical accepted/denied attempts. Website roles control permitted UI and service actions, separately from physical card permissions.
 - **Live showcase:** sign in to inspect the shared AWS `demo-test-case` fixture, its actual latest readings, saved profiles/label drafts, confirmed device state, command history and historical report. Changes from the [Python data tools](tools/demo-showcase/README.md) appear automatically while this tab is visible: the next paced read starts 30 seconds after the previous one finishes. Loads never overlap. Hiding the tab, navigating away or signing out stops its requests. Automatic refresh can be paused; **Refresh live data** still performs a single check. The previous display remains visible while loading or after a transient error, with retained sections explicitly marked; a permission denial clears that section. Reads show one page of up to 20 entries per history section; role filtering can leave fewer visible entries. Administrator-only card/access data and Operator exhibit scans follow the backend's role rules. The six core workspace tabs use browser-local samples in Demo mode and the separate live adapter in Live mode.
-- **3D & AI studio:** explore and adjust the 3D model, import a `.glb`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
+- **3D & AI studio:** explore and adjust the 3D model, import a `.glb` or a trusted JavaScript module exporting a `THREE.Group`, `THREE.Object3D`, or `THREE.Scene`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
 
-Image-to-JSON generation requires Cloudflare Workers AI access. Enter your 32-character Cloudflare Account ID and API token in the **3D & AI studio** tab when generating. Credentials are sent to the Python API for that request only; they are not stored in browser storage or written to disk. Production forwards them through CloudFront HTTPS to Lambda without API caching or application request-body logging. Enable the model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. The image is processed in memory and is not saved.
+Expand or collapse **Model settings** to show or hide model import, zoom, lighting, and rotation speed controls. Use the X and Y rotation speed sliders to change how many radians the bunny or currently loaded model rotates per animation frame. Set an axis to zero to stop it, or use a negative value to reverse it. The pause/resume button, dragging the viewer, and the front/side/back camera buttons remain available.
+
+Three.js module imports use this ES module contract:
+
+```js
+export default function createModel(THREE) {
+  const group = new THREE.Group();
+  // Add meshes and materials to group.
+  return group;
+}
+```
+
+Alternatively, export the object as `createModel`, `createGroup`, `default`, or
+`model`. Only import `.js` or `.mjs` modules from trusted sources because the
+module executes in the browser. `.ts` files are not directly executed by the
+canvas; compile TypeScript to JavaScript first.
+
+The **3D & AI studio** tab keeps exhibit JSON generation in the **Image-to-JSON assistant**. The separate **Tripo 3D generation** section accepts a Tripo API key for the current page session. It sends the key and prompt or selected image to the same-origin API, which forwards them to Tripo; they are not saved. Use only HTTPS or localhost, and do not paste the key into chat or source code. The key is held in the browser while the page is open, not exclusively on the server.
+
+Tripo generates a standard textured PBR model from the selected image (currently about $0.30 per task). After the image task succeeds, its ID is filled in as the source for text-guided retexturing (currently about $0.10 per task). You can enter a previous image-generation task ID as the source; keep that ID for further retexturing, since a retexture task has its own ID. Check [Tripo API pricing](https://developers.tripo3d.ai/en/pricing) before submitting; prices may change. The resulting GLB is loaded into the viewer when possible, and a temporary download link is provided. If direct loading fails, download and import the GLB. Model links expire after about five minutes. Generation continues if the page closes; retain the task ID and use **Check existing task** rather than submitting again. If submission fails before an ID is received, check Tripo task history before retrying because the request may already have been accepted. API credits and payment are separate from an App Store subscription.
+
+For Workers AI, enable the `@cf/meta/llama-3.2-11b-vision-instruct` model and accept any required model terms in Cloudflare before generating. Review the [model license](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) before using it. Images are processed in memory and are not saved.
 
 There is no Settings tab or remote unlock action. Layouts target desktop widths of 1280, 1440 and 1920 pixels. Exhibit illustrations are local editable SVG assets; model metadata in the Exhibits tab is illustrative.
+
+## Local RFID exhibit-change workflow
+
+The [Mega sketch](hardware_updated/hardware_updated_RFID_lock/hardware_updated_RFID_lock.ino)
+reads cards and controls the relay and e-paper; the [ESP32 bridge](NO-PUSH-explaination/wifi_updated/wifi_updated_RFID/wifi_updated_RFID.ino)
+sends events to the local server:
+
+```text
+RFID card -> Mega -> ESP32 -> Wi-Fi -> local server
+                  <- ESP32 <- RFID status
+```
+
+Configure card roles in the Mega sketch's `rfid_cards.h` and the ESP32's Wi-Fi and local RFID URL in the bridge sketch.
+
+For local testing, ESP32 and the computer running `server.py` can be on the same
+ordinary Wi-Fi or phone hotspot:
+
+```text
+ESP32 -> http://computer-ip:8000 -> server.py
+```
+
+For cloud testing, ESP32 should call HTTPS CloudFront/Lambda APIs. `server.py` is
+only a local development server; it is not the production database.
+
+GET and POST have different jobs:
+
+| Method | Meaning | ReShow RFID use |
+|---|---|---|
+| GET | Read saved description or status | ESP32 periodically reads `/api/rfid/epaper-description`; an e-paper scan reads status if no description has been saved |
+| POST | Submit a new event or command | ESP32 posts scans; the webpage saves a description or finishes the workflow |
+
+A GET request should not itself change an exhibit. A POST request should validate
+the card, phase, exhibit and revision before changing server state.
+
+The school network may use enterprise or captive-portal authentication that ESP32
+cannot use directly. A phone hotspot or normal router is easier for local testing.
+Do not commit Wi-Fi passwords or device secrets to GitHub.
+
+The local workflow uses one start scan:
+
+![RFID state machine](NO-PUSH-explaination/rfid-state-machine.svg)
+
+```text
+Door card or e-paper card
+  -> door card triggers the Mega relay for 3 seconds
+  -> e-paper card does not trigger the relay; both RGB LEDs turn green for about 1 second
+  -> server state: pending_edit
+
+Staff selects an existing exhibit in the RFID panel and edits its description
+  -> Save description and finish
+  -> server state: idle
+  -> ESP32 polls the server and sends the description to the Mega
+  -> e-paper updates automatically (no second scan)
+```
+
+The green LEDs confirm that the Mega recognized an e-paper card locally, not that the server or e-paper has updated. Normal lighting resumes after the indication.
+
+The description must be 1–180 printable English characters; the current display font does not support Chinese. The website stores the exhibit profile in browser-local demo storage. The server separately persists the most recently published e-paper description in a local ignored file; if server publication fails after the profile is saved, the page reports the partial failure and the description can be retried while the session is pending. The fixed hardware exhibit ID is not a website exhibit ID, so staff must explicitly select the correct website exhibit.
+
+The ESP32 checks the saved description about every 10 seconds, forwards changes to the Mega, and retries if the update fails; unchanged text is not repeatedly displayed. The Mega acknowledges after updating the display, and the ESP32 reports that confirmation to the server. The webpage shows whether confirmation is still pending or was last received; this is not a live connection or visual check. If either board restarts, the ESP32 sends the saved text again. Before any description is saved, the e-paper card displays the workflow status instead. **Mark manual update finished** and a configured `edit` card still finish a pending edit without publishing a description. Subsequent start scans during a pending edit do not replace the active workflow, although a door card still triggers the relay locally. The local workflow and confirmation are stored in server memory and reset when the server restarts; the saved description survives a server restart and is confirmed again by the ESP32. It is not an authenticated production API; use only a trusted network.
+
+For local testing without cards, the **3D & AI studio** RFID panel has **Test door card** and **Test e-paper card** buttons. Press either, select an exhibit, and save its description; the status moves from `idle` to `pending_edit` and back to `idle`. These simulated taps change shared server state but do not operate hardware. Restart the local server and upload both updated Mega and ESP32 sketches before testing the physical display. The ESP32 must use the computer's current reachable LAN address in its RFID URL.
+
+The [Mega RFID-lock sketch](hardware_updated/hardware_updated_RFID_lock/hardware_updated_RFID_lock.ino) also shows a startup test on a GDEH0154D67 e-paper display, then puts it to sleep. Install **GxEPD2** and **Adafruit GFX Library** in Arduino Library Manager, in addition to the sketch's existing libraries. Connect CS=43, DC=41, RST=39, BUSY=37, DIN=MOSI=51, and CLK=SCK=52; share ground. RFID and e-paper share SPI but use separate chip selects. Before connecting a 5 V Mega, verify that the specific Waveshare driver board supports 5 V signals and supply; older boards require 3.3 V and level shifting.
+
+The Mega sketch also supports an I2C SSD1306 128x64 OLED for local temperature and relative light readings and warnings, rotated 90 degrees counterclockwise. `T` is temperature and `L` is relative light. Install **Adafruit SSD1306** and **Adafruit GFX Library** using Arduino Library Manager. Connect SDA to Mega SDA (pin 20), SCL to SCL (pin 21), and ground to ground. Check the OLED module's supply and I2C voltage requirements before wiring: a 3.3 V-only module needs appropriate power and level shifting for the Mega. The sketch checks addresses 0x3C and 0x3D and reports initialization errors in the 115200 baud serial monitor. Readings and warnings refresh with the existing sensor sampling interval (currently 30 seconds); warnings use the existing fixed limits immediately, not the proposal's sustained-duration logic.
+
+For the local server demonstration, an `epaper` card sends an event then requests the current server RFID phase. The ESP32 returns that phase to the Mega, which displays it on the e-paper; this is a status demonstration, not exhibit data. A card with an empty role is denied. Connect Mega TX2 (pin 16) through a 5 V-to-3.3 V level shifter to ESP32 GPIO18, ESP32 GPIO17 to Mega RX2 (pin 17), and common ground; level-shift the latter to 5 V for guaranteed Mega input levels. Upload both sketches, configure the ESP32 RFID URL to the computer's LAN IP, and run `server.py --bind 0.0.0.0` only on a trusted network; the local RFID API has no production authentication. Allow the chosen port through the firewall if necessary. Restart the local server after code changes.
+
+For the `wifi` card in the Mega sketch, upload both that sketch and the ESP32 RFID bridge. A scan queues a fixed test message without the UID for POST to the bridge's httpbin URL, not the ReShow RFID endpoint or door relay. View the ESP32 serial monitor at 115200 baud for the HTTP status and echoed response; queued events are processed at most once per 10 seconds, and a disconnected network or earlier failed event can delay the test. The public HTTP endpoint is unencrypted: never send secrets or private information. httpbin echoes the POST immediately; it does not save it for a later GET.
+
+For cloud testing, the ESP32 constants use:
+
+```text
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/access-event
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/status
+https://dkbznu9f5nh9n.cloudfront.net/api/rfid/staff-ready
+```
+
+These RFID routes are not yet implemented by the deployed Cloud Lambda. `/api/health`
+and the Cloudflare AI generator are the currently known active cloud routes.
+
+### Cloud Lambda implementation checklist
+
+The backend team should implement the following before allowing ESP32 to use the cloud routes:
+
+1. Add `GET /api/rfid/status` and return the current workflow state.
+2. Add `POST /api/rfid/access-event` and validate the RFID UID, scan phase, card permission and device identity.
+3. Add `POST /api/rfid/staff-ready` only for authenticated staff with permission to edit the exhibit.
+4. Store the workflow state, exhibit ID, revision and card UID in a database such as DynamoDB.
+5. Use the database for confirmation instead of a Python process-local variable, so Lambda and server restarts do not lose the workflow.
+6. Require staff authentication for staff-ready actions; plain RFID UID alone must not change an exhibit or grant website access.
+7. Verify the ESP32 as a registered device. Do not keep a shared device secret in public browser JavaScript or GitHub.
+8. Add an unsigned or signed short-lived device token before production. Reject repeated, stale and conflicting scan messages.
+9. Connect the staff confirmation to the real exhibit update API. Confirmation must validate the current revision so an old edit cannot confirm a different change.
+10. Record accepted and denied scans with UTC time for the activity log.
+11. Store exhibit revision asset references for the `.glb` model and four view pictures; store the binary files in object storage instead of the database JSON.
+
+Minimum workflow response:
+
+```json
+{
+  "phase": "ready_to_confirm",
+  "uid": "FC6AB516",
+  "exhibit_id": "ex-014",
+  "revision": 12
+}
+```
+
+### Exhibit model and view-image storage
+
+The database must store more than RFID workflow state. Each exhibit revision should
+also record asset references for one `.glb` 3D model and four view pictures
+(front, back, left and right). Use private object storage such as S3 for the binary
+files; store stable paths and asset metadata on the exhibit entity:
+
+```json
+{
+  "exhibit_id": "ex-014",
+  "revision": 12,
+  "assets": {
+    "model_glb": "assets/exhibits/ex-014/model.glb",
+    "view_front": "assets/exhibits/ex-014/view-front.jpg",
+    "view_back": "assets/exhibits/ex-014/view-back.jpg",
+    "view_left": "assets/exhibits/ex-014/view-left.jpg",
+    "view_right": "assets/exhibits/ex-014/view-right.jpg"
+  }
+}
+```
+
+Asset database metadata should include media ID, logical path, content type, size
+and completion status. Do not place raw `.glb` bytes, base64 data or permanent
+storage URLs in exhibit JSON. Serving and replacement should use authenticated,
+short-lived download URLs and versioned completed assets. See
+[BACKEND_ASSET_UPLOAD.md](BACKEND_ASSET_UPLOAD.md) for the staged upload contract.
+
+Do not enable public access to staff-ready until the route is authenticated. Do not use
+`setInsecure()` for a production TLS connection. The CloudFront distribution should route
+these RFID APIs to Lambda with POST and GET support, caching disabled and a suitable
+request size limit. The current deployed `/api/rfid/*` routes are missing and should not
+be used as production access-control endpoints yet.
 
 ## Demo controls
 
@@ -123,6 +285,8 @@ css/technology-showcase.css      Showcase-tab components
 js/vendor/              Included Three.js r128 and GLTFLoader
 assets/                 Local SVG illustrations, image and GLB model
 tools/demo-showcase/     Synthetic seed, immutable updater and GET-only report
+hardware_updated/       ESP32/Mega RFID sketches and e-paper lock integration
+NO-PUSH-explaination/    Team notes, ESP32 RFID bridge, and RFID workflow diagrams
 ```
 
 The facade in `js/api.js` selects existing demo services or `js/live-api.js`. `js/auth-session.js` implements shared provider login/session handling, and `auth/callback.html` loads the same app shell with a root base URL. Keep callback shell markup aligned when changing `index.html`. Telemetry, command execution, durable evidence, permissions and hardware integration remain backend/producer responsibilities.
