@@ -1,0 +1,2 @@
+# Per-device credentials must stay local.
+**/local_config.h
