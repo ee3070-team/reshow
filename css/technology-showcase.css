@@ -175,6 +175,13 @@
 .technology-ai > p {
   font-size: 13px;
 }
+.technology-generation-panel {
+  display: grid;
+  gap: 14px;
+}
+.technology-generation-panel > p {
+  font-size: 13px;
+}
 .technology-credential {
   display: grid;
   gap: 6px;

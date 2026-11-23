@@ -152,3 +152,20 @@ test("RFID panel explains door and e-paper card roles", async () => {
   assert.match(showcase, /data-rfid-edit/);
   assert.match(showcase, /data-rfid-description/);
 });
+
+test("RFID contract has exactly five routes and combines status reads", async () => {
+  const server = await read("server.py");
+  const routes = [...server.matchAll(/if path == "(\/api\/rfid\/[^"]+)":/g)]
+    .map(match => match[1]).sort();
+  assert.deepEqual(routes, [
+    "/api/rfid/device-event",
+    "/api/rfid/epaper-delivery",
+    "/api/rfid/epaper-description",
+    "/api/rfid/publish-description",
+    "/api/rfid/status",
+  ]);
+  const showcase = await read("js/pages/technology-showcase.js");
+  assert.match(showcase, /workflow\.latest_event/);
+  assert.match(showcase, /workflow\.epaper_delivery/);
+  assert.doesNotMatch(showcase, /data-rfid-event-get|GET latest RFID event/);
+});

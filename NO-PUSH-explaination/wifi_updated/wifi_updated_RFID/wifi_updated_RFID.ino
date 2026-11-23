@@ -196,7 +196,7 @@ bool sendEpaperStatus() {
     return false;
   }
   statusUrl.remove(statusUrl.length() - suffix.length());
-  statusUrl += "/api/rfid/epaper-status";
+  statusUrl += "/api/rfid/status";
   WiFiClient client;
   HTTPClient http;
   http.setConnectTimeout(5000);
@@ -212,8 +212,17 @@ bool sendEpaperStatus() {
     http.end();
     return false;
   }
-  const String phase = http.getString();
+  const String body = http.getString();
   http.end();
+  const int phaseKey = body.indexOf("\"phase\"");
+  const int phaseColon = phaseKey < 0 ? -1 : body.indexOf(':', phaseKey);
+  const int valueStart = phaseColon < 0 ? -1 : body.indexOf('"', phaseColon + 1);
+  const int valueEnd = valueStart < 0 ? -1 : body.indexOf('"', valueStart + 1);
+  if (valueStart < 0 || valueEnd <= valueStart) {
+    Serial.println("Server returned an invalid RFID status.");
+    return false;
+  }
+  const String phase = body.substring(valueStart + 1, valueEnd);
   if (phase != "idle" && phase != "pending_edit" && phase != "ready_to_confirm") {
     Serial.println("Server returned an invalid e-paper status.");
     return false;

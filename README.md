@@ -69,9 +69,9 @@ This is a browser-only simulation, not a security boundary. No passwords are sav
 - **Reports:** choose sections and filters, generate a preview, separately save a live server snapshot, export its CSV, or use **Print / Save as PDF**. In a regular browser, choose a PDF destination in the print dialog. This is browser printing, not a direct PDF download.
 - **Staff access:** administrators manage staff and separate website accounts, register scanned cards, confirm revoke/restore, and filter historical accepted/denied attempts. Website roles control permitted UI and service actions, separately from physical card permissions.
 - **Live showcase:** sign in to inspect the shared AWS `demo-test-case` fixture, its actual latest readings, saved profiles/label drafts, confirmed device state, command history and historical report. Changes from the [Python data tools](tools/demo-showcase/README.md) appear automatically while this tab is visible: the next paced read starts 30 seconds after the previous one finishes. Loads never overlap. Hiding the tab, navigating away or signing out stops its requests. Automatic refresh can be paused; **Refresh live data** still performs a single check. The previous display remains visible while loading or after a transient error, with retained sections explicitly marked; a permission denial clears that section. Reads show one page of up to 20 entries per history section; role filtering can leave fewer visible entries. Administrator-only card/access data and Operator exhibit scans follow the backend's role rules. The six core workspace tabs use browser-local samples in Demo mode and the separate live adapter in Live mode.
-- **3D & AI studio:** switch between the 3D model studio, Image & AI (including Tripo), and ESP32/RFID workflow; one section is shown at a time. Explore and adjust the 3D model, import a `.glb` or a trusted JavaScript module exporting a `THREE.Group`, `THREE.Object3D`, or `THREE.Scene`, export four hologram views, and generate exhibit JSON from the included `assets/helmet.jpg` photo or another selected image. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
+- **3D & AI studio:** switch between the 3D model studio, Image & AI (including Tripo), and ESP32/RFID workflow; one section is shown at a time. Explore and adjust the 3D model, import a `.glb` or a trusted JavaScript module exporting a `THREE.Group`, `THREE.Object3D`, or `THREE.Scene`, export four hologram views, and select an image to generate exhibit JSON or a 3D model. Locally this tab uses the same Python server as the rest of the site; the deployed site uses its same-origin HTTPS API.
 
-Expand or collapse **Model settings** to show or hide model import, zoom, lighting, and rotation speed controls. Use the X and Y rotation speed sliders to change how many radians the bunny or currently loaded model rotates per animation frame. Set an axis to zero to stop it, or use a negative value to reverse it. The pause/resume button, dragging the viewer, and the front/side/back camera buttons remain available.
+Model import is always visible. Expand or collapse **Model settings** to show or hide zoom, lighting, and rotation speed controls. Use the X and Y rotation speed sliders to change how many radians the bunny or currently loaded model rotates per animation frame. Set an axis to zero to stop it, or use a negative value to reverse it. The pause/resume button, dragging the viewer, and four-view playback and export remain available.
 
 Three.js module imports use this ES module contract:
 
@@ -88,7 +88,7 @@ Alternatively, export the object as `createModel`, `createGroup`, `default`, or
 module executes in the browser. `.ts` files are not directly executed by the
 canvas; compile TypeScript to JavaScript first.
 
-The **3D & AI studio** tab keeps exhibit JSON generation in the **Image-to-JSON assistant**. The separate **Tripo 3D generation** section accepts a Tripo API key for the current page session. It sends the key and prompt or selected image to the same-origin API, which forwards them to Tripo; they are not saved. Use only HTTPS or localhost, and do not paste the key into chat or source code. The key is held in the browser while the page is open, not exclusively on the server.
+In **Image & AI**, select one image, then choose **Generate JSON** or **Generate 3D model**. Switching between them keeps the selected image and entered values. The **Tripo 3D generation** section accepts a Tripo API key for the current page session. It sends the key and prompt or selected image to the same-origin API, which forwards them to Tripo; they are not saved. Use only HTTPS or localhost, and do not paste the key into chat or source code. The key is held in the browser while the page is open, not exclusively on the server.
 
 Tripo generates a standard textured PBR model from the selected image (currently about $0.30 per task). After the image task succeeds, its ID is filled in as the source for text-guided retexturing (currently about $0.10 per task). You can enter a previous image-generation task ID as the source; keep that ID for further retexturing, since a retexture task has its own ID. Check [Tripo API pricing](https://developers.tripo3d.ai/en/pricing) before submitting; prices may change. The resulting GLB is loaded into the viewer when possible, and a temporary download link is provided. If direct loading fails, download and import the GLB. Model links expire after about five minutes. Generation continues if the page closes; retain the task ID and use **Check existing task** rather than submitting again. If submission fails before an ID is received, check Tripo task history before retrying because the request may already have been accepted. API credits and payment are separate from an App Store subscription.
 
@@ -123,8 +123,8 @@ GET and POST have different jobs:
 
 | Method | Meaning | ReShow RFID use |
 |---|---|---|
-| GET | Read saved description or status | ESP32 periodically reads `/api/rfid/epaper-description`; an e-paper scan reads status if no description has been saved |
-| POST | Submit a new event or command | ESP32 posts scans; the webpage saves a description or finishes the workflow |
+| GET | Read description or combined status | ESP32 reads `/api/rfid/epaper-description`; `/api/rfid/status` includes phase, latest event and e-paper delivery state |
+| POST | Submit an event, description or acknowledgement | ESP32 posts `/api/rfid/device-event` and `/api/rfid/epaper-delivery`; the webpage posts `/api/rfid/publish-description` |
 
 A GET request should not itself change an exhibit. A POST request should validate
 the card, phase, exhibit and revision before changing server state.
@@ -156,7 +156,7 @@ The green LEDs confirm that the Mega recognized an e-paper card locally, not tha
 
 The description must be 1–180 printable English characters; the current display font does not support Chinese. The website stores the exhibit profile in browser-local demo storage. The server separately persists the most recently published e-paper description in a local ignored file; if server publication fails after the profile is saved, the page reports the partial failure and the description can be retried while the session is pending. The fixed hardware exhibit ID is not a website exhibit ID, so staff must explicitly select the correct website exhibit.
 
-The ESP32 checks the saved description about every 10 seconds, forwards changes to the Mega, and retries if the update fails; unchanged text is not repeatedly displayed. The Mega acknowledges after updating the display, and the ESP32 reports that confirmation to the server. The webpage shows whether confirmation is still pending or was last received; this is not a live connection or visual check. If either board restarts, the ESP32 sends the saved text again. Before any description is saved, the e-paper card displays the workflow status instead. A configured `edit` card or a direct `POST /api/rfid/staff-ready` still finishes a pending edit without publishing a description; the webpage no longer offers a separate button for this. Subsequent start scans during a pending edit do not replace the active workflow, although a door card still triggers the relay locally. The local workflow and confirmation are stored in server memory and reset when the server restarts; the saved description survives a server restart and is confirmed again by the ESP32. It is not an authenticated production API; use only a trusted network.
+The ESP32 checks the saved description about every 10 seconds, forwards changes to the Mega, and retries if the update fails; unchanged text is not repeatedly displayed. The Mega acknowledges after updating the display, and the ESP32 reports that confirmation to the server. The webpage reads the phase, latest event and delivery status from the same `GET /api/rfid/status` request; confirmation means the Mega last acknowledged an update, not that it is currently online or visually verified. If either board restarts, the ESP32 sends the saved text again. Before any description is saved, an e-paper card uses the same status request to display the workflow phase. A configured `edit` card ends a pending edit without publishing a description. Subsequent start scans during a pending edit do not replace the active workflow, although a door card still triggers the relay locally. The local workflow and confirmation are stored in server memory and reset when the server restarts; the saved description survives a server restart and is confirmed again by the ESP32. It is not an authenticated production API; use only a trusted network.
 
 For local testing without cards, the **3D & AI studio** RFID panel has **Test door card** and **Test e-paper card** buttons. Press either, select an exhibit, and save its description; the status moves from `idle` to `pending_edit` and back to `idle`. These simulated taps change shared server state but do not operate hardware. Restart the local server and upload both updated Mega and ESP32 sketches before testing the physical display. The ESP32 must use the computer's current reachable LAN address in its RFID URL.
 
@@ -168,32 +168,32 @@ For the local server demonstration, an `epaper` card sends an event then request
 
 For the `wifi` card in the Mega sketch, upload both that sketch and the ESP32 RFID bridge. A scan queues a fixed test message without the UID for POST to the bridge's httpbin URL, not the ReShow RFID endpoint or door relay. View the ESP32 serial monitor at 115200 baud for the HTTP status and echoed response; queued events are processed at most once per 10 seconds, and a disconnected network or earlier failed event can delay the test. The public HTTP endpoint is unencrypted: never send secrets or private information. httpbin echoes the POST immediately; it does not save it for a later GET.
 
-For cloud testing, the ESP32 constants use:
+The local RFID workflow has exactly five request method/path pairs:
 
 ```text
-https://dkbznu9f5nh9n.cloudfront.net/api/rfid/access-event
-https://dkbznu9f5nh9n.cloudfront.net/api/rfid/status
-https://dkbznu9f5nh9n.cloudfront.net/api/rfid/staff-ready
+POST /api/rfid/device-event
+GET  /api/rfid/status
+POST /api/rfid/publish-description
+GET  /api/rfid/epaper-description
+POST /api/rfid/epaper-delivery
 ```
 
-These RFID routes are not yet implemented by the deployed Cloud Lambda. `/api/health`
-and the Cloudflare AI generator are the currently known active cloud routes.
+The status response includes the latest card event and e-paper delivery state, so
+there are no separate GET event, GET delivery, or phase-only endpoints. The local
+server implements the five routes; the Cloud Lambda in this repository does not
+implement RFID routes. Confirm the cloud deployment before pointing hardware at it.
 
 ### Cloud Lambda implementation checklist
 
 The backend team should implement the following before allowing ESP32 to use the cloud routes:
 
-1. Add `GET /api/rfid/status` and return the current workflow state.
-2. Add `POST /api/rfid/access-event` and validate the RFID UID, scan phase, card permission and device identity.
-3. Add `POST /api/rfid/staff-ready` only for authenticated staff with permission to edit the exhibit.
-4. Store the workflow state, exhibit ID, revision and card UID in a database such as DynamoDB.
-5. Use the database for confirmation instead of a Python process-local variable, so Lambda and server restarts do not lose the workflow.
-6. Require staff authentication for staff-ready actions; plain RFID UID alone must not change an exhibit or grant website access.
-7. Verify the ESP32 as a registered device. Do not keep a shared device secret in public browser JavaScript or GitHub.
-8. Add an unsigned or signed short-lived device token before production. Reject repeated, stale and conflicting scan messages.
-9. Connect the staff confirmation to the real exhibit update API. Confirmation must validate the current revision so an old edit cannot confirm a different change.
-10. Record accepted and denied scans with UTC time for the activity log.
-11. Store exhibit revision asset references for the `.glb` model and four view pictures; store the binary files in object storage instead of the database JSON.
+1. Implement the five RFID routes above, including the combined status fields.
+2. Store workflow state, exhibit ID, revision and card UID durably; do not rely on Lambda process memory.
+3. Authenticate staff and registered devices. Do not keep device secrets in browser JavaScript or Git.
+4. Reject repeated, stale and conflicting scan messages.
+5. Connect description publication and device acknowledgement to the real exhibit revision.
+6. Record accepted and denied scans with UTC time for the activity log.
+7. Store exhibit revision asset references for the `.glb` model and four view pictures; store the binary files in object storage instead of the database JSON.
 
 Minimum workflow response:
 
@@ -233,7 +233,7 @@ storage URLs in exhibit JSON. Serving and replacement should use authenticated,
 short-lived download URLs and versioned completed assets. See
 [BACKEND_ASSET_UPLOAD.md](BACKEND_ASSET_UPLOAD.md) for the staged upload contract.
 
-Do not enable public access to staff-ready until the route is authenticated. Do not use
+Do not expose the RFID routes publicly without authentication. Do not use
 `setInsecure()` for a production TLS connection. The CloudFront distribution should route
 these RFID APIs to Lambda with POST and GET support, caching disabled and a suitable
 request size limit. The current deployed `/api/rfid/*` routes are missing and should not

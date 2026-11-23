@@ -33,7 +33,15 @@ RFID 卡 -> Mega 判断卡片角色 -> ESP32 -> Wi-Fi -> 服务器
 
 ## 2. 当前本地 HTTP 接口
 
-以下路径是本地 `server.py` 的接口。示例 UID、展品 ID 和描述均为示例，不是真实卡片数据。
+本地 RFID 流程严格使用以下 **5 个请求方法和路径**。状态、最新刷卡事件和电子纸送达状态统一由 `GET /api/rfid/status` 返回；不另设查询接口。以下路径是本地 `server.py` 的接口，不代表云端已实现。示例 UID、展品 ID 和描述均为示例，不是真实卡片数据。
+
+| # | 请求 | 用途 |
+|---|---|---|
+| 1 | `POST /api/rfid/device-event` | ESP32 上传刷卡事件 |
+| 2 | `GET /api/rfid/status` | 网页和 ESP32 查询流程、最近事件和电子纸送达状态 |
+| 3 | `POST /api/rfid/publish-description` | 网页保存描述并结束修改 |
+| 4 | `GET /api/rfid/epaper-description` | ESP32 获取待显示文字 |
+| 5 | `POST /api/rfid/epaper-delivery` | ESP32 报告 Mega 已确认更新 |
 
 ### 2.1 ESP32 上传刷卡事件
 
@@ -69,8 +77,6 @@ RFID 卡 -> Mega 判断卡片角色 -> ESP32 -> Wi-Fi -> 服务器
 
 服务器处于 `idle` 时，认可的 `door` 或 `epaper` 事件开始 `pending_edit`；已处于 `pending_edit` 时，后续开始事件不会替换当前会话。`edit` 事件会结束待处理会话，不发布描述。服务器也兼容不带 `role` 的旧版认可事件。
 
-`GET /api/rfid/device-event` 返回最近一次事件的同一 JSON 格式；尚无事件时返回 `404`。这是最新事件，不是完整事件历史。
-
 ### 2.2 网页读取流程状态
 
 `GET /api/rfid/status`
@@ -81,12 +87,20 @@ RFID 卡 -> Mega 判断卡片角色 -> ESP32 -> Wi-Fi -> 服务器
     "phase": "pending_edit",
     "uid": "A1B2C3D4",
     "exhibit_id": "helmet-001",
-    "edit_id": "example-session-id"
+    "edit_id": "example-session-id",
+    "latest_event": {
+      "type": "rfid_event",
+      "uid": "A1B2C3D4",
+      "result": "accepted",
+      "exhibit_id": "helmet-001",
+      "role": "door"
+    },
+    "epaper_delivery": "pending"
   }
 }
 ```
 
-`edit_id` 由服务器生成，用于防止过期的网页提交到新会话。空闲时 `phase` 是 `idle`，其余三个字段为 `null`。网页 RFID 面板当前约每 3 秒查询一次。
+`edit_id` 由服务器生成，用于防止过期的网页提交到新会话。空闲时 `phase` 是 `idle`，`uid`、`exhibit_id` 和 `edit_id` 为 `null`。`latest_event` 是最近一次刷卡事件（没有事件时为 `null`），不是完整事件历史。`epaper_delivery` 为 `not_saved`、`pending` 或 `confirmed`。网页 RFID 面板约每 3 秒查询一次；ESP32 在没有已保存描述、需要显示流程状态时，也查询此接口。
 
 ### 2.3 网页保存描述并结束修改
 
@@ -107,7 +121,7 @@ RFID 卡 -> Mega 判断卡片角色 -> ESP32 -> Wi-Fi -> 服务器
 - 成功返回 `200` 和 `{"data":{"phase":"idle","uid":null,"exhibit_id":null,"edit_id":null}}`。会话不匹配返回 `409`；输入错误返回 `400`；保存失败返回 `500`。
 - 网页展品资料目前只保存到浏览器本地，服务器另外保存最近一次发布的电子纸描述；两者不是云端共享数据库。
 
-如果不发布描述，调用方仍可发送 `POST /api/rfid/staff-ready`，请求体为 `{}`；当前网页不再提供此按钮。有待处理会话时返回 `200` 和空闲状态；没有待处理会话时返回 `409`。
+如果不发布描述，已配置的 `edit` 卡可以通过现有 `POST /api/rfid/device-event` 结束待处理会话；不需要额外的“结束修改”接口。
 
 ### 2.4 ESP32 获取电子纸描述
 
@@ -122,7 +136,7 @@ A red balloon.
 - `404`：尚未保存描述。
 - `500`：读取已保存描述失败。
 
-ESP32 约每 10 秒轮询；串口传输、网络失败或队列等可能导致延迟。只有文字变化时才重新发送给 Mega；Mega 重启后也会重发。若 `epaper` 卡触发时没有保存过描述，ESP32 调用 `GET /api/rfid/epaper-status` 获取纯文本 `idle` 或 `pending_edit`，再交给 Mega 显示。
+ESP32 约每 10 秒轮询；串口传输、网络失败或队列等可能导致延迟。只有文字变化时才重新发送给 Mega；Mega 重启后也会重发。若 `epaper` 卡触发时没有保存过描述，ESP32 调用 `GET /api/rfid/status`，读取其中的 `phase`，再交给 Mega 显示。
 
 ### 2.5 ESP32 确认更新
 
@@ -143,13 +157,7 @@ A red balloon.
 
 状态为 `200`。当前描述不存在或已改变时返回 `409`；输入错误返回 `400`。ESP32 要求确认接口返回 `200`。
 
-网页使用 `GET /api/rfid/epaper-delivery` 查看状态：
-
-```json
-{"data":{"state":"pending"}}
-```
-
-状态可能为 `not_saved`、`pending` 或 `confirmed`。`confirmed` 表示 Mega 曾确认更新，不是实时在线状态，也不是人工目视确认。
+网页从 `GET /api/rfid/status` 的 `epaper_delivery` 字段查看状态。`confirmed` 表示 Mega 曾确认更新，不是实时在线状态，也不是人工目视确认。
 
 ## 3. 云端对接需要讨论
 
@@ -162,7 +170,7 @@ A red balloon.
 
 当前 ESP32 代码使用普通 HTTP 客户端，且从 RFID URL 推导电子纸接口路径；接入云端 HTTPS、认证或不同路径需要修改固件。现有本地 API 无生产认证，只应在可信网络测试。ESP32 的待发送事件队列最多 4 条，满时新事件不会入队；HTTP 成功确认丢失后可能重试，因此不要假定事件恰好发送一次。
 
-本地流程状态和电子纸确认保存在服务器内存，服务器重启会重置；最近保存的描述写入本地文件。`GET /api/rfid/device-event` 只保存最近事件，不应视作持久审计日志。不要提交 Wi-Fi 密码、API 密钥或真实卡片 UID。
+本地流程状态和电子纸确认保存在服务器内存，服务器重启会重置；最近保存的描述写入本地文件。`GET /api/rfid/status` 中的 `latest_event` 只保存最近事件，不应视作持久审计日志。不要提交 Wi-Fi 密码、API 密钥或真实卡片 UID。
 
 ## 4. 给云端同学的具体交接
 
@@ -173,9 +181,8 @@ A red balloon.
 | 功能 | 发送方 | 云端需要提供的能力 |
 |---|---|---|
 | 上传拍卡事件 | ESP32 | 接收 `door`、`epaper` 和拒绝事件；记录设备、事件与处理结果。避免重试重复创建修改会话。 |
-| 查询修改会话 | 网页 | 查询指定展柜的 `idle` / `pending_edit` 和当前会话 ID；并发拍卡时不覆盖正在进行的会话。 |
+| 查询状态 | 网页和 ESP32 | 一个状态接口同时返回修改会话、最近刷卡事件和电子纸送达状态；并发拍卡时不覆盖正在进行的会话。 |
 | 发布描述 | 网页 | 验证员工权限和会话 ID，保存所选展品和描述，并结束会话；同时保留待设备确认的更新。 |
-| 不发布而结束 | 待确认的调用方 | 如需保留此能力，允许授权工作人员结束当前会话，不改变电子纸内容；当前网页没有此按钮。 |
 | 获取待显示内容 | ESP32 | 让设备读取对应展柜的当前描述或待处理更新；首次尚无内容时返回明确状态。 |
 | 确认设备更新 | ESP32 | 收到 Mega 的更新确认后记录对应设备和内容版本；网页可区分待确认和已确认。 |
 
@@ -188,7 +195,7 @@ A red balloon.
 3. 设备 ID、展品 ID、会话 ID、事件去重 ID 和描述版本怎样生成与关联；多展柜如何隔离。
 4. 已有哪些功能部署可用，哪些仍需开发；可供联调的测试环境及测试账号或设备凭证的安全获取方式。**不要把密钥或真实 UID 写进文档或 Git。**
 
-若使用现有云端接口，请逐项说明它与上表功能的对应关系，包括 `pending_edit` 会话与电子纸确认如何实现。现有本地固件只通过**描述文本本身**比对确认，没有事件去重 ID、设备 ID 或内容版本；加入这些能力需要同步修改固件和网页，不能仅靠云端实现。
+若使用现有云端接口，请逐项说明它与上表五项功能的对应关系，包括 `pending_edit` 会话与电子纸确认如何实现。现有本地固件只通过**描述文本本身**比对确认，没有事件去重 ID、设备 ID 或内容版本；加入这些能力需要同步修改固件和网页，不能仅靠云端实现。
 
 ### 联调验收清单
 

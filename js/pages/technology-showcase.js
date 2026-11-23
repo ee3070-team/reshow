@@ -136,15 +136,15 @@ export async function render(container, ctx) {
         <div class="card-head"><h2>3D model studio</h2><span class="badge">Three.js</span></div>
         <div class="technology-viewer" data-viewer aria-label="Interactive 3D model preview"></div>
         <p class="technology-status" data-model-status role="status" aria-live="polite">Loading the 3D viewer…</p>
+        <div class="technology-import">
+          <label class="technology-field">Import a GLB or Three.js Group module
+            <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
+          </label>
+          <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
+        </div>
         <details class="technology-settings">
           <summary>Model settings</summary>
           <div class="technology-settings-content">
-            <div class="technology-import">
-              <label class="technology-field">Import a GLB or Three.js Group module
-                <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
-              </label>
-              <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
-            </div>
             <div class="technology-controls">
               <label>Zoom <output data-zoom-value>5.6</output>
                 <input data-zoom type="range" min="3" max="10" step="0.1" value="5.6">
@@ -170,39 +170,41 @@ export async function render(container, ctx) {
         </details>
         <div class="actions technology-actions">
           <button class="button" type="button" data-rotation aria-pressed="false">Pause rotation</button>
-          <button class="button" type="button" data-angle="0">Front</button>
-          <button class="button" type="button" data-angle="90">Side</button>
-          <button class="button" type="button" data-angle="180">Back</button>
-          <button class="button" type="button" data-angle="270">Side</button>
           <button class="button" type="button" data-fullscreen aria-pressed="false">Play 4-view fullscreen</button>
           <button class="button primary" type="button" data-export>Export four views</button>
         </div>
         <p class="technology-status" data-export-status role="status" aria-live="polite"></p>
       </section>
       <section id="studio-ai" class="card technology-ai" data-studio-panel="ai" hidden>
-        <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
-        <p>Enter your Cloudflare credentials and choose an artifact image to generate a suggested name and description with example exhibit settings. Credentials and images are sent over HTTPS to the ReShow API and then to Cloudflare for this request only; they are not saved.</p>
-        <label class="technology-credential">Cloudflare Account ID
-          <input data-account-id type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Your 32-character account ID" required>
-        </label>
-        <label class="technology-credential">Cloudflare API token
-          <span class="technology-token-input">
-            <input data-api-token type="password" autocomplete="new-password" spellcheck="false" placeholder="Your Workers AI API token" required>
-            <button class="button small" type="button" data-toggle-token aria-pressed="false">Show</button>
-          </span>
-        </label>
+        <div class="card-head"><h2>Image &amp; AI</h2></div>
         <label class="technology-drop">
-          <span>${icon("upload")}Choose a different JPEG, PNG, or WebP image</span>
+          <span>${icon("upload")}Choose a JPEG, PNG, or WebP image</span>
           <input data-image-file type="file" accept="image/jpeg,image/png,image/webp">
         </label>
         <div class="technology-image-preview" data-image-preview role="img" aria-label="Selected image preview">No image selected</div>
-        <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
-        <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
-        <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
-        <section class="card technology-ai">
+        <div class="segmented technology-section-selector" role="group" aria-label="Generation type">
+          <button type="button" class="active" data-generation-type="json" aria-pressed="true" aria-controls="generation-json">Generate JSON</button>
+          <button type="button" data-generation-type="model" aria-pressed="false" aria-controls="generation-model">Generate 3D model</button>
+        </div>
+        <section id="generation-json" class="technology-generation-panel" data-generation-panel="json">
+          <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
+          <p>Your image and credentials go to Cloudflare via ReShow. They are not saved.</p>
+          <label class="technology-credential">Cloudflare Account ID
+            <input data-account-id type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Your 32-character account ID" required>
+          </label>
+          <label class="technology-credential">Cloudflare API token
+            <span class="technology-token-input">
+              <input data-api-token type="password" autocomplete="new-password" spellcheck="false" placeholder="Your Workers AI API token" required>
+              <button class="button small" type="button" data-toggle-token aria-pressed="false">Show</button>
+            </span>
+          </label>
+          <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
+          <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
+          <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
+        </section>
+        <section id="generation-model" class="technology-ai technology-generation-panel" data-generation-panel="model" hidden>
           <div class="card-head"><h2>Tripo 3D generation</h2><span class="badge info">Pay per task</span></div>
-          <p>Generate a textured GLB from the image selected above (about $0.30 per task), or retexture a generated model using a text description (about $0.10 per task). Prices may change; check Tripo pricing before submitting.</p>
-          <p class="technology-small">Your key is used only for these requests and is not saved. Use HTTPS or localhost. Tripo receives your image or texture description. Closing this page does not cancel a submitted task.</p>
+          <p class="technology-small">Closing this page won't cancel a task.</p>
           <label class="technology-credential">Tripo API key
             <input data-tripo-key type="password" autocomplete="off" spellcheck="false" placeholder="Enter your Tripo API key">
           </label>
@@ -254,12 +256,11 @@ export async function render(container, ctx) {
         </form>
         <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
         <details class="technology-settings">
-          <summary>RFID event GET/POST example</summary>
+          <summary>RFID event example</summary>
           <div class="technology-settings-content">
-            <p class="technology-status">The example POST records a demo event and starts the workflow, exactly like a real card tap. GET returns that event in the same JSON shape.</p>
+            <p class="technology-status">Send a demo event. The latest event and e-paper status appear in the workflow status.</p>
             <div class="actions">
               <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
-              <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
             </div>
           </div>
         </details>
@@ -293,6 +294,20 @@ export async function render(container, ctx) {
       });
       sectionPanels.forEach((panel) => {
         panel.hidden = panel.dataset.studioPanel !== selected;
+      });
+    }, { signal });
+  });
+  const generationButtons = container.querySelectorAll("[data-generation-type]");
+  const generationPanels = container.querySelectorAll("[data-generation-panel]");
+  generationButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      generationButtons.forEach((item) => {
+        const isSelected = item === button;
+        item.classList.toggle("active", isSelected);
+        item.setAttribute("aria-pressed", String(isSelected));
+      });
+      generationPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.generationPanel !== button.dataset.generationType;
       });
     }, { signal });
   });
@@ -646,16 +661,6 @@ export async function render(container, ctx) {
       () => setAutoRotate(!autoRotate),
       { signal },
     );
-    container.querySelectorAll("[data-angle]").forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => {
-          cameraAngle = Number(button.dataset.angle);
-          updateCamera();
-        },
-        { signal },
-      );
-    });
     container.querySelector("[data-model-file]").addEventListener(
       "change",
       async (event) => {
@@ -1163,7 +1168,6 @@ export async function render(container, ctx) {
   const rfidDelivery = container.querySelector("[data-rfid-delivery]");
   const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
   const rfidExamplePost = container.querySelector("[data-rfid-example-post]");
-  const rfidEventGet = container.querySelector("[data-rfid-event-get]");
   const rfidEvent = container.querySelector("[data-rfid-event]");
   const rfidEventMessage = container.querySelector("[data-rfid-event-message]");
   const rfidTestButtons = container.querySelectorAll("[data-rfid-test-role]");
@@ -1226,41 +1230,34 @@ export async function render(container, ctx) {
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
       const workflow = result.data || {};
+      if (refreshSequence !== rfidRefreshSequence) return;
       rfidStatus.textContent = JSON.stringify(workflow, null, 2);
       rfidExhibit.textContent = workflow.exhibit_id || "Waiting for ESP32 scan";
       rfidMessage.textContent = "ESP32 workflow status is available.";
-      await syncRfidEditor(workflow);
-    } catch (error) {
-      if (error.name === "AbortError") return;
-      rfidStatus.textContent = '{"phase":"unavailable"}';
-      rfidMessage.textContent = error.message;
-    }
-    try {
-      const response = await fetch("/api/rfid/epaper-delivery", { signal });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      const messages = {
+      const deliveryMessages = {
         not_saved: "No e-paper description has been saved yet.",
         pending: "Description saved; waiting for the ESP32 and Mega to confirm the display update.",
         confirmed: "The Mega last confirmed this e-paper update.",
       };
-      if (!Object.prototype.hasOwnProperty.call(messages, result.data?.state)) throw new Error("Invalid delivery status.");
-      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = messages[result.data.state];
+      if (!Object.prototype.hasOwnProperty.call(deliveryMessages, workflow.epaper_delivery)) {
+        throw new Error("Invalid e-paper delivery status.");
+      }
+      rfidDelivery.textContent = deliveryMessages[workflow.epaper_delivery];
+      if (workflow.latest_event) {
+        rfidEvent.textContent = JSON.stringify(workflow.latest_event, null, 2);
+        rfidEventMessage.textContent =
+          `Card tap received: ${workflow.latest_event.uid} (${workflow.latest_event.result}).`;
+      } else {
+        rfidEvent.textContent = "No RFID event loaded.";
+        rfidEventMessage.textContent = "Waiting for a card tap.";
+      }
+      await syncRfidEditor(workflow);
     } catch (error) {
       if (error.name === "AbortError") return;
-      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = `E-paper delivery status unavailable: ${error.message}`;
-    }
-    try {
-      // Show the newest card tap automatically so the panel reacts to the reader
-      // without anyone pressing the GET button.
-      const response = await fetch("/api/rfid/device-event", { signal });
-      if (!response.ok) return;
-      const event = await response.json().catch(() => null);
-      if (!event) return;
-      rfidEvent.textContent = JSON.stringify(event, null, 2);
-      rfidEventMessage.textContent = `Card tap received: ${event.uid} (${event.result}).`;
-    } catch (error) {
-      if (error.name === "AbortError") return;
+      if (refreshSequence !== rfidRefreshSequence) return;
+      rfidStatus.textContent = '{"phase":"unavailable"}';
+      rfidMessage.textContent = error.message;
+      rfidDelivery.textContent = `E-paper delivery status unavailable: ${error.message}`;
     }
   };
 
@@ -1406,29 +1403,12 @@ export async function render(container, ctx) {
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
         rfidEvent.textContent = JSON.stringify(result, null, 2);
-        rfidEventMessage.textContent = "Example RFID event POST received. Use GET to retrieve the latest event.";
+        await refreshRfidStatus();
+        rfidEventMessage.textContent = "Example RFID event received; the latest event is included in workflow status.";
       } catch (error) {
         if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
       } finally {
         if (active) rfidExamplePost.disabled = false;
-      }
-    },
-    { signal },
-  );
-  rfidEventGet.addEventListener(
-    "click",
-    async () => {
-      rfidEventGet.disabled = true;
-      try {
-        const response = await fetch("/api/rfid/device-event", { signal });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-        rfidEvent.textContent = JSON.stringify(result, null, 2);
-        rfidEventMessage.textContent = "Latest RFID event returned by GET.";
-      } catch (error) {
-        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
-      } finally {
-        if (active) rfidEventGet.disabled = false;
       }
     },
     { signal },
