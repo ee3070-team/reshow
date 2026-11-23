@@ -8,7 +8,15 @@ import os
 from pathlib import Path
 import re
 
-from server import MAX_REQUEST_SIZE, UploadError, generate_exhibit, parse_multipart_request
+from server import (
+    MAX_REQUEST_SIZE,
+    UploadError,
+    generate_exhibit,
+    generate_model_group,
+    generate_model_group_step,
+    parse_multipart_request,
+    process_tripo_request,
+)
 
 GENERATE_PATH = "/api/technology/generate-exhibit"
 
@@ -61,13 +69,27 @@ def generate(event):
         checksum = headers.get("x-amz-content-sha256", "")
         if not re.fullmatch(r"[0-9a-f]{64}", checksum) or not hmac.compare_digest(checksum, digest):
             raise UploadError(400, "The image upload checksum is invalid.")
-        image, account, token = parse_multipart_request(headers.get("content-type", ""), body)
-        return response(200, {"data": generate_exhibit(image, account, token)})
+        if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "application/json":
+            return response(200, {"data": process_tripo_request(body)})
+        image, account, token, task, stage, previous_parts = parse_multipart_request(
+            headers.get("content-type", ""), body
+        )
+        if task == "threejs_group":
+            generated = (
+                generate_model_group_step(
+                    image, account, token, stage, previous_parts
+                )
+                if stage is not None
+                else generate_model_group(image, account, token)
+            )
+        else:
+            generated = generate_exhibit(image, account, token)
+        return response(200, {"data": generated})
     except UploadError as error:
         return response(error.status, {"error": str(error)})
-    except RuntimeError:
-        # Neither upstream error bodies nor credentials enter Lambda logs/results.
-        return response(502, {"error": "Cloudflare Workers AI could not complete the request. Check your credentials and model access in Cloudflare."})
+    except RuntimeError as error:
+        # Surface only safe, application-generated diagnostics, never upstream bodies.
+        return response(502, {"error": str(error)})
 
 
 def handler(event, _context):

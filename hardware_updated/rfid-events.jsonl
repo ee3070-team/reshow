@@ -1,0 +1,4 @@
+{"uid":"FC6AB516","result":"accepted","door":"opened","phase":"first_scan_pending","exhibit_id":"helmet-001"}
+{"uid":"FC6AB516","result":"accepted","door":"closed","phase":"second_scan_confirmed","exhibit_id":null}
+{"uid":"FC6AB516","result":"accepted","door":"opened","phase":"first_scan_pending","exhibit_id":"helmet-001"}
+{"uid":"FC6AB516","result":"accepted","door":"closed","phase":"second_scan_confirmed","exhibit_id":null}

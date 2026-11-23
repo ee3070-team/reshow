@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title description">
+  <title id="title">RFID 有限状态机</title>
+  <desc id="description">门卡或电子纸卡从 idle 开始修改，进入 pending_edit；网页保存描述后回到 idle，ESP32 自动获取描述并更新电子纸，无需第二次拍卡。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#334155"/>
+    </marker>
+    <marker id="loop-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7c3aed"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="600" rx="24" fill="#f8fafc"/>
+  <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#0f172a">
+    <text x="600" y="58" text-anchor="middle" font-size="32" font-weight="700">RFID 有限状态机</text>
+    <text x="600" y="93" text-anchor="middle" font-size="17" fill="#475569">圆圈是状态 · 箭头是操作</text>
+
+    <path d="M145 290 H235" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="155" y="272" font-size="15" fill="#475569">开始</text>
+
+    <circle cx="350" cy="290" r="105" fill="#dcfce7" stroke="#22c55e" stroke-width="3"/>
+    <text x="350" y="282" text-anchor="middle" font-family="monospace" font-size="25" font-weight="700" fill="#166534">idle</text>
+    <text x="350" y="314" text-anchor="middle" font-size="18">等待操作</text>
+
+    <circle cx="850" cy="290" r="105" fill="#e0f2fe" stroke="#38bdf8" stroke-width="3"/>
+    <text x="850" y="282" text-anchor="middle" font-family="monospace" font-size="20" font-weight="700" fill="#0369a1">pending_edit</text>
+    <text x="850" y="314" text-anchor="middle" font-size="18">等待修改完成</text>
+
+    <path d="M444 237 C540 174 660 174 756 237" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="463" y="120" width="274" height="69" rx="12" fill="#f8fafc"/>
+    <text x="600" y="143" text-anchor="middle" font-size="17" font-weight="700">拍门卡或电子纸卡</text>
+    <text x="600" y="165" text-anchor="middle" font-size="14" fill="#475569">门卡触发继电器；电子纸卡不触发</text>
+
+    <path d="M756 343 C660 406 540 406 444 343" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="457" y="407" width="286" height="70" rx="12" fill="#f8fafc"/>
+    <text x="600" y="431" text-anchor="middle" font-size="17" font-weight="700">选择展品并保存描述</text>
+    <text x="600" y="455" text-anchor="middle" font-size="14" fill="#475569">Save description and finish</text>
+
+    <path d="M939 228 C1060 151 1100 383 950 337" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#loop-arrow)"/>
+    <text x="1023" y="211" text-anchor="middle" font-size="14" fill="#6d28d9">再次拍卡</text>
+    <text x="1032" y="232" text-anchor="middle" font-size="14" fill="#6d28d9">状态不变</text>
+
+    <rect x="190" y="514" width="820" height="55" rx="14" fill="#ede9fe"/>
+    <text x="600" y="537" text-anchor="middle" font-size="15" fill="#5b21b6">保存后 ESP32 自动从服务器读取描述，更新电子纸；无需再次拍卡。</text>
+    <text x="600" y="557" text-anchor="middle" font-size="14" fill="#5b21b6">修改期间再次拍门卡仍会触发继电器；网页完成按钮也可不保存描述直接结束。</text>
+  </g>
+</svg>
