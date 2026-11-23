@@ -126,8 +126,13 @@ export async function render(container, ctx) {
       </div>
       <span class="badge info">Local showcase tools</span>
     </section>
+    <div class="segmented technology-section-selector" role="group" aria-label="Studio section">
+      <button type="button" class="active" data-studio-section="model" aria-pressed="true" aria-controls="studio-model">3D model studio</button>
+      <button type="button" data-studio-section="ai" aria-pressed="false" aria-controls="studio-ai">Image &amp; AI</button>
+      <button type="button" data-studio-section="rfid" aria-pressed="false" aria-controls="studio-rfid">ESP32 / RFID</button>
+    </div>
     <div class="technology-grid">
-      <section class="card technology-model">
+      <section id="studio-model" class="card technology-model" data-studio-panel="model">
         <div class="card-head"><h2>3D model studio</h2><span class="badge">Three.js</span></div>
         <div class="technology-viewer" data-viewer aria-label="Interactive 3D model preview"></div>
         <p class="technology-status" data-model-status role="status" aria-live="polite">Loading the 3D viewer…</p>
@@ -174,7 +179,7 @@ export async function render(container, ctx) {
         </div>
         <p class="technology-status" data-export-status role="status" aria-live="polite"></p>
       </section>
-      <section class="card technology-ai">
+      <section id="studio-ai" class="card technology-ai" data-studio-panel="ai" hidden>
         <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
         <p>Enter your Cloudflare credentials and choose an artifact image to generate a suggested name and description with example exhibit settings. Credentials and images are sent over HTTPS to the ReShow API and then to Cloudflare for this request only; they are not saved.</p>
         <label class="technology-credential">Cloudflare Account ID
@@ -217,20 +222,22 @@ export async function render(container, ctx) {
           <a data-tripo-download hidden target="_blank" rel="noopener noreferrer">Download GLB from Tripo</a>
         </section>
       </section>
-      <section class="card technology-ai technology-rfid">
+      <section id="studio-rfid" class="card technology-ai technology-rfid" data-studio-panel="rfid" hidden>
         <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
-        <h3>Card roles</h3>
-        <dl class="rfid-phase-guide">
-          <div><dt>Door card</dt><dd>Opens the door for about 3 seconds. When idle, it also starts a manual exhibit update.</dd></div>
-          <div><dt>E-paper card</dt><dd>Does not open the door. It requests the saved description for the e-paper display and, when idle, starts a manual exhibit update.</dd></div>
-        </dl>
-        <p class="technology-status">After saving a description, the ESP32 checks the server and updates the e-paper automatically. No second tap is needed.</p>
+        <details class="technology-settings rfid-help">
+          <summary>Card roles and workflow help</summary>
+          <div class="technology-settings-content">
+            <dl class="rfid-phase-guide">
+              <div><dt>Door card</dt><dd>Opens the door for about 3 seconds. When idle, it also starts a manual exhibit update.</dd></div>
+              <div><dt>E-paper card</dt><dd>Does not open the door. It requests the saved description for the e-paper display and, when idle, starts a manual exhibit update.</dd></div>
+              <div><dt>idle</dt><dd>No manual update is in progress. Scan a door or e-paper card to begin.</dd></div>
+              <div><dt>pending_edit</dt><dd>A card was accepted. Select an exhibit and save its description to finish.</dd></div>
+            </dl>
+            <p class="technology-status">After saving a description, the ESP32 checks the server and updates the e-paper automatically. No second tap is needed.</p>
+          </div>
+        </details>
         <p class="technology-status" data-rfid-delivery role="status" aria-live="polite">Checking e-paper delivery…</p>
         <pre class="technology-json" data-rfid-status aria-live="polite">Loading RFID workflow…</pre>
-        <dl class="rfid-phase-guide">
-          <div><dt>idle</dt><dd>No manual update is in progress. Scan a door or e-paper card to begin.</dd></div>
-          <div><dt>pending_edit</dt><dd>A card was accepted. Select an exhibit and save its description, or finish without changing it.</dd></div>
-        </dl>
         <label class="technology-credential">Exhibit ID
           <output data-rfid-exhibit>Waiting for ESP32 scan</output>
         </label>
@@ -245,24 +252,27 @@ export async function render(container, ctx) {
           <button class="button primary" type="submit" data-rfid-save disabled>Save description and finish</button>
           <p class="technology-status" data-rfid-edit-message role="status" aria-live="polite"></p>
         </form>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-refresh>Refresh</button>
-          <button class="button primary" type="button" data-rfid-ready>Mark manual update finished</button>
-        </div>
-        <p class="technology-small">Mark manual update finished ends the workflow without sending a description.</p>
         <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
-        <h3>RFID event GET/POST example</h3>
-        <p class="technology-status">The example POST records a demo event and starts the workflow, exactly like a real card tap. GET returns that event in the same JSON shape.</p>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
-          <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
-        </div>
-        <h3>Test card roles</h3>
-        <p class="technology-status">These simulated taps change the server's RFID workflow but do not operate the door or e-paper. Use only when no real workflow is in progress. Test a door or e-paper card, then mark the update finished.</p>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-test-role="door">Test door card</button>
-          <button class="button" type="button" data-rfid-test-role="epaper">Test e-paper card</button>
-        </div>
+        <details class="technology-settings">
+          <summary>RFID event GET/POST example</summary>
+          <div class="technology-settings-content">
+            <p class="technology-status">The example POST records a demo event and starts the workflow, exactly like a real card tap. GET returns that event in the same JSON shape.</p>
+            <div class="actions">
+              <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
+              <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
+            </div>
+          </div>
+        </details>
+        <details class="technology-settings">
+          <summary>Test card roles</summary>
+          <div class="technology-settings-content">
+            <p class="technology-status">These simulated taps change the server's RFID workflow but do not operate the door or e-paper. Use only when no real workflow is in progress. Select an exhibit and save its description to finish.</p>
+            <div class="actions">
+              <button class="button" type="button" data-rfid-test-role="door">Test door card</button>
+              <button class="button" type="button" data-rfid-test-role="epaper">Test e-paper card</button>
+            </div>
+          </div>
+        </details>
         <pre class="technology-json" data-rfid-event aria-live="polite">No RFID event loaded.</pre>
         <p class="technology-status" data-rfid-event-message role="status" aria-live="polite"></p>
       </section>
@@ -271,6 +281,21 @@ export async function render(container, ctx) {
 
   const controller = new AbortController();
   const { signal } = controller;
+  const sectionButtons = container.querySelectorAll("[data-studio-section]");
+  const sectionPanels = container.querySelectorAll("[data-studio-panel]");
+  sectionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const selected = button.dataset.studioSection;
+      sectionButtons.forEach((item) => {
+        const isSelected = item === button;
+        item.classList.toggle("active", isSelected);
+        item.setAttribute("aria-pressed", String(isSelected));
+      });
+      sectionPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.studioPanel !== selected;
+      });
+    }, { signal });
+  });
   const viewer = container.querySelector("[data-viewer]");
   const modelStatus = container.querySelector("[data-model-status]");
   const exportStatus = container.querySelector("[data-export-status]");
@@ -330,7 +355,7 @@ export async function render(container, ctx) {
     const scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(
       45,
-      viewer.clientWidth / viewer.clientHeight,
+      Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight),
       0.1,
       1000,
     );
@@ -340,7 +365,7 @@ export async function render(container, ctx) {
       preserveDrawingBuffer: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+    renderer.setSize(Math.max(1, viewer.clientWidth), Math.max(1, viewer.clientHeight));
     viewer.replaceChildren(renderer.domElement);
     scene.add(camera);
     const pink = new THREE.DirectionalLight(0xff69b4, 1);
@@ -918,7 +943,7 @@ export async function render(container, ctx) {
         tripoStatus.textContent = `Task complete${cost}. Loading the GLB…`;
         try {
           await loadTripoModel(url.href);
-          if (active) tripoStatus.textContent = `Task complete${cost}. Download the GLB soon; the link expires.`;
+          if (active) tripoStatus.textContent = `Task complete${cost}. Open 3D model studio to view it. Download the GLB soon; the link expires.`;
         } catch (error) {
           if (active) tripoStatus.textContent = `Task complete${cost}. ${error.message} The download link expires soon.`;
         }
@@ -1136,8 +1161,6 @@ export async function render(container, ctx) {
   const rfidStatus = container.querySelector("[data-rfid-status]");
   const rfidMessage = container.querySelector("[data-rfid-message]");
   const rfidDelivery = container.querySelector("[data-rfid-delivery]");
-  const rfidRefresh = container.querySelector("[data-rfid-refresh]");
-  const rfidReady = container.querySelector("[data-rfid-ready]");
   const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
   const rfidExamplePost = container.querySelector("[data-rfid-example-post]");
   const rfidEventGet = container.querySelector("[data-rfid-event-get]");
@@ -1330,7 +1353,6 @@ export async function render(container, ctx) {
     }
   }, { signal });
 
-  rfidRefresh.addEventListener("click", refreshRfidStatus, { signal });
   rfidTestButtons.forEach((button) => {
     button.addEventListener(
       "click",
@@ -1411,30 +1433,6 @@ export async function render(container, ctx) {
     },
     { signal },
   );
-  rfidReady.addEventListener(
-    "click",
-    async () => {
-    rfidReady.disabled = true;
-    try {
-      const response = await fetch("/api/rfid/staff-ready", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-        signal,
-      });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-        rfidStatus.textContent = JSON.stringify(result.data || {}, null, 2);
-        rfidMessage.textContent = "Manual update finished. The workflow is idle.";
-      } catch (error) {
-        if (error.name !== "AbortError") rfidMessage.textContent = error.message;
-      } finally {
-        if (active) rfidReady.disabled = false;
-      }
-    },
-    { signal },
-  );
-
   refreshRfidStatus();
   rfidPolling = window.setInterval(refreshRfidStatus, 3000);
 
