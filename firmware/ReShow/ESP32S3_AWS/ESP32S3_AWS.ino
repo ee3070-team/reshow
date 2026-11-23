@@ -1,11 +1,11 @@
 /*
   ReShow: Mega2560_Sensors -> UART -> ESP32-S3 -> existing AWS HTTPS API.
   Board: ESP32S3 Dev Module, Espressif Arduino core 3.x (tested with 3.3.12).
-  All libraries below ship with that core. See ../SETUP.txt before uploading.
+  Display libraries: GxEPD2, Adafruit GFX, ArduinoJson 7. See ../DISPLAYS.md.
 
-  UPLOADS ARE DISABLED BY DEFAULT. Configure local credentials and the IDs below. The deployed API v0.4.1 currently
-  only documents a DEMO producer credential. A backend change is required
-  to authorize this hardware device and source="device" on the same routes.
+  UPLOADS ARE DISABLED BY DEFAULT. Configure local credentials and IDs below.
+  Hardware tokens support status/readings; label routes need an additional
+  backend permission change. Online labels have a separate opt-in gate.
   Do NOT use a staff Cognito token or relabel real measurements as "demo".
   No secret from the original sketches is copied into this file.
 */
@@ -115,6 +115,8 @@ bool validIdentifier(const char *value) {
   }
   return true;
 }
+
+#include "OnlineLabel.h"
 
 bool parseFrame(char *line, Sample &s) {
   char *star = strchr(line, '*');
@@ -319,6 +321,8 @@ bool uploadConfigurationReady() {
 
 void setup() {
   Serial.begin(115200);  // No while(!Serial): operate without a USB monitor attached.
+  setenv("TZ", "UTC0", 1);
+  tzset();
   sampleQueue = xQueueCreate(QUEUE_LENGTH, sizeof(Sample));
   if (!sampleQueue) {
     Serial.println("FATAL: cannot allocate sample queue.");
@@ -339,6 +343,7 @@ void setup() {
     Serial.println("FATAL: cannot start UART receiver.");
     while (true) delay(1000);
   }
+  OnlineLabel::begin();
   Serial.println("ReShow ESP32-S3 ready; Mega RX=GPIO18, UART=9600, USB=115200.");
 }
 
@@ -375,6 +380,8 @@ void loop() {
     delay(10);
     return;
   }
+  OnlineLabel::tick();  // UART task continues during HTTPS/full e-paper refresh.
+  now = millis();
   if ((int32_t)(now - nextAttempt) < 0) {
     delay(10);
     return;

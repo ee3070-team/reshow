@@ -1,7 +1,8 @@
 /*
   ReShow: sensors -> Mega 2560 Serial2 -> ESP32-S3 -> AWS HTTPS.
   Upload this sketch to an Arduino Mega or Mega 2560 (ATmega2560).
-  No extra libraries. See ../SETUP.txt for wiring and calibration.
+  SSD1306 OLED warnings: Adafruit SSD1306 + Adafruit GFX libraries.
+  See ../DISPLAYS.md for wiring, warning codes and calibration.
 
   IMPORTANT: Mega TX2 pin 16 is 5 V. Use a 5 V -> 3.3 V level shifter
   or resistor divider before connecting it to ESP32-S3 GPIO18 (RX).
@@ -16,6 +17,16 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include "WarningState.h"
+
+const uint8_t OLED_ADDRESS = 0x3C;  // Set 0x3D if that is your module's address.
+Adafruit_SSD1306 oled(128, 64, &Wire, -1);
+bool oledReady = false;
+WarningState warningState;
+uint16_t warningMask = 0;
+uint32_t lastOled = 0;
 
 const uint8_t TEMP_PIN = A1;
 const uint8_t LIGHT_PIN = A0;
@@ -136,6 +147,73 @@ void checkLocalCommands() {
   }
 }
 
+void beginOled() {
+  Wire.begin();  // Mega SDA=20, SCL=21.
+  Wire.setWireTimeout(25000, true);  // A failed I2C device must not freeze sensing.
+  Wire.beginTransmission(OLED_ADDRESS);
+  if (Wire.endTransmission() == 0)
+    oledReady = oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS);
+  if (!oledReady) Serial.println(F("OLED unavailable; warnings continue on USB Serial."));
+}
+
+void updateWarnings() {
+  bool swing = dayMinTemp <= dayMaxTemp && dayMaxTemp - dayMinTemp > 200;
+  uint16_t next = warningState.update(temperatureCenti, lightRaw, occupancyKnown, swing, millis());
+  if (next != warningMask) {
+    Serial.print(F("OLED warning mask: 0x"));
+    Serial.println(next, HEX);
+    warningMask = next;
+  }
+}
+
+void drawOled() {
+  if (!oledReady) return;
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextWrap(false);
+  oled.setCursor(0, 0);
+  oled.println(F("ReShow LOCAL MONITOR"));
+  oled.print(F("Temp: "));
+  if (temperatureCenti == INVALID_TEMP) oled.println(F("-- C"));
+  else { oled.print(temperatureCenti / 100.0, 1); oled.println(F(" C")); }
+  oled.print(F("Light: ")); oled.print(lightRaw); oled.println(F(" /1023"));
+  oled.print(F("Zone: "));
+  oled.println(!occupancyKnown ? F("UNKNOWN") : occupied ? F("OCCUPIED") : F("CLEAR"));
+  if (!warningMask) {
+    oled.println(F("OK / checking limits"));
+    oled.print(F("Hold: ")); oled.print(WARNING_HOLD_MS / 1000UL); oled.println(F(" sec"));
+  } else {
+    // Up to six simultaneous faults; rotate through four rows without blocking.
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < 8; ++i) if (warningMask & (1U << i)) ++count;
+    uint8_t offset = count > 4 ? (millis() / 2000UL) % count : 0;
+    for (uint8_t row = 0; row < (count < 4 ? count : 4); ++row) {
+      uint8_t target = (offset + row) % count, index = 0;
+      for (uint8_t i = 0; i < 8; ++i) {
+        if (!(warningMask & (1U << i))) continue;
+        if (index++ != target) continue;
+        switch (i) {
+          case 0: oled.println(F("E01 TEMP LOW")); break;
+          case 1: oled.println(F("E02 TEMP HIGH")); break;
+          case 2: oled.println(F("W01 TEMP CAUTION")); break;
+          case 3: oled.println(F("W02 LIGHT LOW")); break;
+          case 4: oled.println(F("E03 LIGHT HIGH")); break;
+          case 5: oled.println(F("W03 TEMP SWING >2C")); break;
+          case 6: oled.println(F("E04 TEMP SENSOR")); break;
+          case 7: oled.println(F("E05 SONAR NO ECHO")); break;
+        }
+      }
+    }
+  }
+  oled.display();
+  if (Wire.getWireTimeoutFlag()) {
+    Wire.clearWireTimeoutFlag();
+    oledReady = false;
+    Serial.println(F("OLED I2C timeout; display disabled until reset. Sensing continues."));
+  }
+}
+
 void sendSample() {
   char body[128];
   char checksum[5];
@@ -157,11 +235,8 @@ void sendSample() {
   Serial.print('*');
   Serial.println(checksum);
 
-  if (temperatureCenti == INVALID_TEMP) Serial.println(F("LM35 reading invalid; check wiring/reference."));
-  else if (temperatureCenti < 1800 || temperatureCenti >= 2400)
-    Serial.println(F("Local warning: temperature outside original 18 to <24 C limits."));
-  if (lightRaw < 300 || lightRaw > 600)
-    Serial.println(F("Local warning: light outside original ADC 300..600 limits."));
+  // Sustained warnings and sensor faults are handled by updateWarnings(),
+  // independently of this 10-second telemetry interval.
 }
 
 void setup() {
@@ -179,6 +254,9 @@ void setup() {
   }
   readEnvironment();
   dayStarted = millis();
+  beginOled();
+  updateWarnings();
+  drawOled();
   Serial.println(F("ReShow Mega ready. USB commands: A=Auto, O=On, F=Off."));
 }
 
@@ -194,6 +272,11 @@ void loop() {
   if ((uint32_t)(now - lastEnvironment) >= ENVIRONMENT_INTERVAL_MS) {
     lastEnvironment = now;
     readEnvironment();
+  }
+  updateWarnings();
+  if ((uint32_t)(now - lastOled) >= 1000UL) {
+    lastOled = now;
+    drawOled();
   }
   if ((uint32_t)(now - lastSend) >= SEND_INTERVAL_MS) {
     lastSend = now;
