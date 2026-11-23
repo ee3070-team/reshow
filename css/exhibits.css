@@ -367,6 +367,7 @@
 }
 .label-image-control {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 22px;
   margin: 16px 0;
@@ -630,3 +631,6 @@
     font-size: 12px;
   }
 }
+
+/* Text-only live labels use the complete preview width. */
+.epaper-screen:has(> img[hidden]) { grid-template-columns: 1fr; }

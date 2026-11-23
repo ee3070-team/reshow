@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { displayPeriod } from '../js/pages/reports.js';
-import { handleAction } from '../js/ui.js';
+import { handleAction, staffIdentity } from '../js/ui.js';
+
+test('identity display handles missing or blank backend names without interrupting navigation', () => {
+  for (const user of [null, {}, { name: null }, { name: 42 }, { name: '  ' }]) {
+    assert.deepEqual(staffIdentity(user), { name: 'Staff member', initials: 'SM' });
+  }
+  assert.deepEqual(staffIdentity({ name: '  Ada  Chan  ' }), { name: 'Ada  Chan', initials: 'AC' });
+});
 
 test('report display period clips ISO timestamps to report window and creation time', () => {
   const report = { filters: { start: '2026-10-02', end: '2026-10-04' }, createdAt: '2026-10-03T08:00:00.000Z' };

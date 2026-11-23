@@ -1,5 +1,10 @@
 # Backend Asset Upload: GLB Models and JPG Images
 
+> Historical proposal. The implemented PNG/JPEG/WebP workflow uses private media
+> IDs and `/staff-api/media/...`, described in [image uploads](docs/image-uploads.md).
+> The GLB and relative-path design below is not the current image API contract.
+> Do not use the historical `/api/media/...` examples for staff uploads.
+
 ## Goal
 
 Upload an exhibit's `.glb` model and `.jpg` image as binary assets. Keep those
