@@ -399,12 +399,33 @@ class LocalHttpsTests(unittest.TestCase):
         self.assertIn("ReShow HTTPS is listening on 127.0.0.1:8000", output.getvalue())
         httpd.return_value.server_close.assert_called_once()
 
-    def test_local_startup_without_certificate_arguments_fails_before_binding(self):
-        with patch.object(sys, "argv", ["server.py"]), patch("http.server.ThreadingHTTPSServer") as httpd, patch.object(sys, "stderr", io.StringIO()):
-            with self.assertRaises(SystemExit) as error:
-                server.main()
-        self.assertEqual(error.exception.code, 2)
-        httpd.assert_not_called()
+    def test_local_startup_without_tls_options_uses_http(self):
+        output = io.StringIO()
+        with (
+            patch.object(sys, "argv", ["server.py"]),
+            patch("http.server.ThreadingHTTPServer") as httpd,
+            redirect_stdout(output),
+        ):
+            httpd.return_value.server_port = 8000
+            httpd.return_value.serve_forever.side_effect = KeyboardInterrupt
+            server.main()
+        httpd.assert_called_once()
+        httpd.return_value.serve_forever.assert_called_once_with()
+        httpd.return_value.server_close.assert_called_once_with()
+        self.assertIn("ReShow HTTP is listening on 127.0.0.1:8000", output.getvalue())
+
+    def test_local_startup_with_only_one_tls_option_fails_before_binding(self):
+        for option in ("--cert-file", "--key-file"):
+            with (
+                self.subTest(option=option),
+                patch.object(sys, "argv", ["server.py", option, "unused.pem"]),
+                patch("http.server.ThreadingHTTPServer") as httpd,
+                patch("http.server.ThreadingHTTPSServer") as httpsd,
+            ):
+                with self.assertRaisesRegex(SystemExit, "Both --cert-file and --key-file are required"):
+                    server.main()
+                httpd.assert_not_called()
+                httpsd.assert_not_called()
 
     def test_local_startup_with_missing_or_invalid_certificates_fails_before_binding(self):
         missing = self.certificate_directory / "missing.pem"
