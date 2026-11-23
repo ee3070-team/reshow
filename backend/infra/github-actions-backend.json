@@ -1,0 +1,44 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "GitHub Actions role for ReShow backend code deployments",
+  "Resources": {
+    "BackendDeployRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "ee3070-reshow-backend-github-actions",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {
+              "Federated": {"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"}
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+              "StringEquals": {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                "token.actions.githubusercontent.com:sub": "repo:ee3070-team/reshow:ref:refs/heads/master"
+              }
+            }
+          }]
+        },
+        "Policies": [{
+          "PolicyName": "BackendLambdaCodeOnly",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": ["lambda:GetFunction", "lambda:UpdateFunctionCode"],
+              "Resource": {"Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ee3070-reshow-demo-api"}
+            }]
+          }
+        }]
+      }
+    }
+  },
+  "Outputs": {
+    "RoleArn": {
+      "Value": {"Fn::GetAtt": ["BackendDeployRole", "Arn"]}
+    }
+  }
+}
