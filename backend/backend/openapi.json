@@ -63,6 +63,406 @@
     }
   ],
   "paths": {
+    "/api/rfid-events": {
+      "post": {
+        "operationId": "recordRfidEvent",
+        "summary": "Record a device RFID tap",
+        "description": "A stable event_id and unchanged body deduplicate retries. Accepted taps require role. Denied taps omit it.",
+        "security": [
+          {
+            "hardwareProducerToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RfidEventInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate tap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidEventResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded tap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidEventResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}": {
+      "get": {
+        "operationId": "getRfidSession",
+        "summary": "Read the RFID edit session",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}/publish": {
+      "post": {
+        "operationId": "publishRfidDescription",
+        "summary": "Save and queue the assigned exhibit label",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "edit_id",
+                  "exhibit_id",
+                  "description"
+                ],
+                "properties": {
+                  "edit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "exhibit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "pattern": "^[ -~]{1,180}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}/cancel": {
+      "post": {
+        "operationId": "cancelRfidSession",
+        "summary": "Finish editing without queuing a label",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "edit_id"
+                ],
+                "properties": {
+                  "edit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "tags": [
@@ -3198,6 +3598,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3217,7 +3620,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/api/tag-scans/{scan_id}": {
@@ -3443,6 +3854,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3463,7 +3877,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/api/access-attempts/{attempt_id}": {
@@ -3722,7 +4144,7 @@
         ],
         "operationId": "listCommands",
         "summary": "List command requests",
-        "description": "Bounded query pages. Filters apply to each page; an empty page can still return next_cursor. Producer polling: follow every page, select device_id and pending/recovery_pending states, then strongly GET the exact command immediately before serialized execution. Execute only device-fence-v1, matching device, pending status, generation above the durable local fence and current time before execute_before. Never execute legacy commands without protocol/generation. A GET check alone cannot eliminate a network race; execution and recovery fencing must use one serialized durable producer executor per lock_id. Demo producers must use their configured device_id; command polling requires device_id and follows pagination.",
+        "description": "Bounded query pages. Filters apply to each page; an empty page can still return next_cursor. Producer polling: follow every page, select device_id and pending/recovery_pending states, then strongly GET the exact command immediately before serialized execution. Execute only device-fence-v1, matching device, pending status, generation above the durable local fence and current time before execute_before. Never execute legacy commands without protocol/generation. A GET check alone cannot eliminate a network race; execution and recovery fencing must use one serialized durable producer executor per lock_id. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens require device_id matching their registered device and type=assignment or type=label.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -3760,6 +4182,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -3860,6 +4285,14 @@
               ]
             }
           }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
         ]
       },
       "post": {
@@ -3888,14 +4321,7 @@
             }
           },
           "403": {
-            "description": "Current account/role does not permit this action.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3927,7 +4353,7 @@
         ],
         "operationId": "getCommand",
         "summary": "Read one bound demo-device command immediately before execution",
-        "description": "Demo producer exact strongly consistent command read. The command must be bound to a configured demo device; other devices return 403. Re-read and honor status, protocol, resource_generation and execute_before immediately before serialized execution. No shared-token command creation or website management permission is granted. Exact reads accept no query parameters.",
+        "description": "Demo producer exact strongly consistent command read. The command must be bound to a configured demo device; other devices return 403. Re-read and honor status, protocol, resource_generation and execute_before immediately before serialized execution. No shared-token command creation or website management permission is granted. Exact reads accept no query parameters. Hardware tokens can access only assignment and label commands for their registered device.",
         "responses": {
           "401": {
             "description": "Missing/invalid/expired staff access token or application session expired.",
@@ -3947,14 +4373,7 @@
             }
           },
           "403": {
-            "description": "Current account/role does not permit this action.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           },
           "200": {
             "description": "Success.",
@@ -3988,6 +4407,9 @@
         "security": [
           {
             "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
           }
         ]
       }
@@ -3999,7 +4421,7 @@
         ],
         "operationId": "acknowledgeCommand",
         "summary": "Supply producer acknowledgement",
-        "description": "A separate device/demo producer supplies this receipt; the backend never auto-acknowledges. Correct device binding required. Successful receipt applies its frozen payload, failed receipt preserves confirmed state. Replayed identical acknowledgement returns duplicate; changed/reused ID returns 409. An expired execution window returns 409 command_expired without releasing the lock. Recovery freezes normal acknowledgements; late old results cannot overwrite a replacement. Same receipt retries remain idempotent after termination. Demo producers must use their configured device_id; command polling requires device_id and follows pagination.",
+        "description": "A separate device/demo producer supplies this receipt; the backend never auto-acknowledges. Correct device binding required. Successful receipt applies its frozen payload, failed receipt preserves confirmed state. Replayed identical acknowledgement returns duplicate; changed/reused ID returns 409. An expired execution window returns 409 command_expired without releasing the lock. Recovery freezes normal acknowledgements; late old results cannot overwrite a replacement. Same receipt retries remain idempotent after termination. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens can access only assignment and label commands for their registered device.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4047,6 +4469,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -4080,7 +4505,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/api/workflow-activity": {
@@ -4787,7 +5220,7 @@
         ],
         "operationId": "acknowledgeCommandRecovery",
         "summary": "Record a producer durable-fence and reconciliation receipt",
-        "description": "A separate serialized device/demo producer asserts it durably fenced this exact generation and established the old command outcome. Requires exact device/recovery/fence binding and a same-device status observed and uploaded after the recovery request, no more than 120 seconds old. unknown returns 409 and keeps the lock/card reservation. not_applied releases the fenced lock while preserving previous confirmed state. applied reconciles the frozen requested payload with ordinary acknowledgement safeguards, without inventing a normal receipt, display intervals or coverage. For an applied old label whose exhibit assignment changed, preserve last-confirmed label, set state_reconciliation_required/label_reconciliation_required and release its fenced lock so a current label command can restore known state. Other conflicting applied outcomes return recovery_state_conflict and remain locked. Successful recovery status is recovered, with immutable recovery outcome and separate observed_status_id; a new command gets a higher generation. Late normal ACKs cannot apply. Identical recovery receipt retry returns 200; changed receipt ID/payload returns 409. A shared-token receipt is a producer assertion, not proof of physical execution. Demo producers must use their configured device_id; command polling requires device_id and follows pagination.",
+        "description": "A separate serialized device/demo producer asserts it durably fenced this exact generation and established the old command outcome. Requires exact device/recovery/fence binding and a same-device status observed and uploaded after the recovery request, no more than 120 seconds old. unknown returns 409 and keeps the lock/card reservation. not_applied releases the fenced lock while preserving previous confirmed state. applied reconciles the frozen requested payload with ordinary acknowledgement safeguards, without inventing a normal receipt, display intervals or coverage. For an applied old label whose exhibit assignment changed, preserve last-confirmed label, set state_reconciliation_required/label_reconciliation_required and release its fenced lock so a current label command can restore known state. Other conflicting applied outcomes return recovery_state_conflict and remain locked. Successful recovery status is recovered, with immutable recovery outcome and separate observed_status_id; a new command gets a higher generation. Late normal ACKs cannot apply. Identical recovery receipt retry returns 200; changed receipt ID/payload returns 409. A shared-token receipt is a producer assertion, not proof of physical execution. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens can access only assignment and label commands for their registered device.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4835,6 +5268,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -4870,7 +5306,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/auth/config": {
@@ -11124,7 +11568,7 @@
       "hardwareProducerToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Privately provisioned hardware token. Only POST /api/device-status and POST /api/readings with source=device and the exact registered device_id. Use only in the device or its producer process."
+        "description": "Privately provisioned device-bound bearer token. Producer writes require source=device and the registered device_id. Hardware tokens can read and acknowledge their own assignment and label commands."
       },
       "staffAccessToken": {
         "type": "http",
@@ -11134,6 +11578,239 @@
       }
     },
     "schemas": {
+      "RfidEventInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "device_id",
+          "source",
+          "recorded_at",
+          "result"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "device"
+            ]
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "denied"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "door",
+              "epaper",
+              "edit"
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "RfidEventResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "item",
+          "consistency"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "duplicate"
+            ]
+          },
+          "item": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event_id",
+              "device_id",
+              "source",
+              "recorded_at",
+              "result",
+              "role",
+              "version",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "device_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "device"
+                ]
+              },
+              "recorded_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "denied"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "door",
+                  "epaper",
+                  "edit"
+                ],
+                "nullable": true
+              },
+              "version": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "consistency": {
+            "type": "string",
+            "enum": [
+              "strong"
+            ]
+          }
+        }
+      },
+      "RfidSessionResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "showcase_id",
+              "exhibit_id",
+              "phase",
+              "edit_id",
+              "last_tap",
+              "delivery"
+            ],
+            "properties": {
+              "showcase_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "exhibit_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+                "nullable": true
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "pending_edit"
+                ]
+              },
+              "edit_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+                "nullable": true
+              },
+              "last_tap": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role",
+                  "result",
+                  "recorded_at"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "door",
+                      "epaper",
+                      "edit"
+                    ],
+                    "nullable": true
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "denied"
+                    ]
+                  },
+                  "recorded_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "nullable": true
+              },
+              "delivery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "failure_reason",
+                  "execute_before"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  },
+                  "failure_reason": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "execute_before": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                },
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
       "Identifier": {
         "type": "string",
         "minLength": 1,

@@ -75,7 +75,7 @@ class ManageHardwareTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
         self.assertEqual(list(self.directory.iterdir()), [self.path])
         self.assertEqual(first["showcase_id"], SHOWCASE)
-        self.assertEqual(first["post_paths"], ["/api/device-status", "/api/readings"])
+        self.assertEqual(first["post_paths"], ["/api/device-status", "/api/readings", "/api/rfid-events", "/api/tag-scans", "/api/access-attempts"])
         self.assertNotIn(token, json.dumps(first))
         self.assertNotIn(digest, json.dumps(first))
         self.assertNotIn(token, str(snapshot))

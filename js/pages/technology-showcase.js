@@ -1,3 +1,4 @@
+import { bindCloudRfid } from "./cloud-rfid.js";
 import { confirmAction, icon } from "../ui.js";
 import { serializeUpload } from "../technology-upload.js";
 
@@ -118,6 +119,7 @@ function addBunny(THREE, group) {
 }
 
 export async function render(container, ctx) {
+  const cloudRfid = ctx.api.getMode?.() === "live";
   container.innerHTML = `<div class="stack technology-studio">
     <section class="card technology-intro">
       <div>
@@ -217,7 +219,23 @@ export async function render(container, ctx) {
           <a data-tripo-download hidden target="_blank" rel="noopener noreferrer">Download GLB from Tripo</a>
         </section>
       </section>
-      <section class="card technology-ai technology-rfid">
+      ${cloudRfid ? `<section class="card technology-rfid">
+        <div class="card-head"><h2>RFID and e-paper</h2></div>
+        <label class="technology-field">Showcase <select data-cloud-showcase></select></label>
+        <p data-cloud-rfid-state role="status">Loading showcases…</p>
+        <p data-cloud-rfid-delivery role="status"></p>
+        <form data-cloud-rfid-form>
+          <label class="technology-field">E-paper description
+            <textarea rows="5" maxlength="180" required disabled></textarea>
+          </label>
+          <p class="technology-small">Use 1–180 printable ASCII characters. The description goes to the exhibit assigned to this showcase.</p>
+          <div class="actions">
+            <button class="button primary" type="submit" disabled>Send to e-paper</button>
+            <button class="button" type="button" data-cloud-rfid-cancel disabled>Finish without publishing</button>
+          </div>
+          <p data-cloud-rfid-message role="status"></p>
+        </form>
+      </section>` : `<section class="card technology-ai technology-rfid">
         <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
         <h3>Card roles</h3>
         <dl class="rfid-phase-guide">
@@ -265,7 +283,7 @@ export async function render(container, ctx) {
         </div>
         <pre class="technology-json" data-rfid-event aria-live="polite">No RFID event loaded.</pre>
         <p class="technology-status" data-rfid-event-message role="status" aria-live="polite"></p>
-      </section>
+      </section>`}
     </div>
   </div>`;
 
@@ -1133,6 +1151,24 @@ export async function render(container, ctx) {
     { signal },
   );
 
+  const disposeRfid = cloudRfid
+    ? bindCloudRfid(container, ctx, signal)
+    : bindLocalRfid(container, ctx, signal, () => active, confirmAction);
+
+  return () => {
+    active = false;
+    controller.abort();
+    disposeRfid();
+    cancelAnimationFrame(animationFrame);
+    if (modelContent) disposeModel(THREE, modelContent);
+    if (renderer) {
+      renderer.dispose();
+      renderer.domElement.remove();
+    }
+  };
+}
+
+function bindLocalRfid(container, ctx, signal, isActive, confirmAction) {
   const rfidStatus = container.querySelector("[data-rfid-status]");
   const rfidMessage = container.querySelector("[data-rfid-message]");
   const rfidDelivery = container.querySelector("[data-rfid-delivery]");
@@ -1183,7 +1219,7 @@ export async function render(container, ctx) {
     if (!editId) return;
     try {
       const profiles = await ctx.api.listExhibits();
-      if (!active || rfidEditId !== editId) return;
+      if (!isActive() || rfidEditId !== editId) return;
       rfidProfiles = profiles;
       profiles.forEach((profile) => rfidSelect.add(new Option(`${profile.name} (${profile.id})`, profile.id)));
       rfidSelect.disabled = false;
@@ -1254,19 +1290,19 @@ export async function render(container, ctx) {
           "Switching exhibits will discard your unsaved description.",
           "Discard changes",
         );
-        if (!active || rfidEditId !== editId) return;
+        if (!isActive() || rfidEditId !== editId) return;
         if (!discard) {
           rfidSelect.value = rfidSelectedId;
           return;
         }
       } catch (error) {
-        if (active && rfidEditId === editId) {
+        if (isActive() && rfidEditId === editId) {
           rfidSelect.value = rfidSelectedId;
           rfidEditMessage.textContent = `Could not switch exhibits: ${error.message}`;
         }
         return;
       } finally {
-        if (active && rfidEditId === editId) {
+        if (isActive() && rfidEditId === editId) {
           rfidSelect.disabled = false;
           rfidDescription.disabled = false;
           rfidSave.disabled = false;
@@ -1322,7 +1358,7 @@ export async function render(container, ctx) {
       }
     } finally {
       rfidSaving = false;
-      if (active && rfidEditId === editId) {
+      if (isActive() && rfidEditId === editId) {
         rfidSelect.disabled = false;
         rfidDescription.disabled = false;
         rfidSave.disabled = false;
@@ -1355,11 +1391,11 @@ export async function render(container, ctx) {
           if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
           rfidEvent.textContent = JSON.stringify(result, null, 2);
           await refreshRfidStatus();
-          if (active) rfidEventMessage.textContent = `Simulated ${role} card tap sent. Check the workflow status above.`;
+          if (isActive()) rfidEventMessage.textContent = `Simulated ${role} card tap sent. Check the workflow status above.`;
         } catch (error) {
           if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
         } finally {
-          if (active) rfidTestButtons.forEach((testButton) => { testButton.disabled = false; });
+          if (isActive()) rfidTestButtons.forEach((testButton) => { testButton.disabled = false; });
         }
       },
       { signal },
@@ -1388,7 +1424,7 @@ export async function render(container, ctx) {
       } catch (error) {
         if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
       } finally {
-        if (active) rfidExamplePost.disabled = false;
+        if (isActive()) rfidExamplePost.disabled = false;
       }
     },
     { signal },
@@ -1406,7 +1442,7 @@ export async function render(container, ctx) {
       } catch (error) {
         if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
       } finally {
-        if (active) rfidEventGet.disabled = false;
+        if (isActive()) rfidEventGet.disabled = false;
       }
     },
     { signal },
@@ -1429,7 +1465,7 @@ export async function render(container, ctx) {
       } catch (error) {
         if (error.name !== "AbortError") rfidMessage.textContent = error.message;
       } finally {
-        if (active) rfidReady.disabled = false;
+        if (isActive()) rfidReady.disabled = false;
       }
     },
     { signal },
@@ -1438,15 +1474,5 @@ export async function render(container, ctx) {
   void refreshRfidStatus();
   rfidPolling = window.setInterval(refreshRfidStatus, 3000);
 
-  return () => {
-    active = false;
-    controller.abort();
-    if (rfidPolling) window.clearInterval(rfidPolling);
-    cancelAnimationFrame(animationFrame);
-    if (modelContent) disposeModel(THREE, modelContent);
-    if (renderer) {
-      renderer.dispose();
-      renderer.domElement.remove();
-    }
-  };
+  return () => window.clearInterval(rfidPolling);
 }

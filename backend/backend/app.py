@@ -319,8 +319,12 @@ def route(event):
     account_result = accounts.route(sys.modules[__name__], method, path, query, event, headers)
     if account_result is not None:
         return account_result
+    import rfid
     import workflows
     import media_reports
+    rfid_result = rfid.route(sys.modules[__name__], method, path, query, event, headers)
+    if rfid_result is not None:
+        return rfid_result
     media_result = media_reports.route(sys.modules[__name__], method, path, query, event, headers)
     if media_result is not None:
         return media_result

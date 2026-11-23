@@ -38,6 +38,13 @@ def put_action(api, item, existing=None):
     return {"Put": put}
 
 
+def check_version_action(api, item):
+    check = put_action(api, item, item)["Put"]
+    del check["Item"]
+    check["Key"] = {key: item[key] for key in ("PK", "SK")}
+    return {"ConditionCheck": check}
+
+
 def index_actions(api, item, index_kind=None, at=None):
     """Immutable references; dereference canonical state so lists never go stale."""
     kind = item["PK"][3:]
@@ -58,7 +65,8 @@ def transact(api, actions):
     actions = list(actions) + (auth.audit_actions(api) if auth is not None else [])
     if not actions or len(actions) > 100:
         raise ValueError("Transaction must contain 1-100 actions")
-    keys = [(a["Put"]["Item"]["PK"], a["Put"]["Item"]["SK"]) for a in actions]
+    targets = [action["Put"]["Item"] if "Put" in action else action["ConditionCheck"]["Key"] for action in actions]
+    keys = [(target["PK"], target["SK"]) for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("A workflow transaction cannot write a key twice")
     try:

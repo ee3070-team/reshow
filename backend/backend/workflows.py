@@ -325,7 +325,7 @@ def label_data(api, data):
             "description": api.text(data["description"], "description", 2000), "image_media_id": media_id(api, data["image_media_id"])}
 
 
-def save_draft(api, exhibit_id, data, expected):
+def prepare_draft(api, exhibit_id, data, expected):
     store.get(api, "exhibit-profile", exhibit_id)
     clean = {"exhibit_id": exhibit_id, "content": label_data(api, data)}
     old = store.get(api, "label-draft", exhibit_id, required=False)
@@ -338,8 +338,13 @@ def save_draft(api, exhibit_id, data, expected):
     if old is None:
         actions.extend(store.index_actions(api, item))
     actions.extend(audit_actions(api, "label_draft", "saved", exhibit_id=exhibit_id))
+    return item, actions
+
+
+def save_draft(api, exhibit_id, data, expected):
+    item, actions = prepare_draft(api, exhibit_id, data, expected)
     store.transact(api, actions)
-    return result(api, item, True if old is None else None)
+    return result(api, item, True if item["version"] == 1 else None)
 
 
 def command_request(api, data):
@@ -410,7 +415,7 @@ def validate_scan_reference(api, payload, device_id, command_id):
     return [reservation(api, "scan", payload["scan_id"], command_id)]
 
 
-def create_command(api, data):
+def create_command(api, data, *, prepared_draft=None, additional_actions=()):
     request = command_request(api, data)
     record_id = request["command_id"]
     old = store.get(api, "command", record_id, required=False)
@@ -424,7 +429,7 @@ def create_command(api, data):
     kind = request["type"]
     exhibit = case["data"]["confirmed_exhibit_id"]
     lock_id = "showcase#" + request["showcase_id"] + "#" + kind
-    actions = []
+    actions = list(additional_actions)
     if kind in ("assignment", "label"):
         profile = store.get(api, "exhibit-profile", payload["exhibit_id"])
         exhibit = payload["exhibit_id"]
@@ -433,7 +438,9 @@ def create_command(api, data):
         else:
             if case["data"]["confirmed_exhibit_id"] != exhibit:
                 raise api.APIError(409, "assignment_required", "Confirm this exhibit's assignment before requesting a label update.")
-            draft = store.get(api, "label-draft", exhibit)
+            if prepared_draft is not None:
+                actions.append(store.check_version_action(api, case))
+            draft = prepared_draft if prepared_draft is not None else store.get(api, "label-draft", exhibit)
             require_version(api, draft, payload["draft_version"])
             payload.update(content=draft["data"]["content"], assignment_command_id=case["data"]["assignment_command_id"])
     elif kind == "card":
