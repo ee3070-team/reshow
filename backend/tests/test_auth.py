@@ -469,10 +469,10 @@ class AuthenticationTests(unittest.TestCase):
                                  "data": {"device_id": HARDWARE_DEVICE, "active": True}}
         return key
 
-    def producer_request(self, method, path, data=None, token=HARDWARE_TOKEN):
+    def producer_request(self, method, path, data=None, token=HARDWARE_TOKEN, query=None):
         event = {"rawPath": path, "requestContext": {"http": {"method": method}, "routeKey": "$default"},
                  "headers": {"authorization": "Bearer " + token, "content-type": "application/json"},
-                 "body": json.dumps(data) if data is not None else ""}
+                 "body": json.dumps(data) if data is not None else "", "queryStringParameters": query}
         result = app.lambda_handler(event, None)
         self.assertNotIn(HARDWARE_TOKEN, result["body"])
         return result["statusCode"], json.loads(result["body"])
@@ -512,7 +512,7 @@ class AuthenticationTests(unittest.TestCase):
                 self.assertEqual(self.producer_request("POST", path, {**payload, "occupied": True})[0], 409)
                 self.assertEqual(self.table.items, stored)
 
-    def test_hardware_token_is_write_only_for_its_two_operations_and_payload_scope(self):
+    def test_hardware_token_rejects_unrelated_operations_and_wrong_payload_scope(self):
         self.hardware_credential()
         payload = {"source": "device", "device_id": HARDWARE_DEVICE}
         before = copy.deepcopy(self.table.items)
@@ -530,6 +530,427 @@ class AuthenticationTests(unittest.TestCase):
                 self.assertEqual(self.producer_request("POST", path, payload, token=TOKEN)[0], 403)
                 self.assertEqual(self.request("POST", "/staff-api" + path.removeprefix("/api"), payload)[0], 403)
         self.assertEqual(self.table.items, before)
+
+    def test_rfid_session_publish_and_real_device_receipt(self):
+        key = self.hardware_credential()
+        device = workflows.MEGA_SHOWCASE_DEVICE_ID
+        self.table.items[key]["data"]["device_id"] = device
+        showcase_id, exhibit_id = "fixture-showcase", "fixture-exhibit"
+        path = "/staff-api/rfid-sessions/" + showcase_id
+        event = {"event_id": "tap-1", "device_id": device, "source": "device",
+                 "recorded_at": app.timestamp(NOW), "result": "accepted", "role": "door"}
+        tap_path = "/api/rfid-events"
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 404)
+        self.assertEqual(self.request("POST", "/staff-api/showcases", {
+            "showcase_id": showcase_id, "name": "Case", "device_id": device,
+        })[0], 201)
+        profile = {"exhibit_id": exhibit_id, "name": "Helmet", "description": "",
+                   "tag_id": "EX-HELMET", "temperature_min_c": 18, "temperature_max_c": 24,
+                   "brightness_min_percent": 30, "brightness_max_percent": 60, "warning_seconds": 5}
+        self.assertEqual(self.request("POST", "/staff-api/exhibit-profiles", profile)[0], 201)
+        assignment = {"command_id": "assignment-1", "showcase_id": showcase_id,
+                      "type": "assignment", "payload": {"exhibit_id": exhibit_id}}
+        self.assertEqual(self.request("POST", "/staff-api/commands", assignment, user="operator")[0], 201)
+        assignment_path = "/api/commands/assignment-1"
+        self.assertEqual(self.producer_request("GET", assignment_path)[0], 200)
+        self.assertEqual(self.producer_request("POST", assignment_path + "/acknowledgements", {
+            "acknowledgement_id": "assignment-receipt", "device_id": device, "source": "device",
+            "recorded_at": app.timestamp(NOW), "success": True,
+        })[0], 201)
+        self.assertEqual(self.request("GET", path, user="viewer")[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "device_id": "elsewhere"})[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, event, token=TOKEN)[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 201)
+        session = self.request("GET", path, user="operator")[1]["data"]
+        edit_id = session["edit_id"]
+        self.assertEqual(session["phase"], "pending_edit")
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "event_id": "tap-2", "role": "epaper"})[0], 201)
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+        label = {"edit_id": edit_id, "exhibit_id": exhibit_id, "description": "A red helmet."}
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "edit_id": "older"}, user="operator")[0], 409)
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "description": "非 ASCII"}, user="operator")[0], 400)
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "exhibit_id": "other"}, user="operator")[0], 409)
+        reapply = {**assignment, "command_id": "assignment-2"}
+        self.assertEqual(self.request("POST", "/staff-api/commands", reapply, user="operator")[0], 201)
+        status, blocked = self.request("POST", path + "/publish", label, user="operator")
+        self.assertEqual(status, 409, blocked)
+        self.assertEqual(blocked["error"]["code"], "pending_command")
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+        self.assertEqual(self.producer_request("POST", "/api/commands/assignment-2/acknowledgements", {
+            "acknowledgement_id": "reapply-receipt", "device_id": device, "source": "device",
+            "recorded_at": app.timestamp(NOW), "success": False,
+        })[0], 201)
+        oversized = {**label, "description": "x" * 180}
+        status, invalid = self.request("POST", path + "/publish", oversized, user="operator")
+        self.assertEqual(status, 400, invalid)
+        self.assertEqual(invalid["error"]["code"], "unsupported_label_content")
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+
+        def concurrent_showcase_change(items):
+            items["WF#showcase", showcase_id]["version"] += 1
+        self.table.before_transaction = concurrent_showcase_change
+        self.assertEqual(self.request("POST", path + "/publish", label, user="operator")[0], 409)
+        self.assertNotIn(("WF#label-draft", exhibit_id), self.table.items)
+        self.assertNotIn(("WF#command", edit_id), self.table.items)
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+
+        status, reply = self.request("POST", path + "/publish", label, user="operator")
+        self.assertEqual(status, 200, reply)
+        self.assertEqual(reply["data"]["phase"], "idle")
+        self.assertEqual(reply["data"]["delivery"]["status"], "pending")
+        self.assertEqual(self.request("POST", path + "/publish", label, user="operator")[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 200)
+        self.assertEqual(self.request("GET", path)[1]["data"]["phase"], "idle")
+        query = {"device_id": device, "type": "label", "status": "pending"}
+        status, listed = self.producer_request("GET", "/api/commands", query=query)
+        self.assertEqual(status, 200, listed)
+        self.assertEqual([item["command_id"] for item in listed["items"]], [edit_id])
+        command_path = "/api/commands/" + edit_id
+        self.assertEqual(self.producer_request("GET", command_path)[0], 200)
+        self.assertEqual(self.producer_request("GET", "/api/commands", query={**query, "device_id": "elsewhere"})[0], 403)
+        self.command_record("other-command", "label")
+        self.assertEqual(self.producer_request("GET", "/api/commands/other-command")[0], 404)
+        receipt = {"acknowledgement_id": "receipt-1", "source": "device", "device_id": device,
+                   "recorded_at": app.timestamp(NOW), "success": True}
+        self.assertEqual(self.producer_request("POST", command_path + "/acknowledgements", receipt)[0], 201)
+        self.assertEqual(self.producer_request("POST", command_path + "/acknowledgements", receipt)[0], 200)
+        self.assertEqual(self.request("GET", path)[1]["data"]["delivery"]["status"], "acknowledged")
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "event_id": "tap-3"})[0], 201)
+        next_edit = self.request("GET", path)[1]["data"]["edit_id"]
+        self.assertNotEqual(edit_id, next_edit)
+        self.assertEqual(self.request("POST", path + "/cancel", {"edit_id": edit_id})[0], 409)
+        self.assertEqual(self.request("POST", path + "/cancel", {"edit_id": next_edit})[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, {
+            **event, "event_id": "tap-4", "result": "denied", "role": None,
+        })[0], 201)
+        self.assertEqual(self.request("GET", path)[1]["data"]["phase"], "idle")
+
+    def test_hardware_label_scope_and_cursor_binding(self):
+        key = self.hardware_credential()
+        commands = "/api/commands"
+        query = {"device_id": HARDWARE_DEVICE, "type": "label", "status": "pending", "limit": "1"}
+        for identity, device, kind in (("a-label", HARDWARE_DEVICE, "label"),
+                                       ("z-lighting", HARDWARE_DEVICE, "lighting"),
+                                       ("foreign-label", "other-device", "label")):
+            item = store.make(app, "command", identity, {"command_id": identity, "device_id": device,
+                              "type": kind, "status": "pending", "protocol": "device-fence-v1"})
+            store.transact(app, [store.put_action(app, item), *store.index_actions(app, item)])
+
+        for invalid in ({}, {**query, "device_id": "other-device"}, {**query, "type": "lighting"},
+                        {**query, "status": "acknowledged"}):
+            self.assertEqual(self.producer_request("GET", commands, query=invalid)[0], 403)
+        status, page = self.producer_request("GET", commands, query=query)
+        self.assertEqual(status, 200, page)
+        self.assertEqual(page["items"], [])
+        cursor = page["next_cursor"]
+        self.assertTrue(cursor)
+        self.assertLessEqual(len(cursor), 2048)
+        status, page = self.producer_request("GET", commands, query={**query, "cursor": cursor})
+        self.assertEqual(status, 200, page)
+        self.assertEqual([item["command_id"] for item in page["items"]], ["a-label"])
+        self.assertEqual(self.producer_request("GET", commands,
+                         query={**query, "status": "recovery_pending", "cursor": cursor})[0], 400)
+        self.table.items[key]["data"]["device_id"] = "other-device"
+        self.assertEqual(self.producer_request("GET", commands,
+                         query={**query, "device_id": "other-device", "cursor": cursor})[0], 400)
+        self.table.items[key]["data"]["device_id"] = HARDWARE_DEVICE
+
+        status, result = self.producer_request("GET", commands + "/a-label")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["item"]["protocol"], "device-fence-v1")
+        for identity in ("missing", "foreign-label", "z-lighting"):
+            path = commands + "/" + identity
+            self.assertEqual(self.producer_request("GET", path)[0], 404)
+            for suffix in ("/acknowledgements", "/recovery-acknowledgements"):
+                self.assertEqual(self.producer_request("POST", path + suffix, {})[0], 404)
+        for suffix in ("/acknowledgements", "/recovery-acknowledgements"):
+            path = commands + "/a-label" + suffix
+            self.assertEqual(self.producer_request("POST", path,
+                             {"device_id": HARDWARE_DEVICE, "source": "demo"})[0], 403)
+            self.assertEqual(self.producer_request("POST", path,
+                             {"device_id": "other-device", "source": "device"})[0], 403)
+        self.assertEqual(self.producer_request("POST", commands, {})[0], 403)
+        self.assertEqual(self.producer_request("POST", commands + "/a-label/recovery-requests", {})[0], 403)
+        self.table.items[key]["data"]["active"] = False
+        self.assertEqual(self.producer_request("GET", commands, query=query)[0], 401)
+
+    def test_mega_label_freezes_draft_and_accepts_only_in_window_or_fenced_receipt(self):
+        key = self.hardware_credential()
+        device = workflows.MEGA_SHOWCASE_DEVICE_ID
+        self.table.items[key]["data"]["device_id"] = device
+        self.assertEqual(self.request("POST", "/staff-api/showcases",
+                         {"showcase_id": "mega-case", "device_id": device, "name": "Fixture showcase"})[0], 201)
+        profile = store.make(app, "exhibit-profile", "helmet", {"exhibit_id": "helmet"})
+        self.table.items[profile["PK"], profile["SK"]] = profile
+        draft_path = "/staff-api/label-drafts/helmet"
+        content = {"title": "Historic Helmet", "collection": "School", "description": "An exhibit.",
+                   "image_media_id": None}
+        self.assertEqual(self.request("PUT", draft_path, content, version=0)[0], 201)
+        commands = "/staff-api/commands"
+        request = {"command_id": "mega-label", "showcase_id": "mega-case", "type": "label",
+                   "payload": {"exhibit_id": "helmet", "draft_version": 1}}
+        self.assertEqual(self.request("POST", commands, request)[1]["error"]["code"], "assignment_required")
+        # Fixture represents an already confirmed assignment. Hardware label scope does not apply assignments.
+        case = store.get(app, "showcase", "mega-case")
+        case_key = (case["PK"], case["SK"])
+        self.table.items[case_key]["data"].update(confirmed_exhibit_id="helmet",
+                                                  assignment_command_id="fixture-assignment")
+        self.assertEqual(self.request("POST", commands, request)[0], 201)
+        edited = {**content, "description": "A" * 180}
+        self.assertEqual(self.request("PUT", draft_path, edited, version=1)[0], 200)
+        path = "/api/commands/mega-label"
+        code, exact = self.producer_request("GET", path)
+        self.assertEqual(code, 200, exact)
+        item = exact["item"]
+        self.assertEqual(item["payload"]["content"], content)
+        self.assertEqual(item["payload"]["assignment_command_id"], "fixture-assignment")
+        self.assertTrue(item["lock_id"] and item["resource_generation"] and item["execute_before"])
+        self.assertIsNone(self.table.items[case_key]["data"]["confirmed_label"])
+
+        receipt = {"acknowledgement_id": "mega-receipt", "device_id": device, "source": "device",
+                   "success": True, "recorded_at": app.timestamp(NOW)}
+        ack = path + "/acknowledgements"
+        self.assertEqual(self.producer_request("POST", ack, receipt)[0], 201)
+        self.assertEqual(self.producer_request("POST", ack, receipt)[0], 200)
+        self.assertEqual(self.producer_request("POST", ack, {**receipt, "success": False})[0], 409)
+        self.assertEqual(self.table.items[case_key]["data"]["confirmed_label"]["content"], content)
+
+        request = {**request, "command_id": "mega-label-next", "payload": {**request["payload"], "draft_version": 2}}
+        before = copy.deepcopy(self.table.items)
+        status, rejected = self.request("POST", commands, request)
+        self.assertEqual(status, 400, rejected)
+        self.assertEqual(rejected["error"]["code"], "unsupported_label_content")
+        self.assertEqual(self.table.items, before)
+        for version, description in ((2, "漢字"), (3, "one\ntwo")):
+            self.assertEqual(self.request("PUT", draft_path, {**content, "description": description},
+                                          version=version)[0], 200)
+            request["payload"]["draft_version"] = version + 1
+            status, rejected = self.request("POST", commands, request)
+            self.assertEqual(status, 400, rejected)
+            self.assertEqual(rejected["error"]["code"], "unsupported_label_content")
+        media = store.make(app, "media", "mega-image", {"status": "ready"})
+        self.table.items[media["PK"], media["SK"]] = media
+        self.assertEqual(self.request("PUT", draft_path, {**content, "image_media_id": "mega-image"},
+                                      version=4)[0], 200)
+        request["payload"]["draft_version"] = 5
+        self.assertEqual(self.request("POST", commands, request)[1]["error"]["code"], "unsupported_label_content")
+        self.assertEqual(self.request("PUT", draft_path, {**content, "collection": "", "description": "B" * 162},
+                                      version=5)[0], 200)
+        request["payload"]["draft_version"] = 6
+        self.assertEqual(self.request("POST", commands, request)[0], 201)
+        next_path = "/api/commands/mega-label-next"
+        late_receipt = {**receipt, "acknowledgement_id": "late-receipt"}
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=301)):
+            status, rejected = self.producer_request("POST", next_path + "/acknowledgements", late_receipt)
+            self.assertEqual(status, 409, rejected)
+            self.assertEqual(rejected["error"]["code"], "command_expired")
+            recovery_request = {"recovery_id": "mega-fence", "reason": "Fixture lost completion reply."}
+            self.assertEqual(self.request("POST", "/staff-api/commands/mega-label-next/recovery-requests",
+                                          recovery_request)[0], 201)
+            code, poll = self.producer_request("GET", "/api/commands", query={"device_id": device,
+                                                "type": "label", "status": "recovery_pending"})
+            self.assertEqual(code, 200, poll)
+            recovering, = poll["items"]
+            self.assertEqual(recovering["command_id"], "mega-label-next")
+            self.assertEqual(self.producer_request("POST", next_path + "/acknowledgements", late_receipt)[0], 409)
+            observed_at = app.timestamp(app.now_utc())
+            observation = {"status_id": "mega-post-fence", "device_id": device, "recorded_at": observed_at,
+                           "source": "device", "temperature_c": None, "brightness_percent": None,
+                           "occupied": False, "distance_cm": None, "lighting_mode": None, "lighting_output": None,
+                           "latch": None, "local_control": None}
+            self.assertEqual(self.producer_request("POST", "/api/device-status", observation)[0], 201)
+            recovery = {"acknowledgement_id": "mega-recovery-receipt", "recovery_id": "mega-fence",
+                        "device_id": device, "source": "device", "recorded_at": observed_at,
+                        "fenced_generation": recovering["recovery"]["fence_generation"],
+                        "observed_status_id": "mega-post-fence", "outcome": "unknown"}
+            recovery_path = next_path + "/recovery-acknowledgements"
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 409)
+            self.assertEqual(self.producer_request("POST", recovery_path,
+                             {**recovery, "fenced_generation": recovery["fenced_generation"] - 1,
+                              "outcome": "not_applied"})[0], 409)
+            recovery["outcome"] = "not_applied"
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 201)
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 200)
+        self.assertEqual(self.table.items[case_key]["data"]["confirmed_label"]["content"], content)
+
+    def prepare_mega_assignment(self):
+        key = self.hardware_credential()
+        device = workflows.MEGA_SHOWCASE_DEVICE_ID
+        self.table.items[key]["data"]["device_id"] = device
+        showcase = {"showcase_id": "mega-case", "device_id": device, "name": "Fixture showcase"}
+        self.assertEqual(self.request("POST", "/staff-api/showcases", showcase)[0], 201)
+        profile = {"exhibit_id": "helmet", "name": "Historic Helmet", "description": "",
+                   "tag_id": "EX-HELMET", "temperature_min_c": 18, "temperature_max_c": 24,
+                   "brightness_min_percent": 30, "brightness_max_percent": 60, "warning_seconds": 5}
+        self.assertEqual(self.request("POST", "/staff-api/exhibit-profiles", profile)[0], 201)
+        command = {"command_id": "assign-helmet", "showcase_id": "mega-case", "type": "assignment",
+                   "payload": {"exhibit_id": "helmet", "profile_version": 1}}
+        receipt = {"acknowledgement_id": "helmet-receipt", "device_id": device, "source": "device",
+                   "recorded_at": app.timestamp(NOW), "success": True}
+        return key, profile, command, receipt
+
+    def test_mega_assignment_version_is_immutable_and_can_be_reapplied(self):
+        credential, profile, command, receipt = self.prepare_mega_assignment()
+        commands, case = "/staff-api/commands", "/staff-api/showcases/mega-case"
+        profile_path = "/staff-api/exhibit-profiles/helmet"
+        assign = "/api/commands/assign-helmet"
+        get_case = lambda: self.request("GET", case, user="operator")[1]["item"]
+        self.assertIsNone(get_case()["confirmed_profile"])
+        self.assertEqual(self.request("POST", commands, command, user="operator")[0], 201)
+        self.assertEqual(self.request("PATCH", profile_path, {"warning_seconds": 12}, version=1)[0], 200)
+        query = {"device_id": receipt["device_id"], "type": "assignment", "status": "pending", "limit": "1"}
+        status, poll = self.producer_request("GET", "/api/commands", query=query)
+        self.assertEqual(status, 200, poll)
+        self.assertEqual([item["command_id"] for item in poll["items"]], ["assign-helmet"])
+        for invalid in ({}, {**query, "device_id": "foreign-device"}):
+            self.assertEqual(self.producer_request("GET", "/api/commands", query=invalid)[0], 403)
+        self.table.items[credential]["data"]["device_id"] = "foreign-device"
+        self.assertEqual(self.producer_request("GET", assign)[0], 404)
+        self.assertEqual(self.producer_request("POST", assign + "/acknowledgements", receipt)[0], 404)
+        self.table.items[credential]["data"]["device_id"] = receipt["device_id"]
+        status, result = self.producer_request("GET", assign)
+        self.assertEqual(status, 200, result)
+        item = result["item"]
+        self.assertEqual(item["payload"]["profile"]["warning_seconds"], profile["warning_seconds"])
+        self.assertEqual(item["payload"]["profile"]["version"], 1)
+        self.assertEqual(item["protocol"], "device-fence-v1")
+        self.assertEqual(item["lock_id"], "showcase#mega-case#assignment")
+        self.assertIsNone(get_case()["confirmed_profile"])
+        ack = assign + "/acknowledgements"
+        self.assertEqual(self.producer_request("POST", ack, {**receipt, "source": "demo"})[0], 403)
+        self.assertEqual(self.producer_request("POST", ack, {**receipt, "device_id": "foreign-device"})[0], 403)
+        self.assertEqual(self.producer_request("POST", ack, receipt)[0], 201)
+        self.assertEqual(self.producer_request("POST", ack, receipt)[0], 200)
+        self.assertEqual(self.producer_request("POST", ack, {**receipt, "success": False})[0], 409)
+        self.assertEqual(get_case()["confirmed_profile"]["warning_seconds"], 5)
+
+        # The old command ID remains idempotent after the draft profile changes.
+        self.assertEqual(self.request("POST", commands, command, user="operator")[0], 200)
+        command["command_id"] = "reapply-helmet"
+        status, stale = self.request("POST", commands, command, user="operator")
+        self.assertEqual(status, 409, stale)
+        self.assertEqual(stale["error"]["code"], "version_conflict")
+        command["payload"]["profile_version"] = 2
+        status, pending = self.request("POST", commands, command, user="operator")
+        self.assertEqual(status, 201, pending)
+        self.assertGreater(pending["item"]["resource_generation"], item["resource_generation"])
+        self.assertEqual(get_case()["confirmed_profile_version"], 1)
+        self.assertEqual(self.producer_request("POST", "/api/commands/reapply-helmet/acknowledgements",
+                         {**receipt, "acknowledgement_id": "reapply-receipt"})[0], 201)
+        self.assertEqual(get_case()["confirmed_profile_version"], 2)
+        self.assertEqual(get_case()["confirmed_profile"]["warning_seconds"], 12)
+        self.assertIsNone(get_case()["confirmed_label"])
+
+    def test_mega_assignment_failure_and_expiry_preserve_last_applied_until_recovery(self):
+        _, _, command, receipt = self.prepare_mega_assignment()
+        commands = "/staff-api/commands"
+        case = "/staff-api/showcases/mega-case"
+        self.assertEqual(self.request("POST", commands, command)[0], 201)
+        self.assertEqual(self.producer_request("POST", "/api/commands/assign-helmet/acknowledgements", receipt)[0], 201)
+        self.assertEqual(self.request("PATCH", "/staff-api/exhibit-profiles/helmet",
+                         {"warning_seconds": 12}, version=1)[0], 200)
+        command["payload"]["profile_version"] = 2
+        command["command_id"] = "failed-profile"
+        self.assertEqual(self.request("POST", commands, command)[0], 201)
+        rejected = {**receipt, "acknowledgement_id": "profile-rejected", "success": False, "message": "Settings rejected"}
+        status, result = self.producer_request("POST", "/api/commands/failed-profile/acknowledgements", rejected)
+        self.assertEqual(status, 201, result)
+        self.assertEqual(result["item"]["status"], "failed")
+        self.assertEqual(self.request("GET", case)[1]["item"]["confirmed_profile"]["version"], 1)
+
+        command["command_id"] = "uncertain-profile"
+        self.assertEqual(self.request("POST", commands, command)[0], 201)
+        command_path = "/api/commands/uncertain-profile"
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=301)):
+            late = {**receipt, "acknowledgement_id": "late-profile"}
+            status, expired = self.producer_request("POST", command_path + "/acknowledgements", late)
+            self.assertEqual(status, 409, expired)
+            self.assertEqual(expired["error"]["code"], "command_expired")
+            reason = {"recovery_id": "profile-fence", "reason": "Lost final device receipt."}
+            self.assertEqual(self.request("POST", commands + "/uncertain-profile/recovery-requests", reason)[0], 201)
+            query = {"device_id": receipt["device_id"], "type": "assignment", "status": "recovery_pending"}
+            status, poll = self.producer_request("GET", "/api/commands", query=query)
+            self.assertEqual(status, 200, poll)
+            recovering, = poll["items"]
+            self.assertEqual(recovering["command_id"], "uncertain-profile")
+            self.assertEqual(self.request("GET", case)[1]["item"]["confirmed_profile"]["version"], 1)
+            observed = app.timestamp(app.now_utc())
+            observation = {"status_id": "profile-observed", "device_id": receipt["device_id"], "recorded_at": observed,
+                           "source": "device", "temperature_c": None, "brightness_percent": None,
+                           "occupied": False, "distance_cm": None, "lighting_mode": None, "lighting_output": None,
+                           "latch": None, "local_control": None}
+            self.assertEqual(self.producer_request("POST", "/api/device-status", observation)[0], 201)
+            recovery = {"acknowledgement_id": "profile-recovered", "recovery_id": "profile-fence",
+                        "device_id": receipt["device_id"], "recorded_at": observed, "source": "device",
+                        "fenced_generation": recovering["recovery"]["fence_generation"],
+                        "observed_status_id": observation["status_id"], "outcome": "unknown"}
+            path = command_path + "/recovery-acknowledgements"
+            self.assertEqual(self.producer_request("POST", path, recovery)[1]["error"]["code"],
+                             "recovery_outcome_unknown")
+            recovery["outcome"] = "applied"
+            self.assertEqual(self.producer_request("POST", path, recovery)[0], 201)
+            self.assertEqual(self.producer_request("POST", path, recovery)[0], 200)
+        self.assertEqual(self.request("GET", case)[1]["item"]["confirmed_profile"]["version"], 2)
+
+    def test_mega_assignment_rejects_unsupported_limits_and_serializes_label_lock(self):
+        _, profile, command, receipt = self.prepare_mega_assignment()
+        commands = "/staff-api/commands"
+        profile_path = "/staff-api/exhibit-profiles/helmet"
+        for version, change in enumerate((
+            {"temperature_min_c": -1},
+            {"temperature_min_c": 18.001},
+            {"temperature_min_c": 18, "brightness_min_percent": 50, "brightness_max_percent": 50.001},
+        ), start=1):
+            self.assertEqual(self.request("PATCH", profile_path, change, version=version)[0], 200)
+            command["payload"]["profile_version"] = version + 1
+            before = copy.deepcopy(self.table.items)
+            status, invalid = self.request("POST", commands, command)
+            self.assertEqual(status, 400, invalid)
+            self.assertEqual(invalid["error"]["code"], "unsupported_profile")
+            self.assertEqual(self.table.items, before)
+        self.assertEqual(self.request("PATCH", profile_path,
+                         {"brightness_min_percent": 30, "brightness_max_percent": 60}, version=4)[0], 200)
+        command["payload"]["profile_version"] = 5
+        sibling = store.make(app, "pending", "showcase#mega-case#label",
+                             {"status": "pending", "command_id": "concurrent-label"})
+        self.table.before_transaction = lambda items: items.__setitem__((sibling["PK"], sibling["SK"]), sibling)
+        self.assertEqual(self.request("POST", commands, command)[0], 409)
+        self.assertIsNone(store.get(app, "command", "assign-helmet", required=False))
+        self.assertEqual(self.request("POST", commands, command)[1]["error"]["code"], "pending_command")
+        self.table.items.pop((sibling["PK"], sibling["SK"]))
+        self.assertEqual(self.request("POST", commands, command)[0], 201)
+        draft_path = "/staff-api/label-drafts/helmet"
+        content = {"title": "Helmet", "collection": "", "description": "Historic exhibit.", "image_media_id": None}
+        self.assertEqual(self.request("PUT", draft_path, content, version=0)[0], 201)
+        label = {"command_id": "helmet-label", "showcase_id": "mega-case", "type": "label",
+                 "payload": {"exhibit_id": "helmet", "draft_version": 1}}
+        self.assertEqual(self.request("POST", commands, label)[1]["error"]["code"], "pending_command")
+        self.assertEqual(self.producer_request("POST", "/api/commands/assign-helmet/acknowledgements", receipt)[0], 201)
+        self.assertEqual(self.request("POST", commands, label)[0], 201)
+        next_profile = {**profile, "exhibit_id": "vase", "tag_id": "EX-VASE"}
+        self.assertEqual(self.request("POST", "/staff-api/exhibit-profiles", next_profile)[0], 201)
+        next_command = {**command, "command_id": "assign-vase", "payload": {"exhibit_id": "vase", "profile_version": 1}}
+        self.assertEqual(self.request("POST", commands, next_command)[1]["error"]["code"], "pending_command")
+        self.assertEqual(self.producer_request("POST", "/api/commands/helmet-label/acknowledgements",
+                         {**receipt, "acknowledgement_id": "helmet-label-receipt"})[0], 201)
+        self.assertEqual(self.request("POST", commands, next_command)[0], 201)
+        self.assertEqual(self.producer_request("POST", "/api/commands/assign-vase/acknowledgements",
+                         {**receipt, "acknowledgement_id": "vase-receipt"})[0], 201)
+        status, case = self.request("GET", "/staff-api/showcases/mega-case")
+        self.assertEqual(status, 200, case)
+        self.assertEqual(case["item"]["confirmed_profile"]["exhibit_id"], "vase")
+        self.assertEqual(case["item"]["confirmed_label"]["exhibit_id"], "helmet")
+        self.assertTrue(case["item"]["label_reconciliation_required"])
+
+        reading = {"reading_id": "buffered-helmet", "exhibit_id": "helmet", "device_id": receipt["device_id"],
+                   "recorded_at": app.timestamp(NOW - timedelta(seconds=5)), "temperature_c": 22,
+                   "brightness_raw": 500, "occupied": False, "distance_cm": None, "source": "device"}
+        for sample in (reading, {**reading, "reading_id": "current-vase", "exhibit_id": "vase",
+                                  "recorded_at": app.timestamp(NOW)}):
+            code, created = self.producer_request("POST", "/api/readings", sample)
+            self.assertEqual(code, 201, created)
+            self.assertEqual(created["item"]["exhibit_id"], sample["exhibit_id"])
 
     def test_hardware_auth_reads_exact_digest_strongly_and_rejects_revoked_or_invalid_rows(self):
         key = self.hardware_credential()

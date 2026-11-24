@@ -69,7 +69,10 @@ export async function render(container, ctx) {
   const pendingLabel = () => snapshot.operations.find(
     (operation) => operation.type === "label" && ["pending", "recovery_pending"].includes(operation.status),
   );
-  const canSend = () => canOperate && !pendingLabel() && snapshot.showcase.online && snapshot.showcase.exhibitId === selectedId;
+  const assignmentBusy = () => live && snapshot.showcase.deviceId === "reshow-mega-01" && snapshot.operations.some(
+    (operation) => operation.type === "assignment" && ["pending", "recovery_pending"].includes(operation.status),
+  );
+  const canSend = () => canOperate && !pendingLabel() && !assignmentBusy() && snapshot.showcase.online && snapshot.showcase.exhibitId === selectedId;
   const statusTone = (status) =>
     status === "acknowledged"
       ? "success"
@@ -307,6 +310,8 @@ export async function render(container, ctx) {
         ? `${caseName()} is offline. You can save a draft; delivery is unavailable.`
         : pending
           ? recoveryMessage || `${live ? "Device delivery" : "Mock delivery"} pending. The previous acknowledged label remains on the showcase.`
+          : assignmentBusy()
+            ? "Resolve the showcase assignment before sending a label."
           : reconciliationRequired
             ? "The retained label needs a current send and device acknowledgement. Saving a draft does not reconcile it."
           : matchesFailed
@@ -365,6 +370,15 @@ export async function render(container, ctx) {
       throw new Error(live ? "Enter a title and description." : "Enter a title, collection, and short description.");
     if (live && /^(data|blob):/i.test(next.image)) next.image = "";
     return next;
+  }
+
+  function validateShowcaseContent(sending) {
+    if (!live || snapshot.showcase.deviceId !== "reshow-mega-01") return;
+    const rendered = [sending.title, sending.collection, sending.description].filter(Boolean).join(" | ");
+    if (selectedFile || (!removingImage && sending.imageMediaId) ||
+        rendered.length > 180 || /[^ -~]/.test(rendered)) {
+      throw new Error("This e-paper display accepts up to 180 printable ASCII characters including separators. Remove any image and line breaks before sending.");
+    }
   }
 
   async function saveCurrentDraft(saving) {
@@ -432,6 +446,7 @@ export async function render(container, ctx) {
     let sending;
     try {
       sending = validatedContent();
+      validateShowcaseContent(sending);
     } catch (error) {
       showError(error);
       return;
