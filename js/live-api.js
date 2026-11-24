@@ -234,6 +234,11 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
   }
   async function showcaseRecord(item) {
     const status = item?.device_status, freshness = item?.freshness;
+    // A later hardware observation can report a local override or reboot.
+    // Older queued telemetry must not roll back a newer command receipt.
+    const observedLightingIsLatest = status?.lighting_mode != null &&
+      (!item?.lighting_mode || !item?.lighting_acknowledged_at ||
+        Date.parse(status.recorded_at) >= Date.parse(item.lighting_acknowledged_at));
     return { id: item?.showcase_id || null, name: item?.name || "No showcase", deviceId: item?.device_id || null, exhibition: "Live showcase",
       exhibitId: item?.confirmed_exhibit_id || null, version: item?.version || null,
       online: Boolean(status && freshness?.contact_stale === false), lastReceivedAt: status?.created_at || null, source: status?.source || null,
@@ -241,7 +246,8 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
       remoteLighting: status?.remote_lighting ?? null,
       temperature: status?.temperature_c ?? null, brightness: status?.brightness_percent ?? null,
       zone: status?.occupied == null ? null : status.occupied ? "Occupied" : "Clear",
-      lightingMode: item?.lighting_mode ?? status?.lighting_mode ?? null, lightingOutput: status?.lighting_output ?? null, latch: status?.latch ?? null,
+      lightingMode: observedLightingIsLatest ? status.lighting_mode : item?.lighting_mode ?? status?.lighting_mode ?? null,
+      lightingOutput: status?.lighting_output ?? null, latch: status?.latch ?? null,
       freshness: clone(freshness || null), measurementStale: freshness?.measurements_stale ?? null, freshnessNote: freshness?.meaning || (status ? "Freshness was not supplied by the server." : "No device observation has been received."),
       confirmedProfileVersion: item?.confirmed_profile_version ?? null,
       confirmedProfile: clone(item?.confirmed_profile || null), assignmentAcknowledgedAt: item?.assignment_acknowledged_at || null,
