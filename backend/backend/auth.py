@@ -124,7 +124,7 @@ def hardware_token_digest(token):
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
-def authorize_hardware(api, token, method, path):
+def authorize_hardware(api, token, method, path, query):
     item = None
     if HARDWARE_TOKEN.fullmatch(token):
         item = store.get(api, HARDWARE_CREDENTIAL_KIND, hardware_token_digest(token), required=False)
@@ -132,9 +132,22 @@ def authorize_hardware(api, token, method, path):
     device_id = credential.get("device_id") if isinstance(credential, dict) and credential.get("active") is True else None
     if not isinstance(device_id, str) or not api.IDENTIFIER.fullmatch(device_id) or demo_device(device_id):
         raise api.APIError(401, "unauthorized", "A valid Bearer API token is required.")
-    if method != "POST" or path not in HARDWARE_POST_PATHS:
-        raise api.APIError(403, "forbidden", "This hardware credential cannot access that operation.")
-    return {"kind": "hardware", "device_id": device_id}
+    person = {"kind": "hardware", "device_id": device_id}
+    if method == "POST" and path in HARDWARE_POST_PATHS:
+        return person
+    if method == "GET" and path == "/api/commands":
+        if (query.get("device_id") == device_id and query.get("type") == "label"
+                and query.get("status") in ("pending", "recovery_pending")):
+            return person
+        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending labels for the registered device_id.")
+    suffix = {"GET": "", "POST": r"/(?:acknowledgements|recovery-acknowledgements)"}.get(method)
+    match = re.fullmatch(r"/api/commands/([A-Za-z0-9][A-Za-z0-9_-]{0,63})" + suffix, path) if suffix is not None else None
+    if match:
+        command = store.get(api, "command", match[1], required=False)
+        if command and command["data"].get("device_id") == device_id and command["data"].get("type") == "label":
+            return person
+        raise api.APIError(404, "not_found", "Label command not found.")
+    raise api.APIError(403, "forbidden", "This hardware credential cannot access that operation.")
 
 
 def authorize_human(api, person, method, path, query):
@@ -185,7 +198,7 @@ def authorize(api, event, method, path, headers, query):
     parts = headers.get("authorization", "").split()
     token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
     if token.startswith(HARDWARE_TOKEN_PREFIX):
-        return path, authorize_hardware(api, token, method, path)
+        return path, authorize_hardware(api, token, method, path, query)
     api.require_auth(token)
     if enforced():
         return path, producer_route(api, method, path, query)
@@ -243,7 +256,7 @@ def demo_exhibit(exhibit_id):
 
 def filter_response(api, result):
     person = principal.get()
-    # Hardware can only receive its own scoped POST receipt.
+    # Hardware routes enforce device and command scope before reaching this point.
     if not person or person["kind"] in ("legacy", "hardware") or result.get("statusCode", 500) >= 400:
         return result
     content_type = result.get("headers", {}).get("content-type", "")

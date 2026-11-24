@@ -19,3 +19,35 @@ A 30-second status heartbeat is the recommended integration cadence; 120 seconds
 Management/device-status brightness is relative 0–100%; legacy readings are raw ADC 0–4095. The initial compatibility snapshot uses round-half-up(percent × 4095 / 100). Calibrate the actual sensor before treating this mapping as a physical control rule. Neither unit is lux.
 
 Recovery requires the producer to durably fence the old command generation, serialize/reconcile any in-flight execution, publish a fresh post-fence status, then report an explicit applied/not_applied outcome. Unknown outcomes and absent devices keep their lock/card reservation. The backend cannot safely infer that an offline device did nothing. See Swagger recovery schemas and the workflow contract for late-receipt and stale-label rules. No remote-unlock operation exists.
+
+## Mega e-paper label delivery
+
+Use the existing private hardware bearer credential for the registered ESP32-S3.
+The Mega shares the ESP's command channel over UART. Poll
+`GET /api/commands?device_id=<registered-id>&type=label&status=pending&limit=1`
+and repeat with `status=recovery_pending` for reconciliation. Follow
+`next_cursor` even when `items` is empty and keep the same filters. The
+deployment must have the existing workflow cursor key provisioned.
+
+Exact-read the command before execution. Both receipt routes require the bound
+device ID and `source=device`. Keep the receipt ID, timestamp and payload
+stable across retries. Only submit a successful normal receipt after Mega
+reports the correlated final refresh completion. A transfer acknowledgement or
+a missing final result leaves the display outcome unresolved.
+
+For `reshow-mega-01`, render the title, optional nonempty collection and
+description joined by ` | `. The result must fit in 180 printable ASCII
+characters, including separators. Images and line breaks are unsupported. The
+draft remains structured, and the command contains the frozen version. The
+showcase must already have a producer-confirmed assignment. If it does not,
+the firmware owner must provide an assignment executor that applies the required
+profile before confirming the assignment.
+
+Until the firmware supports automated recovery, the staff operator requests
+recovery for the unresolved command and the firmware owner coordinates device-side
+reconciliation. Fence the generation durably, stop any stale execution for the
+lock, establish what the display actually applied, and upload a fresh post-fence
+device-status observation. Submit a recovery receipt only for an established
+outcome, using the matching recovery ID, generation and observation. Keep the
+lock unresolved if the physical result is uncertain. Keep online labels disabled
+until the Mega-backed executor and its recovery path are ready for bench tests.
