@@ -367,6 +367,15 @@ export async function render(container, ctx) {
     return next;
   }
 
+  function validateShowcaseContent(sending) {
+    if (!live || snapshot.showcase.deviceId !== "reshow-mega-01") return;
+    const rendered = [sending.title, sending.collection, sending.description].filter(Boolean).join(" | ");
+    if (selectedFile || (!removingImage && sending.imageMediaId) ||
+        rendered.length > 180 || /[^ -~]/.test(rendered)) {
+      throw new Error("This e-paper display accepts up to 180 printable ASCII characters including separators. Remove any image and line breaks before sending.");
+    }
+  }
+
   async function saveCurrentDraft(saving) {
     if (selectedFile) {
       upload = new AbortController();
@@ -432,6 +441,7 @@ export async function render(container, ctx) {
     let sending;
     try {
       sending = validatedContent();
+      validateShowcaseContent(sending);
     } catch (error) {
       showError(error);
       return;

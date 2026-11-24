@@ -76,7 +76,7 @@ def project(api, kind, value):
 
 
 class CursorCodec:
-    """AES-GCM cursors bound to one current account, role and filtered query.
+    """AES-GCM cursors bound to the current authorization scope and filtered query.
 
     The key is an independently generated IAM-only auth-control record, never
     the shared producer credential. HTTP routes cannot address that collection.
@@ -87,10 +87,13 @@ class CursorCodec:
 
         self.api = api
         person = auth.principal.get()
-        scope = {"policy": "staff-workflow-reads-v1", "kind": kind,
-                 "issuer": person["issuer"], "subject": person["subject"], "role": person["role"],
-                 "account_version": int(person["account"]["version"]),
-                 "query": {key: value for key, value in query.items() if key not in ("cursor", "limit")}}
+        if person["kind"] == "hardware":
+            scope = {"policy": "hardware-label-reads-v1", "device_id": person["device_id"]}
+        else:
+            scope = {"policy": "staff-workflow-reads-v1", "issuer": person["issuer"],
+                     "subject": person["subject"], "role": person["role"],
+                     "account_version": int(person["account"]["version"])}
+        scope.update(kind=kind, query={key: value for key, value in query.items() if key not in ("cursor", "limit")})
         self.aad = json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()
         item = store.get(api, "auth-control", CURSOR_KEY_ID, required=False)
         try:
@@ -100,7 +103,7 @@ class CursorCodec:
             if len(key) != 32:
                 raise ValueError()
         except (TypeError, KeyError, ValueError):
-            raise api.APIError(503, "service_unavailable", "Staff pagination is not configured.") from None
+            raise api.APIError(503, "service_unavailable", "Secure pagination is not configured.") from None
         self.cipher = AESGCM(key)
 
     def encode(self, last):
@@ -138,6 +141,9 @@ class CursorCodec:
 
 
 def list_records(api, kind, query):
+    person = auth.principal.get()
+    if kind == "command" and person and person["kind"] == "hardware":
+        return store.list_records(api, kind, query, cursor_codec=CursorCodec(api, kind, query))
     if not restricted(kind):
         return store.list_records(api, kind, query)
     return store.list_records(api, kind, query, project=lambda value: project(api, kind, value),
