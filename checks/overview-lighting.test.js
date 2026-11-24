@@ -169,5 +169,20 @@ test("live adapter reads capability from exact device status and queues no exhib
       assert.equal(requests[0].showcase_id, "test-case");
       assert.deepEqual(requests[0].payload, { mode: "On" });
     }
+    item.lighting_mode = "On";
+    item.lighting_acknowledged_at = "2026-11-24T04:00:00.500Z";
+    item.device_status.lighting_mode = "Off";
+    item.device_status.recorded_at = "2026-11-24T04:00:00.100Z";
+    assert.equal((await api.getSnapshot({ include: [] })).showcase.lightingMode, "On",
+      "Old queued telemetry cannot roll back a newer acknowledged command");
+    item.device_status.recorded_at = "2026-11-24T04:00:10.000Z";
+    item.device_status.lighting_mode = "Auto";
+    assert.equal((await api.getSnapshot({ include: [] })).showcase.lightingMode, "Auto",
+      "A Mega reboot to Auto must supersede the previous cloud On request");
+    item.device_status.lighting_mode = "Off";
+    assert.equal((await api.getSnapshot({ include: [] })).showcase.lightingMode, "Off",
+      "New local overrides must remain visible");
+    item.device_status.lighting_mode = null;
+    assert.equal((await api.getSnapshot({ include: [] })).showcase.lightingMode, "On");
   }
 });
