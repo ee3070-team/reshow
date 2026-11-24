@@ -20,7 +20,7 @@ PRODUCER_COLLECTIONS = ("readings", "events", "proximity-events", "coverage", "d
 HARDWARE_TOKEN_PREFIX = "rshw_hw_v1."
 HARDWARE_TOKEN = re.compile(re.escape(HARDWARE_TOKEN_PREFIX) + r"[A-Za-z0-9_-]{43}")
 HARDWARE_CREDENTIAL_KIND = "hardware-credential"
-HARDWARE_POST_PATHS = ("/api/device-status", "/api/readings")
+HARDWARE_POST_PATHS = ("/api/device-status", "/api/readings", "/api/rfid-events", "/api/tag-scans", "/api/access-attempts")
 HARDWARE_COMMAND_TYPES = ("assignment", "label")
 
 
@@ -180,6 +180,8 @@ def authorize_human(api, person, method, path, query):
     if method == "GET" and (collection in allowed_get or admin and collection in ("staff", "accounts", "access-attempts")):
         if collection == "commands" and query.get("type") == "card" and not admin:
             raise api.APIError(403, "forbidden", "Administrator permission is required for physical cards.")
+        return
+    if collection == "rfid-sessions" and operator and method in ("GET", "POST"):
         return
     if collection == "session" and method in ("GET", "POST"):
         return

@@ -699,6 +699,14 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
       try { const result = await currentShowcase(); void emit(); return showcaseRecord(result); }
       finally { schedulePoll(); }
     },
+    getRfidSession: (id, options) =>
+      request(`${PREFIX}/rfid-sessions/${identifier(id)}`, options).then((response) => response.data),
+    finishRfidSession: (id, editId, label, options) => {
+      requirePermission("operate");
+      return request(`${PREFIX}/rfid-sessions/${identifier(id)}/${label ? "publish" : "cancel"}`, {
+        ...options, method: "POST", body: { edit_id: identifier(editId), ...label },
+      }).then((response) => response.data);
+    },
     getShowcases: async () => Promise.all((await collect("/showcases")).map(showcaseRecord)),
     setDemoMode: unavailable, resetDemo: unavailable, settlePending: unavailable };
 }

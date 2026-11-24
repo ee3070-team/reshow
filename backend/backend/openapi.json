@@ -3,7 +3,7 @@
   "info": {
     "title": "ReShow EE3070 Backend API",
     "version": "0.4.1",
-    "description": "ReShow university backend v0.4.1. Staff calls use /staff-api with Cognito access tokens and current account permissions. Operators can read exhibit scans; Operators and Viewers receive an allowlisted operational activity feed and non-card command state. Staff-card scans, card commands and sensitive staff activity remain Administrator-only. The shared /api token is restricted to configured synthetic producer data. Device-scoped hardware tokens authorize real telemetry uploads and scoped assignment and label command execution for their registered device. Historical exhibit attribution, current-time cutoffs, explicit device recovery and immutable report captures are preserved. Hardware firmware and integration of the six demonstration data screens remain separate."
+    "description": "ReShow university backend v0.4.1. Staff calls use /staff-api with Cognito access tokens and current account permissions. Operators can read exhibit scans; Operators and Viewers receive an allowlisted operational activity feed and non-card command state. Staff-card scans, card commands and sensitive staff activity remain Administrator-only. The shared /api token is restricted to configured synthetic producer data. Device-scoped hardware tokens authorize real telemetry uploads and scoped assignment and label command execution for their registered device. Hardware tokens also authorize device-bound RFID event ingestion. Historical exhibit attribution, current-time cutoffs, explicit device recovery and immutable report captures are preserved. Hardware firmware and integration of the six demonstration data screens remain separate."
   },
   "servers": [
     {
@@ -63,6 +63,406 @@
     }
   ],
   "paths": {
+    "/api/rfid-events": {
+      "post": {
+        "operationId": "recordRfidEvent",
+        "summary": "Record a device RFID tap",
+        "description": "A stable event_id and unchanged body deduplicate retries. Accepted taps require role. Denied taps omit it.",
+        "security": [
+          {
+            "hardwareProducerToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RfidEventInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate tap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidEventResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Recorded tap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidEventResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}": {
+      "get": {
+        "operationId": "getRfidSession",
+        "summary": "Read the RFID edit session",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}/publish": {
+      "post": {
+        "operationId": "publishRfidDescription",
+        "summary": "Save and queue the assigned exhibit label",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "edit_id",
+                  "exhibit_id",
+                  "description"
+                ],
+                "properties": {
+                  "edit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "exhibit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "pattern": "^[ -~]{1,180}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/staff-api/rfid-sessions/{showcase_id}/cancel": {
+      "post": {
+        "operationId": "cancelRfidSession",
+        "summary": "Finish editing without queuing a label",
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "showcase_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current edit and delivery state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RfidSessionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "edit_id"
+                ],
+                "properties": {
+                  "edit_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "tags": [
@@ -3198,6 +3598,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3217,7 +3620,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/api/tag-scans/{scan_id}": {
@@ -3443,6 +3854,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3463,7 +3877,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "hardwareProducerToken": []
+          }
+        ]
       }
     },
     "/api/access-attempts/{attempt_id}": {
@@ -3760,6 +4182,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -3896,14 +4321,7 @@
             }
           },
           "403": {
-            "description": "Current account/role does not permit this action.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "requestBody": {
@@ -3955,14 +4373,7 @@
             }
           },
           "403": {
-            "description": "Current account/role does not permit this action.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           },
           "200": {
             "description": "Success.",
@@ -3995,10 +4406,10 @@
         "deprecated": false,
         "security": [
           {
-            "hardwareProducerToken": []
+            "bearerAuth": []
           },
           {
-            "bearerAuth": []
+            "hardwareProducerToken": []
           }
         ]
       }
@@ -4058,6 +4469,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -4854,6 +5268,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/ProducerScopeForbidden"
           }
         },
         "parameters": [
@@ -11161,6 +11578,239 @@
       }
     },
     "schemas": {
+      "RfidEventInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "device_id",
+          "source",
+          "recorded_at",
+          "result"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "device"
+            ]
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "denied"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "door",
+              "epaper",
+              "edit"
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "RfidEventResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "item",
+          "consistency"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "duplicate"
+            ]
+          },
+          "item": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event_id",
+              "device_id",
+              "source",
+              "recorded_at",
+              "result",
+              "role",
+              "version",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "event_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "device_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "device"
+                ]
+              },
+              "recorded_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "denied"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "door",
+                  "epaper",
+                  "edit"
+                ],
+                "nullable": true
+              },
+              "version": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "consistency": {
+            "type": "string",
+            "enum": [
+              "strong"
+            ]
+          }
+        }
+      },
+      "RfidSessionResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "showcase_id",
+              "exhibit_id",
+              "phase",
+              "edit_id",
+              "last_tap",
+              "delivery"
+            ],
+            "properties": {
+              "showcase_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "exhibit_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+                "nullable": true
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "pending_edit"
+                ]
+              },
+              "edit_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+                "nullable": true
+              },
+              "last_tap": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role",
+                  "result",
+                  "recorded_at"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "door",
+                      "epaper",
+                      "edit"
+                    ],
+                    "nullable": true
+                  },
+                  "result": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "denied"
+                    ]
+                  },
+                  "recorded_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "nullable": true
+              },
+              "delivery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "failure_reason",
+                  "execute_before"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  },
+                  "failure_reason": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "execute_before": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
+                },
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
       "Identifier": {
         "type": "string",
         "minLength": 1,

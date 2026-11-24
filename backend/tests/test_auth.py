@@ -467,7 +467,7 @@ class AuthenticationTests(unittest.TestCase):
                 self.assertEqual(self.producer_request("POST", path, {**payload, "occupied": True})[0], 409)
                 self.assertEqual(self.table.items, stored)
 
-    def test_hardware_token_cannot_access_unrelated_operations_or_telemetry(self):
+    def test_hardware_token_rejects_unrelated_operations_and_wrong_payload_scope(self):
         self.hardware_credential()
         payload = {"source": "device", "device_id": HARDWARE_DEVICE}
         before = copy.deepcopy(self.table.items)
@@ -485,6 +485,101 @@ class AuthenticationTests(unittest.TestCase):
                 self.assertEqual(self.producer_request("POST", path, payload, token=TOKEN)[0], 403)
                 self.assertEqual(self.request("POST", "/staff-api" + path.removeprefix("/api"), payload)[0], 403)
         self.assertEqual(self.table.items, before)
+
+    def test_rfid_session_publish_and_real_device_receipt(self):
+        key = self.hardware_credential()
+        device = workflows.MEGA_SHOWCASE_DEVICE_ID
+        self.table.items[key]["data"]["device_id"] = device
+        showcase_id, exhibit_id = "fixture-showcase", "fixture-exhibit"
+        path = "/staff-api/rfid-sessions/" + showcase_id
+        event = {"event_id": "tap-1", "device_id": device, "source": "device",
+                 "recorded_at": app.timestamp(NOW), "result": "accepted", "role": "door"}
+        tap_path = "/api/rfid-events"
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 404)
+        self.assertEqual(self.request("POST", "/staff-api/showcases", {
+            "showcase_id": showcase_id, "name": "Case", "device_id": device,
+        })[0], 201)
+        profile = {"exhibit_id": exhibit_id, "name": "Helmet", "description": "",
+                   "tag_id": "EX-HELMET", "temperature_min_c": 18, "temperature_max_c": 24,
+                   "brightness_min_percent": 30, "brightness_max_percent": 60, "warning_seconds": 5}
+        self.assertEqual(self.request("POST", "/staff-api/exhibit-profiles", profile)[0], 201)
+        assignment = {"command_id": "assignment-1", "showcase_id": showcase_id,
+                      "type": "assignment", "payload": {"exhibit_id": exhibit_id}}
+        self.assertEqual(self.request("POST", "/staff-api/commands", assignment, user="operator")[0], 201)
+        assignment_path = "/api/commands/assignment-1"
+        self.assertEqual(self.producer_request("GET", assignment_path)[0], 200)
+        self.assertEqual(self.producer_request("POST", assignment_path + "/acknowledgements", {
+            "acknowledgement_id": "assignment-receipt", "device_id": device, "source": "device",
+            "recorded_at": app.timestamp(NOW), "success": True,
+        })[0], 201)
+        self.assertEqual(self.request("GET", path, user="viewer")[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "device_id": "elsewhere"})[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, event, token=TOKEN)[0], 403)
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 201)
+        session = self.request("GET", path, user="operator")[1]["data"]
+        edit_id = session["edit_id"]
+        self.assertEqual(session["phase"], "pending_edit")
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "event_id": "tap-2", "role": "epaper"})[0], 201)
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+        label = {"edit_id": edit_id, "exhibit_id": exhibit_id, "description": "A red helmet."}
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "edit_id": "older"}, user="operator")[0], 409)
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "description": "非 ASCII"}, user="operator")[0], 400)
+        self.assertEqual(self.request("POST", path + "/publish", {**label, "exhibit_id": "other"}, user="operator")[0], 409)
+        reapply = {**assignment, "command_id": "assignment-2"}
+        self.assertEqual(self.request("POST", "/staff-api/commands", reapply, user="operator")[0], 201)
+        status, blocked = self.request("POST", path + "/publish", label, user="operator")
+        self.assertEqual(status, 409, blocked)
+        self.assertEqual(blocked["error"]["code"], "pending_command")
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+        self.assertEqual(self.producer_request("POST", "/api/commands/assignment-2/acknowledgements", {
+            "acknowledgement_id": "reapply-receipt", "device_id": device, "source": "device",
+            "recorded_at": app.timestamp(NOW), "success": False,
+        })[0], 201)
+        oversized = {**label, "description": "x" * 180}
+        status, invalid = self.request("POST", path + "/publish", oversized, user="operator")
+        self.assertEqual(status, 400, invalid)
+        self.assertEqual(invalid["error"]["code"], "unsupported_label_content")
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+
+        def concurrent_showcase_change(items):
+            items["WF#showcase", showcase_id]["version"] += 1
+        self.table.before_transaction = concurrent_showcase_change
+        self.assertEqual(self.request("POST", path + "/publish", label, user="operator")[0], 409)
+        self.assertNotIn(("WF#label-draft", exhibit_id), self.table.items)
+        self.assertNotIn(("WF#command", edit_id), self.table.items)
+        self.assertEqual(self.request("GET", path)[1]["data"]["edit_id"], edit_id)
+
+        status, reply = self.request("POST", path + "/publish", label, user="operator")
+        self.assertEqual(status, 200, reply)
+        self.assertEqual(reply["data"]["phase"], "idle")
+        self.assertEqual(reply["data"]["delivery"]["status"], "pending")
+        self.assertEqual(self.request("POST", path + "/publish", label, user="operator")[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, event)[0], 200)
+        self.assertEqual(self.request("GET", path)[1]["data"]["phase"], "idle")
+        query = {"device_id": device, "type": "label", "status": "pending"}
+        status, listed = self.producer_request("GET", "/api/commands", query=query)
+        self.assertEqual(status, 200, listed)
+        self.assertEqual([item["command_id"] for item in listed["items"]], [edit_id])
+        command_path = "/api/commands/" + edit_id
+        self.assertEqual(self.producer_request("GET", command_path)[0], 200)
+        self.assertEqual(self.producer_request("GET", "/api/commands", query={**query, "device_id": "elsewhere"})[0], 403)
+        self.command_record("other-command", "label")
+        self.assertEqual(self.producer_request("GET", "/api/commands/other-command")[0], 404)
+        receipt = {"acknowledgement_id": "receipt-1", "source": "device", "device_id": device,
+                   "recorded_at": app.timestamp(NOW), "success": True}
+        self.assertEqual(self.producer_request("POST", command_path + "/acknowledgements", receipt)[0], 201)
+        self.assertEqual(self.producer_request("POST", command_path + "/acknowledgements", receipt)[0], 200)
+        self.assertEqual(self.request("GET", path)[1]["data"]["delivery"]["status"], "acknowledged")
+        self.assertEqual(self.producer_request("POST", tap_path, {**event, "event_id": "tap-3"})[0], 201)
+        next_edit = self.request("GET", path)[1]["data"]["edit_id"]
+        self.assertNotEqual(edit_id, next_edit)
+        self.assertEqual(self.request("POST", path + "/cancel", {"edit_id": edit_id})[0], 409)
+        self.assertEqual(self.request("POST", path + "/cancel", {"edit_id": next_edit})[0], 200)
+        self.assertEqual(self.producer_request("POST", tap_path, {
+            **event, "event_id": "tap-4", "result": "denied", "role": None,
+        })[0], 201)
+        self.assertEqual(self.request("GET", path)[1]["data"]["phase"], "idle")
 
     def test_hardware_label_scope_and_cursor_binding(self):
         key = self.hardware_credential()
