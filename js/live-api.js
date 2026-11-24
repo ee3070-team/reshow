@@ -242,7 +242,9 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
       zone: status?.occupied == null ? null : status.occupied ? "Occupied" : "Clear",
       lightingMode: item?.lighting_mode ?? status?.lighting_mode ?? null, lightingOutput: status?.lighting_output ?? null, latch: status?.latch ?? null,
       freshness: clone(freshness || null), measurementStale: freshness?.measurements_stale ?? null, freshnessNote: freshness?.meaning || (status ? "Freshness was not supplied by the server." : "No device observation has been received."),
-      confirmedProfileVersion: item?.confirmed_profile_version ?? null, labelReconciliationRequired: Boolean(item?.label_reconciliation_required),
+      confirmedProfileVersion: item?.confirmed_profile_version ?? null,
+      confirmedProfile: clone(item?.confirmed_profile || null), assignmentAcknowledgedAt: item?.assignment_acknowledged_at || null,
+      labelReconciliationRequired: Boolean(item?.label_reconciliation_required),
       label: item?.confirmed_label ? { exhibitId: item.confirmed_label.exhibit_id, content: await labelContent(item.confirmed_label.content), acknowledgedAt: item.confirmed_label.acknowledged_at, draftVersion: item.confirmed_label.draft_version } : null };
   }
   async function chooseShowcase() {
@@ -367,10 +369,13 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
   async function queue(type, payload, requestId) {
     requirePermission(type === "card" ? "cards" : "operate");
     const showcase = await requireShowcase();
-    const key = JSON.stringify([showcase.showcase_id, type, payload]);
+    // The exact showcase field also signals server support for profile_version.
+    const wirePayload = type === "assignment" && !own(showcase, "confirmed_profile")
+      ? { exhibit_id: payload.exhibit_id } : payload;
+    const key = JSON.stringify([showcase.showcase_id, type, wirePayload]);
     const commandId = requestId || pendingCommands.get(key) || uid("cmd");
     pendingCommands.set(key, commandId);
-    const result = await request(`${PREFIX}/commands`, { method: "POST", body: { command_id: commandId, showcase_id: showcase.showcase_id, type, payload } });
+    const result = await request(`${PREFIX}/commands`, { method: "POST", body: { command_id: commandId, showcase_id: showcase.showcase_id, type, payload: wirePayload } });
     pendingCommands.delete(key); void emit();
     return commandRecord(result.item);
   }
@@ -679,7 +684,10 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
   });
   const unavailable = async () => { throw issue("Demo simulation is unavailable in live mode.", "live_only", 403); };
   return { getMode: () => "live", getDemoMode: () => "live", can, getSession: auth.getSession, subscribe, getSnapshot,
-    listExhibits, uploadImage, saveExhibit, assignExhibit: (exhibitId) => queue("assignment", { exhibit_id: identifier(exhibitId) }),
+    listExhibits, uploadImage, saveExhibit, assignExhibit: (exhibitId, profileVersion) => queue("assignment", {
+      exhibit_id: identifier(exhibitId),
+      ...(profileVersion == null ? {} : { profile_version: profileVersion }),
+    }),
     getLabel, saveLabelDraft, sendLabel, setLighting: (mode) => { if (!["Auto", "On", "Off"].includes(mode)) return Promise.reject(issue("Choose Auto, On or Off lighting.")); return queue("lighting", { mode }); },
     scanAvailability, scanExhibitTag: (options) => waitForScan("exhibit", options), scanStaffCard: (options) => waitForScan("staff_card", options),
     listStaff, saveStaff, registerCard, setCardAccess, getAccessLog, listAccounts, updateAccount,

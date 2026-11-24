@@ -69,7 +69,10 @@ export async function render(container, ctx) {
   const pendingLabel = () => snapshot.operations.find(
     (operation) => operation.type === "label" && ["pending", "recovery_pending"].includes(operation.status),
   );
-  const canSend = () => canOperate && !pendingLabel() && snapshot.showcase.online && snapshot.showcase.exhibitId === selectedId;
+  const assignmentBusy = () => live && snapshot.showcase.deviceId === "reshow-mega-01" && snapshot.operations.some(
+    (operation) => operation.type === "assignment" && ["pending", "recovery_pending"].includes(operation.status),
+  );
+  const canSend = () => canOperate && !pendingLabel() && !assignmentBusy() && snapshot.showcase.online && snapshot.showcase.exhibitId === selectedId;
   const statusTone = (status) =>
     status === "acknowledged"
       ? "success"
@@ -307,6 +310,8 @@ export async function render(container, ctx) {
         ? `${caseName()} is offline. You can save a draft; delivery is unavailable.`
         : pending
           ? recoveryMessage || `${live ? "Device delivery" : "Mock delivery"} pending. The previous acknowledged label remains on the showcase.`
+          : assignmentBusy()
+            ? "Resolve the showcase assignment before sending a label."
           : reconciliationRequired
             ? "The retained label needs a current send and device acknowledgement. Saving a draft does not reconcile it."
           : matchesFailed
