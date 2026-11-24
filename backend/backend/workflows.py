@@ -7,7 +7,7 @@ commands and no command invents completed display history or coverage.
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 import workflow_store as store
 import staff_reads
 
@@ -17,8 +17,11 @@ PROFILE_REQUIRED = PROFILE_FIELDS - {"collection", "image_media_id"}
 STATUS_FIELDS = {"status_id", "device_id", "recorded_at", "source", "temperature_c", "brightness_percent", "occupied", "distance_cm", "lighting_mode", "lighting_output", "latch", "local_control"}
 COMMAND_SECONDS = 300
 STALE_SECONDS = 120
-MEGA_EPAPER_DEVICE_ID = "reshow-mega-01"
+MEGA_SHOWCASE_DEVICE_ID = "reshow-mega-01"
 MEGA_EPAPER_TEXT_LIMIT = 180
+PROFILE_VERSION_MAX = 2147483647
+MONITORING_FIELDS = ("temperature_min_c", "temperature_max_c", "brightness_min_percent",
+                     "brightness_max_percent", "warning_seconds")
 
 
 def fields(api, data, required, optional=()):
@@ -139,9 +142,13 @@ def validate_profile(api, data):
     clean = {"exhibit_id": api.identifier(data["exhibit_id"], "exhibit_id"),
              "name": api.text(data["name"], "name", 120), "description": api.text(data["description"], "description", 2000, allow_empty=True),
              "tag_id": tag_id(api, data["tag_id"]), "collection": api.text(data.get("collection", ""), "collection", 120, allow_empty=True),
-             "image_media_id": media_id(api, data.get("image_media_id")),
-             "warning_seconds": api.number(data["warning_seconds"], "warning_seconds", 1, 3600, integer=True)}
-    for field in ("temperature_min_c", "temperature_max_c", "brightness_min_percent", "brightness_max_percent"):
+             "image_media_id": media_id(api, data.get("image_media_id"))}
+    return {**clean, **validate_monitoring_limits(api, data)}
+
+
+def validate_monitoring_limits(api, data):
+    clean = {"warning_seconds": api.number(data["warning_seconds"], "warning_seconds", 1, 3600, integer=True)}
+    for field in MONITORING_FIELDS[:-1]:
         bounds = (-40, 125) if field.startswith("temperature") else (0, 100)
         clean[field] = api.number(data[field], field, *bounds)
     for lower, upper in (("temperature_min_c", "temperature_max_c"), ("brightness_min_percent", "brightness_max_percent")):
@@ -282,6 +289,25 @@ def status_data(api, data):
     return clean
 
 
+def confirmed_monitoring_profile(api, case):
+    data = case["data"]
+    assignment_id = data.get("assignment_command_id")
+    if not assignment_id:
+        return None
+    command = store.get(api, "command", assignment_id, required=False)
+    if not command:
+        return None
+    assignment = command["data"]
+    profile = assignment.get("payload", {}).get("profile", {})
+    if (assignment.get("type") != "assignment" or assignment.get("showcase_id") != case["SK"]
+            or assignment.get("device_id") != data["device_id"]
+            or profile.get("exhibit_id") != data.get("confirmed_exhibit_id")
+            or profile.get("version") != data.get("confirmed_profile_version")
+            or not all(field in profile for field in MONITORING_FIELDS)):
+        return None
+    return {field: profile[field] for field in ("exhibit_id", "version", *MONITORING_FIELDS)}
+
+
 def showcase_view(api, item):
     device = item["data"]["device_id"]
     latest = store.list_records(api, "status", {"device_id": device, "limit": "1"})["items"]
@@ -293,6 +319,7 @@ def showcase_view(api, item):
     measurement_age = age(measured["recorded_at"] if measured else None)
     contact_age = age(contact["created_at"] if contact else None)
     return {**store.public(item), "confirmed_profile_version": item["data"].get("confirmed_profile_version"),
+            "confirmed_profile": confirmed_monitoring_profile(api, item),
             "label_reconciliation_required": item["data"].get("label_reconciliation_required", False), "device_status": measured, "freshness": {
         "measurement_age_seconds": measurement_age, "contact_age_seconds": contact_age,
         "measurements_stale": measurement_age > STALE_SECONDS if measurement_age is not None else None,
@@ -327,7 +354,7 @@ def label_data(api, data):
             "description": api.text(data["description"], "description", 2000), "image_media_id": media_id(api, data["image_media_id"])}
 
 
-def save_draft(api, exhibit_id, data, expected):
+def prepare_draft(api, exhibit_id, data, expected):
     store.get(api, "exhibit-profile", exhibit_id)
     clean = {"exhibit_id": exhibit_id, "content": label_data(api, data)}
     old = store.get(api, "label-draft", exhibit_id, required=False)
@@ -340,8 +367,13 @@ def save_draft(api, exhibit_id, data, expected):
     if old is None:
         actions.extend(store.index_actions(api, item))
     actions.extend(audit_actions(api, "label_draft", "saved", exhibit_id=exhibit_id))
+    return item, actions
+
+
+def save_draft(api, exhibit_id, data, expected):
+    item, actions = prepare_draft(api, exhibit_id, data, expected)
     store.transact(api, actions)
-    return result(api, item, True if old is None else None)
+    return result(api, item, True if item["version"] == 1 else None)
 
 
 def command_request(api, data):
@@ -353,8 +385,10 @@ def command_request(api, data):
     if not isinstance(payload, dict):
         raise api.APIError(400, "invalid_payload", "payload must be an object.")
     if clean["type"] == "assignment":
-        fields(api, payload, ("exhibit_id",))
-        payload = {"exhibit_id": api.identifier(payload["exhibit_id"], "exhibit_id")}
+        fields(api, payload, ("exhibit_id",), ("profile_version",))
+        profile_version = {"profile_version": api.number(payload["profile_version"], "profile_version", 1,
+                                                         PROFILE_VERSION_MAX, integer=True)} if "profile_version" in payload else {}
+        payload = {"exhibit_id": api.identifier(payload["exhibit_id"], "exhibit_id"), **profile_version}
     elif clean["type"] == "label":
         fields(api, payload, ("exhibit_id", "draft_version"))
         payload = {"exhibit_id": api.identifier(payload["exhibit_id"], "exhibit_id"),
@@ -412,7 +446,35 @@ def validate_scan_reference(api, payload, device_id, command_id):
     return [reservation(api, "scan", payload["scan_id"], command_id)]
 
 
-def create_command(api, data):
+def validate_mega_profile(api, profile):
+    temperature_min, temperature_max = (Decimal(profile[field]) for field in MONITORING_FIELDS[:2])
+    if any(value < 0 or value * 100 != (value * 100).to_integral_value()
+           for value in (temperature_min, temperature_max)):
+        raise api.APIError(400, "unsupported_profile",
+                           "The Mega requires nonnegative temperature limits with at most two decimal places.")
+    brightness_min, brightness_max = (Decimal(profile[field]) for field in MONITORING_FIELDS[2:4])
+    adc_min = (brightness_min * 1023 / 100).to_integral_value(rounding=ROUND_CEILING)
+    adc_max = (brightness_max * 1023 / 100).to_integral_value(rounding=ROUND_FLOOR)
+    if adc_min > adc_max:
+        raise api.APIError(400, "unsupported_profile",
+                           "Widen the brightness limits to include a representable Mega ADC value.")
+
+
+def mega_command_guard(api, case, kind):
+    # Preserve per-command-type generations while ensuring only one display or
+    # profile operation can hold a lock for this physical showcase.
+    sibling = "label" if kind == "assignment" else "assignment"
+    lock_id = "showcase#" + case["SK"] + "#" + sibling
+    lock = store.get(api, "pending", lock_id, required=False)
+    if lock and lock["data"]["status"] in ("pending", "recovery_pending"):
+        raise api.APIError(409, "pending_command", "Resolve the current assignment or label command before sending another.")
+    checks = [store.check_version_action(api, "pending", lock_id, lock)]
+    if kind == "label":
+        checks.append(store.check_version_action(api, "showcase", case["SK"], case))
+    return checks
+
+
+def create_command(api, data, *, prepared_draft=None, additional_actions=()):
     request = command_request(api, data)
     record_id = request["command_id"]
     old = store.get(api, "command", record_id, required=False)
@@ -426,19 +488,34 @@ def create_command(api, data):
     kind = request["type"]
     exhibit = case["data"]["confirmed_exhibit_id"]
     lock_id = "showcase#" + request["showcase_id"] + "#" + kind
-    actions = []
+    actions = list(additional_actions)
     if kind in ("assignment", "label"):
+        is_mega = case["data"]["device_id"] == MEGA_SHOWCASE_DEVICE_ID
+        if is_mega:
+            actions.extend(mega_command_guard(api, case, kind))
         profile = store.get(api, "exhibit-profile", payload["exhibit_id"])
         exhibit = payload["exhibit_id"]
         if kind == "assignment":
-            payload["profile"] = store.public(profile)
+            snapshot = store.public(profile)
+            fields(api, profile["data"], PROFILE_REQUIRED, PROFILE_FIELDS - PROFILE_REQUIRED)
+            version = api.number(snapshot["version"], "profile.version", 1, PROFILE_VERSION_MAX, integer=True)
+            if snapshot["exhibit_id"] != exhibit:
+                raise api.APIError(503, "storage_inconsistent", "The exhibit profile identity does not match its record.")
+            if payload.pop("profile_version", version) != version:
+                raise api.APIError(409, "version_conflict", "The saved profile changed. Reload it before applying the settings.")
+            limits = validate_monitoring_limits(api, snapshot)
+            if is_mega:
+                validate_mega_profile(api, limits)
+            payload["profile"] = snapshot
         else:
             if case["data"]["confirmed_exhibit_id"] != exhibit:
                 raise api.APIError(409, "assignment_required", "Confirm this exhibit's assignment before requesting a label update.")
-            draft = store.get(api, "label-draft", exhibit)
+            if prepared_draft is not None and not is_mega:
+                actions.append(store.check_version_action(api, "showcase", case["SK"], case))
+            draft = prepared_draft if prepared_draft is not None else store.get(api, "label-draft", exhibit)
             require_version(api, draft, payload["draft_version"])
             content = draft["data"]["content"]
-            if case["data"]["device_id"] == MEGA_EPAPER_DEVICE_ID:
+            if is_mega:
                 parts = [content["title"], content["description"]]
                 if content["collection"]:
                     parts.insert(1, content["collection"])
@@ -542,6 +619,9 @@ def settlement_actions(api, command, case, receipt):
             if kind == "assignment":
                 new_data.update(confirmed_exhibit_id=payload["exhibit_id"], assignment_command_id=command_id,
                                 assignment_acknowledged_at=receipt["recorded_at"], confirmed_profile_version=payload["profile"]["version"])
+                retained_label = case["data"].get("confirmed_label")
+                if retained_label and retained_label["exhibit_id"] != payload["exhibit_id"]:
+                    new_data["label_reconciliation_required"] = True
             elif kind == "label":
                 new_data["confirmed_label"] = {"exhibit_id": payload["exhibit_id"], "content": payload["content"],
                                                 "draft_version": payload["draft_version"], "acknowledged_at": receipt["recorded_at"], "command_id": command_id}
@@ -608,7 +688,9 @@ def acknowledge_recovery(api, command_id, data):
     if receipt["outcome"] == "unknown":
         raise api.APIError(409, "recovery_outcome_unknown", "Keep this resource locked and fenced until the producer can establish whether the old command was applied.")
     status = store.get(api, "status", receipt["observed_status_id"])
-    if (status["data"]["device_id"] != current["device_id"] or status["data"]["recorded_at"] < recovery["requested_at"] or
+    if (status["data"]["device_id"] != current["device_id"]
+            or (receipt["source"] == "device" and status["data"].get("source") != "device")
+            or status["data"]["recorded_at"] < recovery["requested_at"] or
             status["created_at"] < recovery["requested_at"] or receipt["recorded_at"] < status["data"]["recorded_at"] or
             receipt["recorded_at"] < recovery["requested_at"]):
         raise api.APIError(409, "recovery_observation_mismatch", "Reference a device-status observation made and uploaded after this recovery fence was requested.")

@@ -342,3 +342,29 @@ test("partial read errors retain prior values explicitly while forbidden section
   assert.deepEqual(merged.errors.map((error) => Boolean(error.retained)), [true, false, true]);
   assert.equal(previous.profiles[0].version, 1);
 });
+
+test("RFID edits use the authenticated staff session and preserve the edit ID", async () => {
+  const { createLiveApi } = await import("../js/live-api.js");
+  const calls = [];
+  let canOperate = true;
+  const api = createLiveApi({
+    getSession: () => ({ role: "Operator" }),
+    can: (permission) => permission === "device_commands" && canOperate,
+    minimumRequestIntervalMs: 0,
+    request: async (path, options) => {
+      calls.push({ path, ...options });
+      return { data: { edit_id: "edit-1" } };
+    },
+  });
+  const path = "/staff-api/rfid-sessions/showcase-1";
+  assert.equal((await api.getRfidSession("showcase-1")).edit_id, "edit-1");
+  await api.finishRfidSession("showcase-1", "edit-1", { exhibit_id: "helmet", description: "A red helmet." });
+  await api.finishRfidSession("showcase-1", "edit-1", null);
+  assert.deepEqual(calls, [
+    { path },
+    { path: path + "/publish", method: "POST", body: { edit_id: "edit-1", exhibit_id: "helmet", description: "A red helmet." } },
+    { path: path + "/cancel", method: "POST", body: { edit_id: "edit-1" } },
+  ]);
+  canOperate = false;
+  assert.throws(() => api.finishRfidSession("showcase-1", "edit-1", null), /does not permit/);
+});

@@ -249,7 +249,7 @@ def schema():
     return {
         "service": "ReShow EE3070 backend",
         "version": "0.4.1",
-        "authentication": "Cognito access tokens with reshow/staff scope authorize /staff-api routes under current account roles. The private shared token is restricted to demo producers on selected /api routes. Device-scoped hardware tokens authorize only POST /api/device-status and POST /api/readings with source=device and the matching device_id. Docs, health and /auth/config are public.",
+        "authentication": "Cognito access tokens with reshow/staff scope authorize /staff-api routes under current account roles. The private shared token is restricted to demo producers on selected /api routes. Hardware tokens can upload device telemetry and read or acknowledge their own assignment and label commands. Telemetry and receipts require source=device and the matching device_id. Docs, health and /auth/config are public.",
         "upload": "POST /api/readings accepts one JSON object per request (no batch). Create the exhibit first.",
         "reading_example": {"reading_id": str(uuid.uuid4()), "device_id": "esp32-demo-01", "exhibit_id": "demo-artifact-01",
                             "recorded_at": timestamp(now_utc()), "temperature_c": 23.5, "brightness_raw": 1850,
@@ -319,8 +319,12 @@ def route(event):
     account_result = accounts.route(sys.modules[__name__], method, path, query, event, headers)
     if account_result is not None:
         return account_result
+    import rfid
     import workflows
     import media_reports
+    rfid_result = rfid.route(sys.modules[__name__], method, path, query, event, headers)
+    if rfid_result is not None:
+        return rfid_result
     media_result = media_reports.route(sys.modules[__name__], method, path, query, event, headers)
     if media_result is not None:
         return media_result

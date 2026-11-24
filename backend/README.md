@@ -35,3 +35,31 @@ exercise authenticated database operations. Infrastructure changes remain in
 the separate CloudFormation workflow. If a later infrastructure release also
 changes the Lambda package, use the same approved source revision.
 
+
+### RFID and e-paper integration
+
+In live mode, open **3D & AI studio → RFID and e-paper** as an Operator or
+Administrator. Select the registered showcase. The showcase must have an
+exhibit assignment acknowledged by its device before a label can be sent.
+
+- The device submits a tap to `POST /api/rfid-events` with its own
+  `device_id`, `source: "device"`, a UTC `recorded_at`, and a stable,
+  globally unique `event_id`. Retry with the same event ID and payload.
+  Accepted taps identify the local action as `door`, `epaper`, or `edit`.
+  Denied taps have no role. The Mega still makes the local door decision.
+- The staff page reads `GET /staff-api/rfid-sessions/{showcase_id}`.
+  Its publish operation validates the edit ID and confirmed exhibit, saves
+  the versioned label draft, queues the label command, and closes the edit
+  in one transaction. Cancel closes the edit without changing the label.
+- The assigned device polls `GET /api/commands` with its registered
+  `device_id`, `type=assignment` or `type=label`, and `status=pending` or
+  `status=recovery_pending`, and follows pagination.
+  Read the exact command before execution and honor its generation and expiry.
+  For label commands, post the normal acknowledgement for that command only
+  when the Mega reports the corresponding refresh outcome. Retain the original
+  receipt for retries and use the existing recovery protocol for expired
+  commands with uncertain execution.
+- The existing local Mega/ESP32 firmware needs an integration update to send
+  these authenticated HTTPS requests and carry command IDs through its serial
+  acknowledgement. The staff page shows the backend command state while the
+  device completes the work.
