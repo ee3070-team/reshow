@@ -21,7 +21,7 @@ HARDWARE_TOKEN_PREFIX = "rshw_hw_v1."
 HARDWARE_TOKEN = re.compile(re.escape(HARDWARE_TOKEN_PREFIX) + r"[A-Za-z0-9_-]{43}")
 HARDWARE_CREDENTIAL_KIND = "hardware-credential"
 HARDWARE_POST_PATHS = ("/api/device-status", "/api/readings", "/api/rfid-events", "/api/tag-scans", "/api/access-attempts")
-HARDWARE_COMMAND_TYPES = ("assignment", "label")
+HARDWARE_COMMAND_TYPES = ("assignment", "label", "lighting")
 
 
 def enforced():
@@ -140,7 +140,7 @@ def authorize_hardware(api, token, method, path, query):
         if (query.get("device_id") == device_id and query.get("type") in HARDWARE_COMMAND_TYPES
                 and query.get("status") in ("pending", "recovery_pending")):
             return person
-        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending assignments or labels for the registered device_id.")
+        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending assignment, label or lighting commands for the registered device_id.")
     suffix = {"GET": "", "POST": r"/(?:acknowledgements|recovery-acknowledgements)"}.get(method)
     match = re.fullmatch(r"/api/commands/([A-Za-z0-9][A-Za-z0-9_-]{0,63})" + suffix, path) if suffix is not None else None
     if match:

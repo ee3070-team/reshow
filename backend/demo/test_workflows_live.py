@@ -258,6 +258,17 @@ def run(client, run_id):
     check('label request stays pending', label_command['status'] == 'pending' and item(showcase_path).get('confirmed_label') is None)
     ack(label_command, 'label-ack', True)
     check('label acknowledgement applies saved content', item(showcase_path)['confirmed_label']['content']['title'] == draft['title'])
+    old_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    status = {'status_id': prefix + '-status', 'device_id': ids['device'], 'recorded_at': old_time,
+              'source': 'demo', 'temperature_c': 22, 'brightness_percent': 45, 'occupied': False,
+              'distance_cm': None, 'lighting_mode': None, 'lighting_output': None, 'latch': None, 'local_control': None}
+    create('/api/device-status', status)
+    freshness = item(showcase_path)['freshness']
+    check('fresh contact does not freshen old measurement', freshness['measurements_stale'] is True
+          and freshness['contact_stale'] is False and freshness['measurement_age_seconds'] >= 86400)
+    create('/api/device-status', {**status, 'status_id': prefix + '-lighting-ready',
+                                 'recorded_at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'),
+                                 'remote_lighting': True})
     lighting_before = item(showcase_path).get('lighting_mode')
     lighting = command('lighting-failed', 'lighting', {'mode': 'On'})
     check('lighting request preserves confirmed mode while pending', item(showcase_path).get('lighting_mode') == lighting_before)
@@ -273,14 +284,6 @@ def run(client, run_id):
     disable = command('card-disable-failed', 'card', {'staff_id': ids['staff1'], 'card_id': card, 'enabled': False})
     ack(disable, 'card-disable-failed-ack', False)
     check('failed card change preserves confirmed access', item('/api/staff/' + ids['staff1'])['card_enabled'] is True)
-    old_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
-    status = {'status_id': prefix + '-status', 'device_id': ids['device'], 'recorded_at': old_time,
-              'source': 'demo', 'temperature_c': 22, 'brightness_percent': 45, 'occupied': False,
-              'distance_cm': None, 'lighting_mode': None, 'lighting_output': None, 'latch': None, 'local_control': None}
-    create('/api/device-status', status)
-    freshness = item(showcase_path)['freshness']
-    check('fresh contact does not freshen old measurement', freshness['measurements_stale'] is True
-          and freshness['contact_stale'] is False and freshness['measurement_age_seconds'] >= 86400)
     scan = {'scan_id': prefix + '-scan', 'device_id': ids['device'], 'recorded_at': old_time,
             'source': 'demo', 'scan_type': 'exhibit', 'tag_id': tag}
     create('/api/tag-scans', scan)

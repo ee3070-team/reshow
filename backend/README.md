@@ -52,7 +52,7 @@ exhibit assignment acknowledged by its device before a label can be sent.
   the versioned label draft, queues the label command, and closes the edit
   in one transaction. Cancel closes the edit without changing the label.
 - The assigned device polls `GET /api/commands` with its registered
-  `device_id`, `type=assignment` or `type=label`, and `status=pending` or
+  `device_id`, `type=assignment`, `type=label` or `type=lighting`, and `status=pending` or
   `status=recovery_pending`, and follows pagination.
   Read the exact command before execution and honor its generation and expiry.
   For label commands, post the normal acknowledgement for that command only
@@ -63,3 +63,27 @@ exhibit assignment acknowledged by its device before a label can be sent.
   these authenticated HTTPS requests and carry command IDs through its serial
   acknowledgement. The staff page shows the backend command state while the
   device completes the work.
+
+### Remote lighting
+
+An Operator or Administrator queues `POST /staff-api/commands` with
+`type: "lighting"` and `payload: {"mode": "Auto"}`, `"On"` or `"Off"`.
+Lighting belongs to the showcase and does not require an exhibit assignment.
+Before a new lighting request, its latest device status must explicitly report
+`remote_lighting: true` with a measurement no more than 120 seconds old. The
+device reports readiness only after its ESP32/Mega lighting handshake. Older
+producers may omit this optional nullable boolean; missing, null or false
+returns `409 lighting_unavailable` without queuing a command. Replaying an
+existing command ID with the same payload remains idempotent after readiness
+is lost. Legacy status retries remain compatible when the field is omitted.
+The registered hardware credential can poll its own pending/recovery lighting
+commands, read the exact command, and post its device-sourced receipt. It cannot
+create commands, read another device's commands, or access staff-card commands.
+
+The device must honor `device-fence-v1`, persist its generation before execution,
+check `execute_before`, and acknowledge only the correlated Mega result. Confirmed
+mode changes on a successful receipt; light output still comes from telemetry.
+Retry the same receipt after a lost response. A failed receipt preserves the
+previous confirmed mode. An expired or uncertain command retains its lock until
+the existing fenced recovery protocol establishes the outcome. Deploying this API
+permission alone does not update the ESP32/Mega firmware or verify the lights.
