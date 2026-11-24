@@ -38,6 +38,16 @@ def put_action(api, item, existing=None):
     return {"Put": put}
 
 
+def check_version_action(api, kind, record_id, existing):
+    check = {"TableName": api.get_table().name, "Key": {"PK": "WF#" + kind, "SK": record_id}}
+    if existing is None:
+        check["ConditionExpression"] = "attribute_not_exists(PK)"
+    else:
+        check.update(ConditionExpression="#version = :version", ExpressionAttributeNames={"#version": "version"},
+                     ExpressionAttributeValues={":version": existing["version"]})
+    return {"ConditionCheck": check}
+
+
 def index_actions(api, item, index_kind=None, at=None):
     """Immutable references; dereference canonical state so lists never go stale."""
     kind = item["PK"][3:]
@@ -58,9 +68,10 @@ def transact(api, actions):
     actions = list(actions) + (auth.audit_actions(api) if auth is not None else [])
     if not actions or len(actions) > 100:
         raise ValueError("Transaction must contain 1-100 actions")
-    keys = [(a["Put"]["Item"]["PK"], a["Put"]["Item"]["SK"]) for a in actions]
+    records = [a["Put"]["Item"] if "Put" in a else a["ConditionCheck"]["Key"] for a in actions]
+    keys = [(record["PK"], record["SK"]) for record in records]
     if len(set(keys)) != len(keys):
-        raise ValueError("A workflow transaction cannot write a key twice")
+        raise ValueError("A workflow transaction cannot reference a key twice")
     try:
         api.get_table().meta.client.transact_write_items(TransactItems=actions)
     except Exception as exc:

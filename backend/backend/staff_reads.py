@@ -88,7 +88,7 @@ class CursorCodec:
         self.api = api
         person = auth.principal.get()
         if person["kind"] == "hardware":
-            scope = {"policy": "hardware-label-reads-v1", "device_id": person["device_id"]}
+            scope = {"policy": "hardware-command-reads-v1", "device_id": person["device_id"]}
         else:
             scope = {"policy": "staff-workflow-reads-v1", "issuer": person["issuer"],
                      "subject": person["subject"], "role": person["role"],

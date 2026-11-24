@@ -50,3 +50,28 @@ test("accepted writes return independently of slow or rejecting view subscribers
     release(); stopSlow(); stopFailed();
   }
 });
+
+test("profile apply sends the selected version and reuses its command ID after a lost response", async () => {
+  const requests = [];
+  const api = createLiveApi({
+    minimumRequestIntervalMs: 0,
+    getSession: () => ({ id: "profile-fixture" }),
+    can: permission => permission === "device_commands",
+    request: async (path, options) => {
+      const showcase = { showcase_id: "sample-display", confirmed_profile: null };
+      if (path.startsWith("/staff-api/showcases?")) return { items: [showcase], next_cursor: null };
+      if (path === "/staff-api/showcases/sample-display") return { item: showcase };
+      assert.equal(path, "/staff-api/commands");
+      requests.push(options.body);
+      if (requests.length === 1) throw new TypeError("Response lost");
+      return { item: { ...options.body, status: "pending" } };
+    },
+  });
+  await assert.rejects(api.assignExhibit("sample-exhibit", 3));
+  await api.assignExhibit("sample-exhibit", 3);
+  await api.assignExhibit("sample-exhibit", 4);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.deepEqual(requests[1].payload, { exhibit_id: "sample-exhibit", profile_version: 3 });
+  assert.deepEqual(requests[2].payload, { exhibit_id: "sample-exhibit", profile_version: 4 });
+  assert.notEqual(requests[2].command_id, requests[1].command_id);
+});
