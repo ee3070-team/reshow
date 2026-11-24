@@ -1171,14 +1171,30 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(len(self.all_pages("/staff-api/workflow-activity", "admin", query)[0]), 4)
 
     def test_restricted_cursor_is_confidential_and_binds_identity_role_query_and_current_account(self):
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
         self.command_record("safe-light", seconds=-1)
         self.command_record("PRIVATE-CARD", "card", 0)
         query = {"device_id": "demo-device", "limit": "1"}
-        first = self.request("GET", "/staff-api/commands", user="operator", query=query)[1]
+        # Stabilize only this synthetic vector's nonce/padding, not AES-GCM.
+        # Random ciphertext can contain short strings such as b"SK" by chance.
+        with patch.object(staff_reads.os, "urandom", side_effect=lambda size: b"\xa5" * size):
+            first = self.request("GET", "/staff-api/commands", user="operator", query=query)[1]
         cursor = first["next_cursor"]
         raw = base64.urlsafe_b64decode(cursor)
-        self.assertEqual(len(raw), 1052)
-        for sentinel in (b"PRIVATE", b"WFIDX", b"SK", b"demo-device"):
+        self.assertEqual(len(raw), 12 + 1024 + 16)  # Nonce, padded ciphertext and GCM tag.
+        self.assertEqual(raw[:12], b"\xa5" * 12)
+        scope = {"policy": "staff-workflow-reads-v1", "issuer": ISSUER, "subject": "sub-operator",
+                 "role": "Operator", "account_version": 1, "kind": "command", "query": {"device_id": "demo-device"}}
+        aad = json.dumps(scope, sort_keys=True, separators=(",", ":")).encode()
+        plaintext = AESGCM(bytes(range(32))).decrypt(raw[:12], raw[12:], aad)
+        self.assertEqual(len(plaintext), 1024)
+        payload_length = int.from_bytes(plaintext[:2], "big")
+        self.assertTrue(1 <= payload_length <= 1022)
+        payload = plaintext[2:2 + payload_length]
+        private_key = {"PK": "WFIDX#command#device_id#demo-device", "SK": app.timestamp(NOW) + "#PRIVATE-CARD"}
+        self.assertEqual(json.loads(payload), {"key": private_key, "expires": int(NOW.timestamp()) + 900})
+        for sentinel in (b"PRIVATE-CARD", private_key["PK"].encode(), private_key["SK"].encode(), payload):
             self.assertNotIn(sentinel, raw)
         self.assertEqual(self.request("GET", "/staff-api/commands", user="operator", query={**query, "cursor": cursor})[0], 200)
         self.assertEqual(self.request("GET", "/staff-api/commands", user="operator", query={**query, "cursor": cursor, "limit": "2"})[0], 200)
