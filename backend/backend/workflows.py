@@ -17,6 +17,8 @@ PROFILE_REQUIRED = PROFILE_FIELDS - {"collection", "image_media_id"}
 STATUS_FIELDS = {"status_id", "device_id", "recorded_at", "source", "temperature_c", "brightness_percent", "occupied", "distance_cm", "lighting_mode", "lighting_output", "latch", "local_control"}
 COMMAND_SECONDS = 300
 STALE_SECONDS = 120
+MEGA_EPAPER_DEVICE_ID = "reshow-mega-01"
+MEGA_EPAPER_TEXT_LIMIT = 180
 
 
 def fields(api, data, required, optional=()):
@@ -435,7 +437,18 @@ def create_command(api, data):
                 raise api.APIError(409, "assignment_required", "Confirm this exhibit's assignment before requesting a label update.")
             draft = store.get(api, "label-draft", exhibit)
             require_version(api, draft, payload["draft_version"])
-            payload.update(content=draft["data"]["content"], assignment_command_id=case["data"]["assignment_command_id"])
+            content = draft["data"]["content"]
+            if case["data"]["device_id"] == MEGA_EPAPER_DEVICE_ID:
+                parts = [content["title"], content["description"]]
+                if content["collection"]:
+                    parts.insert(1, content["collection"])
+                rendered = " | ".join(parts)
+                if (content["image_media_id"] is not None or len(rendered) > MEGA_EPAPER_TEXT_LIMIT
+                        or not re.fullmatch(r"[ -~]+", rendered)):
+                    raise api.APIError(400, "unsupported_label_content",
+                                       "This e-paper display accepts up to 180 printable ASCII characters "
+                                       "including separators, with no line breaks or image. Edit the draft and try again.")
+            payload.update(content=content, assignment_command_id=case["data"]["assignment_command_id"])
     elif kind == "card":
         staff = store.get(api, "staff", payload["staff_id"])
         if staff["data"]["card_enabled"] and staff["data"].get("card_device_id") != case["data"]["device_id"]:
