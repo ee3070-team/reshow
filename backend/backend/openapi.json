@@ -11112,6 +11112,114 @@
           }
         ]
       }
+    },
+    "/staff-api/accounts/{staff_id}/setup-link": {
+      "post": {
+        "summary": "Generate an initial password setup link for a pending account (Administrator)",
+        "operationId": "generateStaffSetupLink",
+        "tags": [
+          "Website accounts"
+        ],
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "setup_url",
+                    "item"
+                  ],
+                  "properties": {
+                    "setup_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "item": {
+                      "$ref": "#/components/schemas/WebsiteAccount"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current account/role does not permit this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "staff_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          }
+        ],
+        "description": "Returns a new temporary credential in the URL fragment, once and with no-store. Replaces prior temporary credentials. Only invited, enabled FORCE_CHANGE_PASSWORD identities qualify. Never log or persist this response."
+      }
     }
   },
   "components": {
@@ -18312,6 +18420,9 @@
               "type": "string",
               "format": "uri"
             }
+          },
+          "setup_client_id": {
+            "type": "string"
           }
         },
         "required": [

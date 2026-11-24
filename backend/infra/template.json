@@ -181,6 +181,7 @@
                   "Effect": "Allow",
                   "Action": [
                     "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminSetUserPassword",
                     "cognito-idp:AdminGetUser",
                     "cognito-idp:AdminDisableUser",
                     "cognito-idp:AdminEnableUser",
@@ -250,6 +251,9 @@
             },
             "COGNITO_CLIENT_ID": {
               "Ref": "StaffBrowserClient"
+            },
+            "COGNITO_SETUP_CLIENT_ID": {
+              "Ref": "StaffSetupClient"
             },
             "COGNITO_ISSUER": {
               "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${StaffUserPool}"
@@ -669,6 +673,22 @@
         "ExplicitAuthFlows": [
           "ALLOW_REFRESH_TOKEN_AUTH"
         ],
+        "AuthSessionValidity": 3
+      }
+    },
+    "StaffSetupClient": {
+      "Type": "AWS::Cognito::UserPoolClient",
+      "Properties": {
+        "UserPoolId": { "Ref": "StaffUserPool" },
+        "ClientName": "ReShow initial password setup",
+        "GenerateSecret": false,
+        "ExplicitAuthFlows": ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+        "PreventUserExistenceErrors": "ENABLED",
+        "EnableTokenRevocation": true,
+        "AccessTokenValidity": 5,
+        "IdTokenValidity": 5,
+        "RefreshTokenValidity": 1,
+        "TokenValidityUnits": { "AccessToken": "minutes", "IdToken": "minutes", "RefreshToken": "days" },
         "AuthSessionValidity": 3
       }
     },

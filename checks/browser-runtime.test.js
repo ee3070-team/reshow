@@ -32,12 +32,12 @@ test("Chromium loads home and callback with one versioned API module instance", 
   const server = createServer(async (request, response) => {
     try {
       const path = decodeURIComponent(new URL(request.url, "http://localhost").pathname).slice(1) || "index.html";
-      if (!/^(?:index\.html|auth\/callback\.html|(?:js|css|assets)\/[A-Za-z0-9_./-]+)$/.test(path)
+      if (!/^(?:index\.html|auth\/(?:callback|setup)\.html|(?:js|css|assets)\/[A-Za-z0-9_./-]+)$/.test(path)
           || path.split("/").includes("..")) throw new Error("Not a public runtime path");
       const file = await realpath(resolve(root, path));
       if (!file.startsWith(root + sep)) throw new Error("Path escapes the runtime root");
       let body = await readFile(file);
-      if (path.endsWith(".html")) {
+      if (path.endsWith(".html") && path !== "auth/setup.html") {
         const html = body.toString("utf8");
         const imports = JSON.parse(html.match(/<script type="importmap">([\s\S]*?)<\/script>/)[1]).imports;
         // Let the browser itself resolve ../ and import-map keys, then compare
@@ -73,6 +73,14 @@ test("Chromium loads home and callback with one versioned API module instance", 
         assert.match(stdout, /id="live-login-error"[^>]*>[^<]*(?:invalid|expired)/, "Callback failure is visible in the Live form");
       }
     }
+    const { stdout: setup } = await run(browser, [
+      "--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
+      "--disable-background-networking", "--disable-component-update", "--disable-sync",
+      `--user-data-dir=${join(profile, "setup")}`, "--virtual-time-budget=1000",
+      "--dump-dom", origin + "/auth/setup.html",
+    ], { timeout: 25000, maxBuffer: 1024 * 1024, windowsHide: true });
+    assert.match(setup, /This setup link is incomplete/, "Setup module runs under its actual Content Security Policy");
+    assert.match(setup, /id="setup-form" hidden/, "Invalid links cannot submit passwords");
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://urauw4ckw1.execute-api.us-east-1.amazonaws.com https://cognito-idp.us-east-1.amazonaws.com; base-uri 'none'; form-action 'none'">
+  <title>Set your password · ReShow</title>
+  <link rel="stylesheet" href="../css/password-setup.css">
+  <script type="module" src="../js/password-setup.js"></script>
+</head>
+<body>
+  <main>
+    <p class="brand">ReShow · Staff access</p>
+    <h1>Set your password</h1>
+    <p>Choose a password for your new staff account. Use at least 12 characters, including uppercase and lowercase letters, a number and a symbol.</p>
+    <form id="setup-form">
+      <label>New password<input id="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+      <label>Confirm password<input id="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+      <button type="submit">Set password</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <a href="/" id="sign-in" hidden>Return to ReShow and choose Live sign in</a>
+  </main>
+</body>
+</html>

@@ -523,6 +523,12 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     const result = await request(`${PREFIX}/accounts/invitations`, { method: "POST", body: { invitation_id: createId(key, "invite"), staff_id: staffId, role: role(accountRole), delivery: "suppress" } });
     pendingCreates.delete(key); void emit(); return { ...accountRecord(result.item), note: result.note || "Account prepared without sending an invitation email." };
   }
+  async function generateSetupLink(staffId, accountVersion) {
+    requirePermission("accounts");
+    return request(`${PREFIX}/accounts/${encode(identifier(staffId))}/setup-link`, {
+      method: "POST", headers: { "If-Match": version(accountVersion) }, body: {},
+    });
+  }
   function filtersFor(raw, showcaseId) {
     return { showcaseId: showcaseId || selectedShowcaseId || "", start: raw.date_selection?.start_date || date(raw.start), end: raw.date_selection?.end_date || endDate(raw.end), exhibitId: raw.filter?.exhibit_id || raw.exhibit_id || "" };
   }
@@ -683,7 +689,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     getLabel, saveLabelDraft, sendLabel, setLighting: (mode) => { if (!["Auto", "On", "Off"].includes(mode)) return Promise.reject(issue("Choose Auto, On or Off lighting.")); return queue("lighting", { mode }); },
     scanAvailability, scanExhibitTag: (options) => waitForScan("exhibit", options), scanStaffCard: (options) => waitForScan("staff_card", options),
     listStaff, saveStaff, registerCard, setCardAccess, getAccessLog, listAccounts, updateAccount,
-    saveAccount: (profile) => updateAccount(profile.staffId || profile.id, profile), prepareAccountInvitation,
+    saveAccount: (profile) => updateAccount(profile.staffId || profile.id, profile), prepareAccountInvitation, generateSetupLink,
     getActivity, generateReport, saveReport, listReports, getReport,
     selectShowcase: async (id) => {
       const nextId = identifier(id);

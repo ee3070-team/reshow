@@ -48,7 +48,7 @@ def preflight_context(folder):
             parts = PurePosixPath(name).parts
             if not parts or any(part in ('.', '..') or part.startswith('.') for part in parts):
                 raise ReviewResponseError('preflight runtime path is invalid')
-            if name not in ('index.html', 'auth/callback.html', 'release.json') and parts[0] not in ('css', 'js', 'assets'):
+            if name not in ('index.html', 'auth/callback.html', 'auth/setup.html', 'release.json') and parts[0] not in ('css', 'js', 'assets'):
                 raise ReviewResponseError('preflight runtime path is outside public roots')
             if type(size) is not int or size < 0:
                 raise ReviewResponseError('preflight runtime size is invalid')

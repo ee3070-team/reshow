@@ -55,7 +55,7 @@ export async function render(container, ctx) {
       .toUpperCase();
   container.innerHTML = `<div class="staff-page stack">
     <div class="staff-status"><span class="staff-connection"></span><span>${live ? esc(snapshot.showcase.name || "Selected showcase") : "Case 01"}</span><span class="muted">Staff cards and exhibit tags are separate</span></div>
-    <div class="notice info"><div>${live ? "<strong>Website accounts and physical cards</strong><p>Staff directory roles describe staff duties. Website permissions are managed separately below. Invitations are prepared without sending email; physical card access remains separate.</p>" : "<strong>Demo website login</strong><p>Select a staff email to explore its local demo role without a password. Adding or editing a staff profile updates the available demo accounts. Physical access cards are separate.</p>"}</div></div>
+    <div class="notice info"><div>${live ? "<strong>Website accounts and physical cards</strong><p>Staff directory roles describe staff duties. Website permissions are managed separately below. Prepare a website account below, then generate a private setup link so the staff member can choose their password. Physical card access remains separate.</p>" : "<strong>Demo website login</strong><p>Select a staff email to explore its local demo role without a password. Adding or editing a staff profile updates the available demo accounts. Physical access cards are separate.</p>"}</div></div>
     <div class="staff-columns">
       <section class="card staff-directory"><div class="card-head"><h2>${icon("users")} Staff directory</h2><div class="actions"><span class="muted staff-count"></span><button class="button primary small" data-add>${icon("plus")} Add staff</button></div></div>
         <div class="staff-filters"><label class="staff-search">${icon("search")}<input type="search" aria-label="Search staff or card" placeholder="Search staff or card…"></label><select aria-label="Filter staff"><option value="">All staff</option><option>Administrator</option><option>Operator</option><option>Viewer</option><option value="enabled">Card enabled</option><option value="revoked">Card revoked</option><option value="unassigned">No card assigned</option></select></div>
@@ -147,6 +147,38 @@ export async function render(container, ctx) {
       return `<tr><td>${esc(person.name)}</td><td>${esc(account?.role || "No account")}</td><td>${esc(account?.status || "Not provisioned")}</td><td><button class="button small" data-account="${esc(person.id)}">${account ? "Manage account" : "Prepare invitation"}</button></td></tr>`;
     }).join("")}</tbody></table></div>` : '<div class="empty">Add a directory profile before preparing a website account.</div>';
     $("[data-accounts]").querySelectorAll("[data-account]").forEach(button => button.addEventListener("click", () => openAccount(staff.find(person => person.id === button.dataset.account))));
+    $("[data-accounts]").querySelectorAll("[data-account]").forEach(button => {
+      const account = accounts.find(item => (item.staffId || item.id) === button.dataset.account);
+      if (account?.status !== "invited") return;
+      const setup = document.createElement("button");
+      setup.className = "button small";
+      setup.textContent = "Generate setup link";
+      setup.onclick = async () => {
+        if (!(await confirmAction("Generate password setup link?", "This replaces the previous setup link and temporary password from the invitation email. Share the new link privately with this staff member. It expires after 7 days or when password setup is completed.", "Generate link"))) return;
+        setup.disabled = true;
+        try {
+          const result = await api.generateSetupLink(account.id, account.version);
+          if (disposed) return;
+          showDialog("Staff password setup link", '<p>Copy this link and share it privately with the staff member. Anyone with it can choose their initial password. It is shown only here; generate another if it is lost.</p><label class="field">Setup link<input data-setup-url readonly autocomplete="off"></label><p data-copy-status role="status"></p><div class="actions"><button class="button primary" data-copy>Copy setup link</button><button class="button" data-close>Close</button></div>', dialog => {
+            activeProfile = { dialog, forceClose: dialog.close.bind(dialog) };
+            const field = dialog.querySelector("[data-setup-url]");
+            field.value = result.setup_url;
+            dialog.querySelector("[data-copy]").onclick = async () => {
+              try { await navigator.clipboard.writeText(field.value); dialog.querySelector("[data-copy-status]").textContent = "Link copied."; }
+              catch { field.select(); dialog.querySelector("[data-copy-status]").textContent = "Select and copy the link manually."; }
+            };
+            dialog.querySelector("[data-close]").onclick = () => dialog.close();
+            dialog.addEventListener("close", () => {
+              field.value = ""; result.setup_url = "";
+              if (activeProfile?.dialog === dialog) activeProfile = null;
+            }, { once: true });
+          });
+          await reload();
+        } catch (error) { toast(message(error)); await reload(); }
+        finally { if (setup.isConnected) setup.disabled = false; }
+      };
+      button.after(setup);
+    });
   }
   function openAccount(person) {
     const account = accounts.find(item => (item.staffId || item.id) === person.id);

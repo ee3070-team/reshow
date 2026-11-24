@@ -6,6 +6,7 @@ await rm('dist', { recursive: true, force: true });
 await mkdir('dist');
 await mkdir('dist/auth');
 await cp('auth/callback.html', 'dist/auth/callback.html');
+await cp('auth/setup.html', 'dist/auth/setup.html');
 for (const path of ['index.html', 'css', 'js', 'assets']) {
   await cp(path, `dist/${path}`, { recursive: true, dereference: false });
 }

@@ -35,3 +35,33 @@ exercise authenticated database operations. Infrastructure changes remain in
 the separate CloudFormation workflow. If a later infrastructure release also
 changes the Lambda package, use the same approved source revision.
 
+### Initial password setup links
+
+In Live mode, an Administrator can use **Staff access → Website accounts →
+Prepare invitation**, then **Generate setup link** on the pending account.
+The same action works after an invitation email has been sent. Copy and privately
+share the link; the staff member chooses a password on `/auth/setup.html`, then
+returns to **Live → Continue to live sign in** using their email and new password.
+
+Generating a link replaces the previous temporary password, including the one
+in an earlier invitation email. The credential expires under the pool's seven-day
+temporary-password policy and stops working after password setup. Resending an
+invitation also replaces that temporary credential. Already-started Cognito
+challenge sessions remain subject to the provider's session lifetime.
+
+`POST /staff-api/accounts/{staff_id}/setup-link` requires Administrator access,
+the current `If-Match` account version and an empty JSON body. It accepts only
+invited accounts whose enabled provider identity still requires an initial
+password. Its no-store response contains the link once. The secret is in the URL
+fragment, is removed from browser history on page load, and is not saved to
+application records, audit entries, browser storage or server access URLs. Anyone
+holding the link can complete setup. Regenerate a lost link rather than retrieving
+an old one. A timeout is ambiguous; reload the account before generating another.
+
+Deploy `infra/template.json` as well as the backend and static frontend: it adds
+the restricted pool IAM action and a separate public setup client. Setup-client
+tokens cannot authorize staff API requests; normal website sign-in still uses
+the existing PKCE client and account permissions. This feature has local automated
+coverage; production invitation delivery and password setup require live acceptance
+after deployment. No live account is modified by the local tests.
+
