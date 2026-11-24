@@ -3,7 +3,7 @@
   "info": {
     "title": "ReShow EE3070 Backend API",
     "version": "0.4.1",
-    "description": "ReShow university backend v0.4.1. Staff calls use /staff-api with Cognito access tokens and current account permissions. Operators can read exhibit scans; Operators and Viewers receive an allowlisted operational activity feed and non-card command state. Staff-card scans, card commands and sensitive staff activity remain Administrator-only. The shared /api token is restricted to configured synthetic producer data. Device-scoped hardware tokens authorize only real status and reading uploads for their registered device. Historical exhibit attribution, current-time cutoffs, explicit device recovery and immutable report captures are preserved. Hardware firmware and integration of the six demonstration data screens remain separate."
+    "description": "ReShow university backend v0.4.1. Staff calls use /staff-api with Cognito access tokens and current account permissions. Operators can read exhibit scans; Operators and Viewers receive an allowlisted operational activity feed and non-card command state. Staff-card scans, card commands and sensitive staff activity remain Administrator-only. The shared /api token is restricted to configured synthetic producer data. Device-scoped hardware tokens authorize real telemetry uploads and scoped assignment and label command execution for their registered device. Hardware tokens also authorize device-bound RFID event ingestion. Historical exhibit attribution, current-time cutoffs, explicit device recovery and immutable report captures are preserved. Hardware firmware and integration of the six demonstration data screens remain separate."
   },
   "servers": [
     {
@@ -4144,7 +4144,7 @@
         ],
         "operationId": "listCommands",
         "summary": "List command requests",
-        "description": "Bounded query pages. Filters apply to each page; an empty page can still return next_cursor. Producer polling: follow every page, select device_id and pending/recovery_pending states, then strongly GET the exact command immediately before serialized execution. Execute only device-fence-v1, matching device, pending status, generation above the durable local fence and current time before execute_before. Never execute legacy commands without protocol/generation. A GET check alone cannot eliminate a network race; execution and recovery fencing must use one serialized durable producer executor per lock_id. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens require device_id matching their registered device and type=assignment or type=label.",
+        "description": "Bounded query pages. Filters apply to each page; an empty page can still return next_cursor. Producer polling: follow every page, select device_id and pending/recovery_pending states, then strongly GET the exact command immediately before serialized execution. Execute only device-fence-v1, matching device, pending status, generation above the durable local fence and current time before execute_before. Never execute legacy commands without protocol/generation. A GET check alone cannot eliminate a network race; execution and recovery fencing must use one serialized durable producer executor per lock_id. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens require their registered device_id, type=assignment or label, and status=pending or recovery_pending. Hardware continuation cursors are opaque and bound to the device and filters.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -4352,8 +4352,8 @@
           "Device workflow"
         ],
         "operationId": "getCommand",
-        "summary": "Read one bound demo-device command immediately before execution",
-        "description": "Demo producer exact strongly consistent command read. The command must be bound to a configured demo device; other devices return 403. Re-read and honor status, protocol, resource_generation and execute_before immediately before serialized execution. No shared-token command creation or website management permission is granted. Exact reads accept no query parameters. Hardware tokens can access only assignment and label commands for their registered device.",
+        "summary": "Read one bound producer command immediately before execution",
+        "description": "Demo producer exact strongly consistent command read. The command must be bound to a configured demo device; other devices return 403. Re-read and honor status, protocol, resource_generation and execute_before immediately before serialized execution. No shared-token command creation or website management permission is granted. Exact reads accept no query parameters. Hardware tokens receive full execution metadata for their own assignment or label. Missing, foreign or other command types return 404 for hardware callers.",
         "responses": {
           "401": {
             "description": "Missing/invalid/expired staff access token or application session expired.",
@@ -4421,7 +4421,7 @@
         ],
         "operationId": "acknowledgeCommand",
         "summary": "Supply producer acknowledgement",
-        "description": "A separate device/demo producer supplies this receipt; the backend never auto-acknowledges. Correct device binding required. Successful receipt applies its frozen payload, failed receipt preserves confirmed state. Replayed identical acknowledgement returns duplicate; changed/reused ID returns 409. An expired execution window returns 409 command_expired without releasing the lock. Recovery freezes normal acknowledgements; late old results cannot overwrite a replacement. Same receipt retries remain idempotent after termination. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens can access only assignment and label commands for their registered device.",
+        "description": "A separate device/demo producer supplies this receipt; the backend never auto-acknowledges. Correct device binding required. Successful receipt applies its frozen payload, failed receipt preserves confirmed state. Replayed identical acknowledgement returns duplicate; changed/reused ID returns 409. An expired execution window returns 409 command_expired without releasing the lock. Recovery freezes normal acknowledgements; late old results cannot overwrite a replacement. Same receipt retries remain idempotent after termination. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware submissions require an owned assignment or label command and source=device with the registered device_id. Report success only following correlated Mega completion for the requested action.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -5220,7 +5220,7 @@
         ],
         "operationId": "acknowledgeCommandRecovery",
         "summary": "Record a producer durable-fence and reconciliation receipt",
-        "description": "A separate serialized device/demo producer asserts it durably fenced this exact generation and established the old command outcome. Requires exact device/recovery/fence binding and a same-device status observed and uploaded after the recovery request, no more than 120 seconds old. unknown returns 409 and keeps the lock/card reservation. not_applied releases the fenced lock while preserving previous confirmed state. applied reconciles the frozen requested payload with ordinary acknowledgement safeguards, without inventing a normal receipt, display intervals or coverage. For an applied old label whose exhibit assignment changed, preserve last-confirmed label, set state_reconciliation_required/label_reconciliation_required and release its fenced lock so a current label command can restore known state. Other conflicting applied outcomes return recovery_state_conflict and remain locked. Successful recovery status is recovered, with immutable recovery outcome and separate observed_status_id; a new command gets a higher generation. Late normal ACKs cannot apply. Identical recovery receipt retry returns 200; changed receipt ID/payload returns 409. A shared-token receipt is a producer assertion, not proof of physical execution. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware tokens can access only assignment and label commands for their registered device.",
+        "description": "A separate serialized device/demo producer asserts it durably fenced this exact generation and established the old command outcome. Requires exact device/recovery/fence binding and a same-device status observed and uploaded after the recovery request, no more than 120 seconds old. unknown returns 409 and keeps the lock/card reservation. not_applied releases the fenced lock while preserving previous confirmed state. applied reconciles the frozen requested payload with ordinary acknowledgement safeguards, without inventing a normal receipt, display intervals or coverage. For an applied old label whose exhibit assignment changed, preserve last-confirmed label, set state_reconciliation_required/label_reconciliation_required and release its fenced lock so a current label command can restore known state. Other conflicting applied outcomes return recovery_state_conflict and remain locked. Successful recovery status is recovered, with immutable recovery outcome and separate observed_status_id; a new command gets a higher generation. Late normal ACKs cannot apply. Identical recovery receipt retry returns 200; changed receipt ID/payload returns 409. A shared-token receipt is a producer assertion, not proof of physical execution. Demo producers must use their configured device_id; command polling requires device_id and follows pagination. Hardware submissions require an owned assignment or label command and source=device with the registered device_id.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10017,7 +10017,7 @@
         ],
         "operationId": "staff_createCommand",
         "summary": "Request a pending device operation",
-        "description": "Administrator or Operator required; card operations require Administrator. Creates pending request only. One pending operation per relevant target/type is reserved. Only an explicit matching acknowledgement updates confirmed state; wrong-device, stale assignment, locked target, duplicate card or changed-ID conflicts return 409. No physical transport is implemented. New commands include a 300-second execute_before and resource_generation. Known stale contact returns 409 device_offline; unknown contact remains bootstrap-compatible. Expiry never frees target/card reservations. A fresh status uploaded after reconnection allows new requests only when the old lock has already settled or recovered. Audit identity comes from the validated session; omit actor from requests. Human credentials cannot submit device evidence. Operator responses use the projected OperationalCommand schema; card commands remain Administrator-only, including recovery requests. Viewer mutations and all human producer acknowledgements are forbidden.",
+        "description": "Administrator or Operator required; card operations require Administrator. Creates pending request only. One pending operation per relevant target/type is reserved. Only an explicit matching acknowledgement updates confirmed state; wrong-device, stale assignment, locked target, duplicate card or changed-ID conflicts return 409. No physical transport is implemented. New commands include a 300-second execute_before and resource_generation. Known stale contact returns 409 device_offline; unknown contact remains bootstrap-compatible. Expiry never frees target/card reservations. A fresh status uploaded after reconnection allows new requests only when the old lock has already settled or recovered. Audit identity comes from the validated session; omit actor from requests. Human credentials cannot submit device evidence. Operator responses use the projected OperationalCommand schema; card commands remain Administrator-only, including recovery requests. Viewer mutations and all human producer acknowledgements are forbidden. Labels for reshow-mega-01 must fit within 180 printable ASCII characters including separators. Line breaks and images are unsupported. Mega profile commands require nonnegative temperatures representable in centi-degrees and a brightness interval containing an ADC value on the 10-bit scale. Unresolved profile and label commands cannot overlap on this showcase.",
         "responses": {
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11568,7 +11568,7 @@
       "hardwareProducerToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Privately provisioned device-bound bearer token. Producer writes require source=device and the registered device_id. Hardware tokens can read and acknowledge their own assignment and label commands."
+        "description": "Privately provisioned token for the registered device. Telemetry and assignment or label receipts require source=device and the registered device_id. Command reads are scoped to the same device and these command types. Use only in the device or its producer process."
       },
       "staffAccessToken": {
         "type": "http",
@@ -15558,13 +15558,29 @@
           "confirmed_profile_version": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 999999999,
+            "maximum": 2147483647,
             "nullable": true,
             "description": "Captured assignment profile.version only after producer acknowledgement. PATCH of current profile does not apply new settings; send a new assignment command."
           },
+          "confirmed_profile": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": false,
+            "description": "Exact showcase reads derive these limits from the last confirmed assignment command snapshot. Null when no snapshot is available.",
+            "required": ["exhibit_id", "version", "temperature_min_c", "temperature_max_c", "brightness_min_percent", "brightness_max_percent", "warning_seconds"],
+            "properties": {
+              "exhibit_id": {"type": "string"},
+              "version": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+              "temperature_min_c": {"type": "number", "minimum": -40, "maximum": 125},
+              "temperature_max_c": {"type": "number", "minimum": -40, "maximum": 125},
+              "brightness_min_percent": {"type": "number", "minimum": 0, "maximum": 100},
+              "brightness_max_percent": {"type": "number", "minimum": 0, "maximum": 100},
+              "warning_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+            }
+          },
           "label_reconciliation_required": {
             "type": "boolean",
-            "description": "True after a fenced old label was applied after its exhibit assignment changed. confirmed_label remains last-confirmed history; request and acknowledge a current label to clear this flag."
+            "description": "True when an assignment change leaves a previous exhibit label on the physical display, or when recovery establishes that a stale label was applied. confirmed_label remains last-confirmed history; request and acknowledge a current label to clear this flag."
           }
         },
         "required": [
@@ -15862,6 +15878,12 @@
             "maxLength": 64,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
             "description": "Case-sensitive identifier. The caller supplies stable IDs for safe retries."
+          },
+          "profile_version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647,
+            "description": "Optional expected saved version. A mismatch returns 409. Omit for legacy clients that request the latest profile."
           }
         },
         "required": [

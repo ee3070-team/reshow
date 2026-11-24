@@ -52,7 +52,8 @@ exhibit assignment acknowledged by its device before a label can be sent.
   the versioned label draft, queues the label command, and closes the edit
   in one transaction. Cancel closes the edit without changing the label.
 - The assigned device polls `GET /api/commands` with its registered
-  `device_id` and `type=assignment` or `type=label`, and follows pagination.
+  `device_id`, `type=assignment` or `type=label`, and `status=pending` or
+  `status=recovery_pending`, and follows pagination.
   Read the exact command before execution and honor its generation and expiry.
   For label commands, post the normal acknowledgement for that command only
   when the Mega reports the corresponding refresh outcome. Retain the original

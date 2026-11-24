@@ -21,8 +21,6 @@ HARDWARE_TOKEN_PREFIX = "rshw_hw_v1."
 HARDWARE_TOKEN = re.compile(re.escape(HARDWARE_TOKEN_PREFIX) + r"[A-Za-z0-9_-]{43}")
 HARDWARE_CREDENTIAL_KIND = "hardware-credential"
 HARDWARE_POST_PATHS = ("/api/device-status", "/api/readings", "/api/rfid-events", "/api/tag-scans", "/api/access-attempts")
-
-
 HARDWARE_COMMAND_TYPES = ("assignment", "label")
 
 
@@ -135,19 +133,22 @@ def authorize_hardware(api, token, method, path, query):
     device_id = credential.get("device_id") if isinstance(credential, dict) and credential.get("active") is True else None
     if not isinstance(device_id, str) or not api.IDENTIFIER.fullmatch(device_id) or demo_device(device_id):
         raise api.APIError(401, "unauthorized", "A valid Bearer API token is required.")
+    person = {"kind": "hardware", "device_id": device_id}
+    if method == "POST" and path in HARDWARE_POST_PATHS:
+        return person
     if method == "GET" and path == "/api/commands":
-        if query.get("device_id") != device_id or query.get("type") not in HARDWARE_COMMAND_TYPES:
-            raise api.APIError(403, "forbidden", "Request assignment or label commands for the registered device.")
-        return {"kind": "hardware", "device_id": device_id}
-    command_path = re.fullmatch(r"/api/commands/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(/acknowledgements|/recovery-acknowledgements)?", path)
-    if command_path and method == ("POST" if command_path[2] else "GET"):
-        command = store.get(api, "command", command_path[1], required=False)
-        if command is None or command["data"]["device_id"] != device_id or command["data"]["type"] not in HARDWARE_COMMAND_TYPES:
-            raise api.APIError(404, "not_found", "Command was not found for this device.")
-        return {"kind": "hardware", "device_id": device_id}
-    if method != "POST" or path not in HARDWARE_POST_PATHS:
-        raise api.APIError(403, "forbidden", "This hardware credential cannot access that operation.")
-    return {"kind": "hardware", "device_id": device_id}
+        if (query.get("device_id") == device_id and query.get("type") in HARDWARE_COMMAND_TYPES
+                and query.get("status") in ("pending", "recovery_pending")):
+            return person
+        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending assignments or labels for the registered device_id.")
+    suffix = {"GET": "", "POST": r"/(?:acknowledgements|recovery-acknowledgements)"}.get(method)
+    match = re.fullmatch(r"/api/commands/([A-Za-z0-9][A-Za-z0-9_-]{0,63})" + suffix, path) if suffix is not None else None
+    if match:
+        command = store.get(api, "command", match[1], required=False)
+        if command and command["data"].get("device_id") == device_id and command["data"].get("type") in HARDWARE_COMMAND_TYPES:
+            return person
+        raise api.APIError(404, "not_found", "Command not found.")
+    raise api.APIError(403, "forbidden", "This hardware credential cannot access that operation.")
 
 
 def authorize_human(api, person, method, path, query):
@@ -258,6 +259,7 @@ def demo_exhibit(exhibit_id):
 
 def filter_response(api, result):
     person = principal.get()
+    # Hardware routes enforce device and command scope before reaching this point.
     if not person or person["kind"] in ("legacy", "hardware") or result.get("statusCode", 500) >= 400:
         return result
     content_type = result.get("headers", {}).get("content-type", "")
