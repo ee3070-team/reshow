@@ -67,7 +67,7 @@ def run(admin, producer, run_id, operator=None, viewer=None, finish_logout=False
     def status(identity):
         return machine("/device-status", {"status_id": prefix + "-" + identity, "device_id": ids["device"], "recorded_at": timestamp(),
             "source": "demo", "temperature_c": None, "brightness_percent": None, "occupied": None, "distance_cm": None,
-            "lighting_mode": None, "lighting_output": None, "latch": None, "local_control": None})
+            "lighting_mode": None, "lighting_output": None, "latch": None, "local_control": None, "remote_lighting": True})
 
     user = human("GET", "/session")["user"]
     check("Real gateway-authorized Administrator session", user["role"] == "Administrator")
@@ -153,6 +153,7 @@ def run(admin, producer, run_id, operator=None, viewer=None, finish_logout=False
     versioned("/label-drafts/" + ids["a"], {"title": "Second draft", "collection": "Synthetic", "description": "Unsent revision", "image_media_id": None}, draft["version"], "PUT")
     ack(label, "label-ack")
     check("Sending freezes draft version while later draft edits remain unconfirmed", get("/showcases/" + ids["case"])["confirmed_label"]["draft_version"] == 1)
+    status("lighting-ready")
     lighting = command("light-fail", "lighting", {"mode": "On"})
     ack(lighting, "light-fail-ack", False)
     check("Failed producer operation preserves previous confirmed lighting", get("/showcases/" + ids["case"])["lighting_mode"] is None)

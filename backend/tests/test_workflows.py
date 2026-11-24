@@ -162,9 +162,9 @@ class WorkflowTests(unittest.TestCase):
                 "recorded_at": at or app.timestamp(NOW + timedelta(seconds=1)), "source": "demo", "success": success}
         return self.post("commands/" + command_id + "/acknowledgements", data, expected)
 
-    def observe(self, status_id="status-current", device="device-1", at=None):
+    def observe(self, status_id="status-current", device="device-1", at=None, remote_lighting=None):
         data = {key: None for key in workflows.STATUS_FIELDS}
-        data.update(status_id=status_id, device_id=device, recorded_at=at or app.timestamp(app.now_utc()), source="demo")
+        data.update(status_id=status_id, device_id=device, recorded_at=at or app.timestamp(app.now_utc()), source="demo", remote_lighting=remote_lighting)
         return self.post("device-status", data)
 
     def recover(self, command_id, recovery_id="recovery-1", expected=201):
@@ -307,6 +307,48 @@ class WorkflowTests(unittest.TestCase):
         self.post("device-status", {**data, "status_id": "invalid-local", "local_control": "active"}, 400)
         self.assertFalse(any(key[0].startswith("COVERAGE#") for key in self.table.items))
 
+    def test_lighting_requires_explicit_capability_and_legacy_status_retries_still_match(self):
+        self.create_case()
+        request = {"command_id": "lighting-ready-test", "showcase_id": "case-1",
+                   "type": "lighting", "payload": {"mode": "On"}}
+        self.assertEqual(self.post("commands", request, 409)["error"]["code"], "lighting_unavailable")
+        legacy = {key: None for key in workflows.STATUS_FIELDS}
+        legacy.update(status_id="legacy-status", device_id="device-1", recorded_at=app.timestamp(NOW), source="demo")
+        first = self.post("device-status", legacy)["item"]
+        self.assertNotIn("remote_lighting", first)
+        self.assertEqual(self.post("device-status", legacy, 200)["item"], first)
+        self.assertEqual(self.post("commands", request, 409)["error"]["code"], "lighting_unavailable")
+        for index, capability in enumerate((None, False)):
+            with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=index + 1)):
+                self.observe("capability-" + str(index), remote_lighting=capability)
+                self.assertEqual(self.post("commands", request, 409)["error"]["code"], "lighting_unavailable")
+        for invalid in ("true", 1, [], {}):
+            self.post("device-status", {**legacy, "status_id": "invalid-capability", "remote_lighting": invalid}, 400)
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=3)):
+            self.observe("ready-status", remote_lighting=True)
+            self.assertTrue(self.request("GET", "/api/showcases/case-1")[1]["item"]["device_status"]["remote_lighting"])
+            self.post("commands", request)
+            self.ack(request["command_id"], at=app.timestamp(app.now_utc()))
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=4)):
+            self.observe("unready-status", remote_lighting=False)
+            self.post("commands", request, 200)  # Retry keeps its identity even after capability loss.
+            self.assertEqual(self.post("commands", {**request, "command_id": "new-lighting"}, 409)["error"]["code"], "lighting_unavailable")
+
+    def test_lighting_capability_uses_latest_observation_and_cannot_be_refreshed_by_old_upload(self):
+        self.create_case()
+        self.observe("ready-status", remote_lighting=True)
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=121)):
+            self.observe("buffered-ready", at=app.timestamp(NOW - timedelta(seconds=1)), remote_lighting=True)
+            view = self.request("GET", "/api/showcases/case-1")[1]["item"]
+            self.assertFalse(view["freshness"]["contact_stale"])
+            self.assertTrue(view["freshness"]["measurements_stale"])
+            rejected = self.command("stale-capability", "lighting", {"mode": "On"}, expected=409)
+            self.assertEqual(rejected["error"]["code"], "lighting_unavailable")
+            self.observe("unready-status", remote_lighting=False)
+            self.observe("late-buffered-ready", at=app.timestamp(NOW + timedelta(seconds=120)), remote_lighting=True)
+            rejected = self.command("not-ready", "lighting", {"mode": "On"}, expected=409)
+            self.assertEqual(rejected["error"]["code"], "lighting_unavailable")
+
     def test_profile_percent_validation_and_ready_media_reference(self):
         self.post("exhibit-profiles", {**self.profile, "brightness_min_percent": True}, 400)
         self.post("exhibit-profiles", {**self.profile, "brightness_max_percent": 101}, 400)
@@ -341,6 +383,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_command_retry_after_ack_is_idempotent_and_changed_payload_conflicts(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         self.command("light-1", "lighting", {"mode": "On"})
         self.ack("light-1")
         same = self.command("light-1", "lighting", {"mode": "On"}, expected=200)
@@ -351,6 +394,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_stale_ack_cannot_roll_confirmed_lighting_back(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         self.command("light-1", "lighting", {"mode": "On"})
         self.ack("light-1", at=app.timestamp(NOW + timedelta(seconds=10)))
         self.command("light-2", "lighting", {"mode": "Off"})
@@ -516,11 +560,12 @@ class WorkflowTests(unittest.TestCase):
 
     def test_known_stale_contact_blocks_new_commands_but_not_identical_retry(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         initial = self.command("bootstrap", "lighting", {"mode": "On"})["item"]
         self.assertEqual(initial["protocol"], "device-fence-v1")
         self.assertEqual(initial["resource_generation"], 1)
         self.assertEqual(initial["execute_before"], app.timestamp(NOW + timedelta(seconds=300)))
-        self.observe()
+        self.observe(remote_lighting=True)
         self.ack("bootstrap")
         with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=121)):
             before = copy.deepcopy(self.table.items)
@@ -528,12 +573,13 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(rejected["error"]["code"], "device_offline")
             self.assertEqual(self.table.items, before)
             self.command("bootstrap", "lighting", {"mode": "On"}, expected=200)
-            self.observe("reconnected")
+            self.observe("reconnected", remote_lighting=True)
             new = self.command("online-again", "lighting", {"mode": "Off"})
             self.assertGreater(new["item"]["resource_generation"], initial["resource_generation"])
 
     def test_expiry_keeps_lock_fence_recovery_releases_it_and_late_ack_cannot_apply(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         original = self.command("abandoned", "lighting", {"mode": "On"})["item"]
         with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=300)):
             before = copy.deepcopy(self.table.items)
@@ -545,7 +591,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(recovery["status"], "recovery_pending")
             self.assertGreater(recovery["recovery"]["fence_generation"], original["resource_generation"])
             self.command("still-blocked", "lighting", {"mode": "Off"}, expected=409)
-            self.observe("recovery-status")
+            self.observe("recovery-status", remote_lighting=True)
             receipt = self.recovery_receipt("abandoned")
             for change, code in (({"outcome": "unknown"}, "recovery_outcome_unknown"),
                                  ({"device_id": "wrong-device"}, "device_mismatch"),
@@ -637,9 +683,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_recovery_transaction_conflict_does_not_release_lock_or_write_receipt(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         self.command("recover-race", "lighting", {"mode": "On"})
         self.recover("recover-race")
-        self.observe("recovery-status")
+        self.observe("recovery-status", remote_lighting=True)
         self.table.fail_transaction = True
         before = copy.deepcopy(self.table.items)
         self.post("commands/recover-race/recovery-acknowledgements", self.recovery_receipt("recover-race"), 409)
@@ -648,6 +695,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_legacy_pending_command_is_not_executable_after_bounded_window(self):
         self.create_case()
+        self.observe("lighting-ready", remote_lighting=True)
         self.command("legacy-pending", "lighting", {"mode": "On"})
         current = self.table.items[("WF#command", "legacy-pending")]
         for field in ("execute_before", "resource_generation", "protocol"):
@@ -658,7 +706,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(body["error"]["code"], "command_expired")
             self.assertEqual(self.table.items[("WF#command", "legacy-pending")], legacy)
             self.recover("legacy-pending")
-            self.observe("recovery-status")
+            self.observe("recovery-status", remote_lighting=True)
             self.post("commands/legacy-pending/recovery-acknowledgements", self.recovery_receipt("legacy-pending"))
 
     def test_card_scan_reference_matches_fresh_attempt_and_is_not_reused(self):

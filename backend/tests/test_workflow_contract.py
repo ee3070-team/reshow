@@ -141,6 +141,9 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_actual_fence_recovery_and_replacement_responses_follow_schema(self):
         self.request('POST', '/api/showcases', self.example('/api/showcases'), expected=201)
+        ready = self.example('/api/device-status')
+        ready.update(status_id='lighting-ready', recorded_at=app.timestamp(NOW), remote_lighting=True)
+        self.request('POST', '/api/device-status', ready, expected=201)
         command = {'command_id': 'recover-contract', 'showcase_id': 'frontend-case-01', 'type': 'lighting', 'payload': {'mode': 'On'}}
         created = self.request('POST', '/api/commands', command, expected=201)['item']
         requested = self.request('POST', '/api/commands/{command_id}/recovery-requests',
@@ -149,7 +152,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(requested['status'], 'recovery_pending')
         self.assertGreater(requested['recovery']['fence_generation'], created['resource_generation'])
         observation = self.example('/api/device-status')
-        observation.update(status_id='contract-recovery-status', recorded_at=app.timestamp(NOW))
+        observation.update(status_id='contract-recovery-status', recorded_at=app.timestamp(NOW), remote_lighting=True)
         self.request('POST', '/api/device-status', observation, expected=201)
         receipt = {'acknowledgement_id': 'contract-recovery-ack', 'recovery_id': 'contract-recovery',
                    'device_id': 'frontend-device-01', 'recorded_at': app.timestamp(NOW), 'source': 'demo',

@@ -238,6 +238,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
       exhibitId: item?.confirmed_exhibit_id || null, version: item?.version || null,
       online: Boolean(status && freshness?.contact_stale === false), lastReceivedAt: status?.created_at || null, source: status?.source || null,
       recordedAt: status?.recorded_at || null, localControl: status?.local_control ?? null,
+      remoteLighting: status?.remote_lighting ?? null,
       temperature: status?.temperature_c ?? null, brightness: status?.brightness_percent ?? null,
       zone: status?.occupied == null ? null : status.occupied ? "Occupied" : "Clear",
       lightingMode: item?.lighting_mode ?? status?.lighting_mode ?? null, lightingOutput: status?.lighting_output ?? null, latch: status?.latch ?? null,
