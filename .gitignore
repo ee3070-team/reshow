@@ -35,6 +35,7 @@ Thumbs.db
 
 # Per-device firmware credentials
 /firmware/**/local_config.h
+/Final/**/local_config.h
 
 # Local firmware download bundle; source is tracked for review
 /firmware/*.zip

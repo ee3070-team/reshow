@@ -70,6 +70,13 @@ test("Overview disables links to unavailable pages while preserving existing dis
   assert.equal(unavailableLabel.disabled, true, "Availability must not override record/permission restrictions");
 });
 
+test("Overview lighting panel does not display door access", async () => {
+  const overview = await read("js/pages/overview.js");
+  assert.match(overview, /icon\("sun"\)}Lighting<\/h2>/);
+  assert.match(overview, /aria-label="Lighting mode"/);
+  assert.doesNotMatch(overview, /Lighting & access|Staff card required|class="latch"/);
+});
+
 test("workspace uses the merged facade and Demo persona cannot become a Live identity", async () => {
   let requests = 0;
   const session = {
