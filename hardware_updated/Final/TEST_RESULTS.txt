@@ -1,0 +1,140 @@
+Initial ReShow merge verification - 23 November 2026 (Hong Kong)
+
+Source: ee3070-team/reshow, master commit
+8927fef4f8325418b7973ef6d7b44fe3c5184822, hardware_updated/
+The clean local source checkout was matched to the GitHub branch tree.
+
+PASS - Mega 2560 board compilation
+  Arduino AVR Boards 1.8.8, arduino:avr:mega:cpu=atmega2560
+  Flash: 36,046 / 253,952 bytes
+  Static RAM: 3,573 / 8,192 bytes
+  The OLED additionally allocates its 1,024-byte framebuffer at runtime.
+
+PASS - ESP32-S3 board compilation, delivered default configuration
+  Espressif Arduino core 3.3.12, esp32:esp32:esp32s3
+  Flash: 1,083,165 / 1,310,720 bytes
+  Static RAM: 55,512 / 327,680 bytes
+  Wi-Fi/LAN/cloud features remain disabled until locally configured.
+
+PASS - ESP32-S3 compilation with online features enabled in a temporary copy
+  Same board/core; dummy credentials, LAN server, Wi-Fi echo, AWS uploads
+  and online label executor enabled. Compile only, never flashed or run.
+  Flash: 1,091,233 / 1,310,720 bytes
+  Static RAM: 55,528 / 327,680 bytes
+
+Arduino CLI build commands after installing the listed boards/libraries:
+  arduino-cli compile --fqbn arduino:avr:mega:cpu=atmega2560 Mega_Final
+  arduino-cli compile --fqbn esp32:esp32:esp32s3 ESP32S3_Final
+Run these from the extracted ReShow-Final directory. The development builds
+also supplied --libraries and --build-path for workspace-local dependencies
+and build output. The online fixture is separate from the delivered defaults.
+
+PASS - Host C++ regression checks using the merged source functions
+  Default upload gate; retry retention for HTTP 409, 429 and 503;
+  success/rejection advancement; sensor-frame CRC round trip;
+  unknown sensor values; OLED warning delays, recovery and timer rollover;
+  e-paper ASCII layout bounds; fixed/learned RFID roles and EEPROM reload;
+  denied cards; scan debounce; three-second relay pulse;
+  ordered e-paper chunks and failed-display acknowledgements.
+
+Host commands (run from the repository workspace):
+  python tmp/firmware/final-host/test_final.py
+  python tmp/firmware/final-host/test_access.py
+These development harnesses use checks/firmware_test.py and
+checks/firmware_displays_test.py and are not required to upload the sketches.
+
+Dependencies used:
+  MFRC522 1.4.12; GxEPD2 1.6.4; ArduinoJson 7.4.2;
+  Adafruit SSD1306 2.5.17; Adafruit GFX 1.13.0; Adafruit BusIO 1.17.4.
+
+Not verified: physical boards, relay polarity, sensor calibration, actual
+OLED/e-paper images and BUSY wiring, Wi-Fi reconnect scheduling, or live
+authenticated backend requests. No boards were flashed and no cloud records
+were written. Follow README.md for the bench test sequence.
+
+The source ZIP excludes local_config.h, credentials, board binaries and
+development build caches. Edit the example configuration for your own bench.
+
+Wi-Fi v2 recovery verification - 23 November 2026 (Hong Kong)
+Restored the ESP Wi-Fi v2 revision; preserved local credentials and AWS flag ON.
+Wi-Fi startup is independent of AWS readiness, with auto-reconnect and event logs.
+PASS: ESP32-S3 core 3.3.12 compilation: 1,085,229 bytes flash, 55,520 bytes static RAM.
+PASS: compiler dependencies select local_config.h rather than the example.
+PASS: python -m unittest checks.firmware_wifi_test checks.firmware_final_recovery_test -v
+Tests cover independent Wi-Fi startup, connection reporting, sensor frame validation,
+payload bounds, unknown sensor data and stable upload retries including HTTP 404.
+Source hashes checked unchanged after compilation. No board flashing or live Wi-Fi test.
+Previous edits backed up under tmp/firmware/before-wifi-v2-recovery-6glwvz6p.
+Credential-free recovery source: dist/ReShow-ESP32S3-WiFi-v2.zip.
+
+Mega recovery verification - 24 November 2026 (Hong Kong)
+Restored Mega_Final.ino and WarningState.h from the original 23 November source ZIP.
+All Mega sources match that package after line-ending normalization.
+Prior edits: tmp/firmware/before-mega-recovery-20261124-_820abqe/Mega_Final.
+ESP files and private configuration verified unchanged by hashes.
+PASS: arduino:avr:mega:cpu=atmega2560, AVR core 1.8.8.
+Flash 36,046 bytes; static RAM 3,573 bytes. Build log: tmp/firmware/mega-recovery-build.log.
+PASS: display/warning and UART round-trip harness redirected to the actual Final pair.
+PASS: Mega RFID/relay/EEPROM/display-transfer host harness.
+PASS: checks.firmware_wifi_test and checks.firmware_final_recovery_test.
+No boards flashed; physical bench testing remains.
+
+Item switching verification - 27 November 2026 (Hong Kong)
+PASS: final Mega board compilation, arduino:avr:mega:cpu=atmega2560, AVR 1.8.8.
+  Flash 40,368 / 253,952 bytes; static RAM 4,833 / 8,192 bytes.
+  OLED additionally allocates its 1,024-byte framebuffer; physical stack/headroom
+  and peripheral behavior still require bench observation.
+PASS: ESP32-S3 core 3.3.12, online-enabled fixture, dummy credentials and showcase.
+  Flash 1,098,609 / 1,310,720 bytes; static RAM 57,160 / 327,680 bytes.
+  All final source headers/sketch files match the fixture; only local_config.h differs.
+PASS: 5 host regression tests:
+  python -m unittest checks.firmware_item_switch_test checks.firmware_final_recovery_test checks.firmware_wifi_test -v
+  Covers profile conversion, CRC/chunk rejection, duplicate and conflicting commits,
+  interruption at every EEPROM write, restart restoration, dynamic warning bounds
+  and delays, timer reset/rollover, removal of fixed caution/swing under cloud profiles,
+  NVS failure before dispatch, lost commit acknowledgement, stable HTTP receipts,
+  label binding to exact applied assignment and fresh Mega generation, V1/V2 parsing,
+  captured item identity across queued uploads, Wi-Fi behavior and upload retries.
+PASS: 35 targeted website regression tests:
+  node --test checks/live-api-review.test.js checks/live-showcase.test.js checks/navigation-save.test.js checks/image-upload-pages.test.js
+PASS: backend workflow tests: 28 passed; 2 optional boto3 SDK checks skipped
+  because that SDK environment is not installed. Windows test timezone data supplied
+  with PYTHONTZPATH=C:/msys64/usr/share/zoneinfo.
+PASS: npm run build and git diff --check.
+
+No boards flashed, live cloud records changed or website deployment performed.
+Physical sensor polarity/calibration, live AWS authorization, OLED/e-paper BUSY
+behavior and reset tests remain bench-verification steps. The registered showcase
+ID must be configured in local_config.h. Automated recovery receipts remain
+unimplemented; uncertain operations remain fenced for manual reconciliation.
+Source bundle excludes credentials and compiled binaries.
+
+Display fetch verification - 27 November 2026 (Hong Kong)
+PASS: 7 host tests:
+  python -m unittest checks.firmware_display_fetch_test checks.firmware_wifi_test checks.firmware_item_switch_test checks.firmware_final_recovery_test
+  Covers fetch execution with uploads disabled, no samples and telemetry backoff;
+  no fetch with missing backend setup or Wi-Fi; eight-row OLED limits/delay output;
+  fault priority; and existing profile persistence, transfer and upload regressions.
+PASS: Mega build, Arduino AVR Boards 1.8.8, arduino:avr:mega.
+  Flash 41,262 / 253,952 bytes; static RAM 4,839 / 8,192 bytes.
+  The OLED's dynamic 1,024-byte framebuffer is additional to static RAM.
+PASS: live read-only requests using the existing private hardware credential:
+  assignment list HTTP 200, exact assignment HTTP 200, label list HTTP 200.
+  Exact assignment verified device reshow-mega-01 / showcase-reshow-mega-01
+  and all temperature/light limit and warning-delay fields. No pending label.
+  Registered showcase ID added to ignored local_config.h; existing secrets retained.
+No cloud commands acknowledged, cloud records changed, or boards flashed.
+Physical OLED/e-paper, sensor timing and UART wiring still require bench testing.
+PASS: ESP32-S3 build, Espressif core 3.3.12, esp32:esp32:esp32s3,
+  with the verified showcase ID in the private local configuration.
+  Flash 1,098,921 / 1,310,720 bytes; static RAM 57,160 / 327,680 bytes.
+
+Warning LED verification - 27 November 2026 (Hong Kong)
+PASS: 6 host tests:
+  python -m unittest checks.firmware_display_fetch_test checks.firmware_item_switch_test
+  LED checks exercise every warning bit, simultaneous faults, red priority over
+  Auto/On/Off and RFID green feedback, mode restoration, both output polarities,
+  feedback expiry and millis rollover using the actual updateLighting function.
+PASS: updated Mega build, Arduino AVR Boards 1.8.8, arduino:avr:mega.
+  Flash 41,334 / 253,952 bytes; static RAM 4,839 / 8,192 bytes.
+ESP firmware unchanged. No board flashed; physical LED colors remain a bench check.

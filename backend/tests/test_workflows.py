@@ -89,6 +89,9 @@ class WorkflowTable:
             raise AssertionError("A transaction cannot write the same item twice")
 
     def query(self, **kwargs):
+        if kwargs.get("IndexName") == "device-readings-index":
+            from test_api import FakeTable
+            return FakeTable.query(self, **kwargs)
         self.calls.append(("query", copy.deepcopy(kwargs)))
         if kwargs.get("ConsistentRead") is not True or "IndexName" in kwargs:
             raise AssertionError("Expected strong base-table bounded Query")

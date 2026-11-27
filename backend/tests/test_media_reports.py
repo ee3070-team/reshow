@@ -270,6 +270,24 @@ class MediaReportTests(unittest.TestCase):
         self.assertTrue(puts[0]["Key"].startswith("report-snapshots/report-1/"))
         self.assertEqual(puts[0]["IfNoneMatch"], "*")
 
+    def test_sensor_samples_survive_snapshot_reopen_and_csv_and_obey_sections(self):
+        sample = {"entity_type": "reading", "received_at": "2026-10-25T00:02:00Z", "data": {
+            "reading_id": "occupied-sample", "device_id": "device-1", "exhibit_id": "exhibit-1",
+            "recorded_at": "2026-10-25T00:01:00Z", "occupied": True, "distance_cm": 12,
+            "temperature_c": 23, "brightness_raw": 500, "source": "device"}}
+        self.records.create(app, "exhibit-profile", "exhibit-1", {"exhibit_id": "exhibit-1", "name": "Sample exhibit"})
+        with patch.object(analytics, "read_timeline", return_value=[sample]):
+            module.create_snapshot(app, {"report_id": "sample-report", **self.query})
+            module.create_snapshot(app, {"report_id": "no-activity", **self.query, "sections": ["environment"]})
+        with patch.object(analytics, "read_timeline", side_effect=AssertionError("Saved reports must not read live data")):
+            report = self.decode(module.get_snapshot(app, "sample-report", "json"))
+            self.assertEqual(report["report"]["sensor_samples"][0]["reading_id"], "occupied-sample")
+            self.assertEqual(report["report"]["summary"]["occupied_sample_count"], 1)
+            self.assertIsNone(report["report"]["summary"]["recorded_occupied_seconds"])
+            self.assertIn("occupied-sample", module.get_snapshot(app, "sample-report", "csv")["body"])
+            self.assertNotIn("sensor_samples", self.decode(module.get_snapshot(app, "no-activity", "json"))["report"])
+            self.assertNotIn("occupied-sample", module.get_snapshot(app, "no-activity", "csv")["body"])
+
     def test_section_selection_always_keeps_missing_lower_bounds_and_snapshot_csv_metadata(self):
         body = {"report_id": "report-selected", "title": "=unsafe spreadsheet title", **self.query, "sections": ["environment"]}
         with patch.object(analytics, "read_timeline", return_value=self.timeline()), patch.object(module, "frozen_profiles", return_value={

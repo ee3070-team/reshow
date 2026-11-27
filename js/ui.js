@@ -205,12 +205,13 @@ export function heatmap(
         continue;
       }
       const val = i[metricName];
+      const sampleMeasure = metricName === "occupiedSamples";
       const cls =
-        i.availability === "recorded" && val != null
-          ? `level-${val === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(val / (metricName === "events" ? 3 : 420))))}`
-          : esc(i.availability || "missing");
-      const quantity = val == null ? "Activity unknown" : metricName === "events" ? val + " proximity events" : (val / 60).toFixed(1) + " occupied minutes (" + val + " s)";
-      const info = `${formatDate(i.start)}, ${formatTime(i.start)}–${formatTime(i.end)} · ${quantity} · ${(i.status || i.availability).replaceAll("_", " ")}${i.availability === "partial" ? " (recorded lower bound)" : ""}`;
+        (sampleMeasure ? val > 0 : i.availability === "recorded" && val != null)
+          ? `level-${val === 0 ? 0 : Math.min(5, Math.max(1, Math.ceil(val / (sampleMeasure ? 60 : metricName === "events" ? 3 : 420))))}`
+          : sampleMeasure && val === 0 ? "partial" : esc(i.availability || "missing");
+      const quantity = val == null ? "Activity unknown" : sampleMeasure ? val + " occupied sensor samples (point observations; duration unknown)" : metricName === "events" ? val + " proximity events" : (val / 60).toFixed(1) + " occupied minutes (" + val + " s)";
+      const info = `${formatDate(i.start)}, ${formatTime(i.start)}–${formatTime(i.end)} · ${quantity} · ${sampleMeasure ? "Interval evidence: " : ""}${(i.status || i.availability).replaceAll("_", " ")}${i.availability === "partial" ? " (recorded lower bound)" : ""}`;
       html += `<button type="button" class="heatmap-cell ${cls}" title="${esc(info)}" aria-label="${esc(info)}" data-interval-detail="${esc(info)}"></button>`;
     }
   }
@@ -220,7 +221,7 @@ export function heatmap(
       (_, x) => `<span class="heatmap-label">${hours[x]}:00</span>`,
     ).join("");
   html +=
-    '</div></div><div class="heatmap-legend"><span><i class="legend-swatch zero"></i>Confirmed zero</span><span><i class="legend-swatch"></i>Low</span><span><i class="legend-swatch high"></i>High</span><span><i class="legend-swatch missing"></i>Missing / partial</span><span><i class="legend-swatch future"></i>Future / outside scope</span></div>';
+    `</div></div><div class="heatmap-legend">${metricName === "occupiedSamples" ? "" : '<span><i class="legend-swatch zero"></i>Confirmed zero</span>'}<span><i class="legend-swatch"></i>Low</span><span><i class="legend-swatch high"></i>High</span><span><i class="legend-swatch missing"></i>${metricName === "occupiedSamples" ? "No occupied samples / unknown" : "Missing / partial"}</span><span><i class="legend-swatch future"></i>Future / outside scope</span></div>`;
   return html;
 }
 export function bindHeatmap(container) {
@@ -251,6 +252,15 @@ export function readFilters(form) {
     end: f.end,
     exhibitId: f.exhibitId || "",
   };
+}
+
+// The firmware uploads point readings independently of completed intervals.
+export function sensorObservations(data) {
+  if (!data.raw?.sensor_sample_semantics) return "";
+  const samples = data.sensorSamples || [];
+  const occupied = samples.filter(item => item.occupied === true);
+  const latest = occupied.slice(-100).reverse();
+  return `<section class="card report-section"><h3>Ultrasonic sensor observations</h3><p><strong>${esc(data.summary.occupied_sample_count ?? occupied.length)} occupied samples</strong> · ${esc(data.summary.sensor_sample_count ?? samples.length)} total sensor readings in the selected period.</p><p class="small-text">${esc(data.raw.sensor_sample_semantics.note)}</p>${latest.length ? `<div class="table-wrap"><table><thead><tr><th>Detected at (HKT)</th><th>Exhibit reported by device</th><th>Distance</th><th>Source</th></tr></thead><tbody>${latest.map(item => `<tr><td>${esc(formatDate(item.recorded_at))}, ${esc(formatTime(item.recorded_at))}</td><td>${esc(item.exhibit_id)}</td><td>${item.distance_cm == null ? "—" : `${esc(item.distance_cm)} cm`}</td><td>${esc(item.source)}</td></tr>`).join("")}</tbody></table></div>${occupied.length > 100 ? '<p class="small-text">Showing the latest 100 occupied samples. Report CSV includes all selected samples.</p>' : ""}` : '<p class="empty">No occupied sensor samples in this period.</p>'}${occupied.length && data.summary.occupiedSeconds == null ? '<p class="notice info">Occupancy was detected. Occupied duration is unavailable because the device has not uploaded completed proximity intervals.</p>' : ""}</section>`;
 }
 
 // Shared evidence notes keep Activity, Overview, reports and print truthful.
