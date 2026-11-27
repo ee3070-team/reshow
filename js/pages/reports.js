@@ -11,6 +11,7 @@ import {
   readFilters,
   dateKey,
   activityNotes,
+  sensorObservations,
   confirmAction,
 } from "../ui.js";
 
@@ -95,7 +96,7 @@ export async function render(container, ctx) {
         : ""
     }
     ${selected.includes("environment") ? `<section class="report-section"><h3>${icon("temperature")}Environmental warnings</h3><table><tbody><tr><td>Temperature</td><td>${new Set(warnings.filter((e) => e.type === "temperature").map(e => e.sourceId || e.id)).size} warning events</td></tr><tr><td>Relative brightness</td><td>${new Set(warnings.filter((e) => e.type === "brightness").map(e => e.sourceId || e.id)).size} warning events</td></tr></tbody></table></section>` : ""}
-    ${activityNotes(d)}${r.profileContext?.note ? `<p class="notice info">${esc(r.profileContext.note)}</p>` : ""}<section class="report-section" ${live ? "hidden" : ""}><h3>${icon("database")}Data completeness</h3><p class="small-text">${s.expectedIntervals ? `${s.recordedIntervals} of ${s.expectedIntervals} completed intervals recorded (${s.coveragePercent}%). ${s.missingIntervals} missing intervals.` : "No completed observation intervals are available for this selection. Coverage cannot be determined."}</p>${missing.length ? `<div class="table-wrap"><table><thead><tr><th>Missing interval (HKT)</th><th>Availability</th></tr></thead><tbody>${missing.map((i) => `<tr><td>${esc(formatDate(i.start))}, ${esc(formatTime(i.start))} – ${esc(formatTime(i.end))}</td><td>Unknown activity</td></tr>`).join("")}</tbody></table></div>` : ""}<p class="notice info report-note">${icon("info")}Totals include recorded data only. Missing intervals are excluded, never treated as zero activity. The open hour and future hours are not yet included.</p><p class="muted small-text" style="margin-top:8px">Coverage describes retained demo intervals during exhibition hours (09:00–17:00), 1–6 Oct 2026. No claims are made about other dates.</p></section><div class="actions end report-actions">${live && !r.saved && ctx.api.can("save_reports") ? '<button class="button primary" data-save-report>Save new server snapshot</button>' : ""}<button class="button" data-print>${icon("report")}Print / Save as PDF</button><button class="button" data-csv>${icon("download")}Export CSV</button></div>`;
+    ${selected.includes("activity") ? sensorObservations(d) : ""}${activityNotes(d)}${r.profileContext?.note ? `<p class="notice info">${esc(r.profileContext.note)}</p>` : ""}<section class="report-section" ${live ? "hidden" : ""}><h3>${icon("database")}Data completeness</h3><p class="small-text">${s.expectedIntervals ? `${s.recordedIntervals} of ${s.expectedIntervals} completed intervals recorded (${s.coveragePercent}%). ${s.missingIntervals} missing intervals.` : "No completed observation intervals are available for this selection. Coverage cannot be determined."}</p>${missing.length ? `<div class="table-wrap"><table><thead><tr><th>Missing interval (HKT)</th><th>Availability</th></tr></thead><tbody>${missing.map((i) => `<tr><td>${esc(formatDate(i.start))}, ${esc(formatTime(i.start))} – ${esc(formatTime(i.end))}</td><td>Unknown activity</td></tr>`).join("")}</tbody></table></div>` : ""}<p class="notice info report-note">${icon("info")}Totals include recorded data only. Missing intervals are excluded, never treated as zero activity. The open hour and future hours are not yet included.</p><p class="muted small-text" style="margin-top:8px">Coverage describes retained demo intervals during exhibition hours (09:00–17:00), 1–6 Oct 2026. No claims are made about other dates.</p></section><div class="actions end report-actions">${live && !r.saved && ctx.api.can("save_reports") ? '<button class="button primary" data-save-report>Save new server snapshot</button>' : ""}<button class="button" data-print>${icon("report")}Print / Save as PDF</button><button class="button" data-csv>${icon("download")}Export CSV</button></div>`;
     preview.querySelector("[data-save-report]")?.addEventListener("click", async (event) => {
       const button = event.currentTarget;
       if (!(await confirmAction("Save report snapshot?", "The server captures current records again. The saved report may differ from this preview and will retain its own cutoff.", "Capture and save"))) return;
@@ -227,6 +228,14 @@ export function buildCsv(report) {
       ]),
       [],
     );
+  if (r.sections.includes("activity") && d.raw?.sensor_sample_semantics) {
+    rows.push(["Ultrasonic sensor observations"],
+      ["Occupied samples", s.occupied_sample_count], ["Total sensor samples", s.sensor_sample_count],
+      ["Sample interpretation", d.raw.sensor_sample_semantics.note],
+      ["Reading ID", "Time (UTC)", "Exhibit reported by device", "Occupied", "Distance (cm)", "Source"],
+      ...(d.sensorSamples || []).map(item => [item.reading_id, item.recorded_at, item.exhibit_id,
+        item.occupied ? "Yes" : "No", item.distance_cm ?? "", item.source]), []);
+  }
   if (r.sections.includes("history"))
     rows.push(
       ["Exhibit display history"],

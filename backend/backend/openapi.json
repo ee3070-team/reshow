@@ -11556,6 +11556,114 @@
           }
         ]
       }
+    },
+    "/staff-api/accounts/{staff_id}/setup-link": {
+      "post": {
+        "summary": "Generate an initial password setup link for a pending account (Administrator)",
+        "operationId": "generateStaffSetupLink",
+        "tags": [
+          "Website accounts"
+        ],
+        "security": [
+          {
+            "staffAccessToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "setup_url",
+                    "item"
+                  ],
+                  "properties": {
+                    "setup_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "item": {
+                      "$ref": "#/components/schemas/WebsiteAccount"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid/expired staff access token or application session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GatewayError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current account/role does not permit this action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale If-Match, conflicting identity/request, incomplete enrollment or last active Administrator protection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "staff_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          }
+        ],
+        "description": "Returns a new temporary credential in the URL fragment, once and with no-store. Replaces prior temporary credentials. Only invited, enabled FORCE_CHANGE_PASSWORD identities qualify. Never log or persist this response."
+      }
     }
   },
   "components": {
@@ -13613,6 +13721,16 @@
           "future_seconds": {
             "type": "number",
             "minimum": 0
+          },
+          "sensor_sample_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Recorded point readings in this bucket or period; does not certify coverage."
+          },
+          "occupied_sample_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Readings reporting occupied=true; not proximity starts or unique visitors."
           }
         }
       },
@@ -13716,6 +13834,16 @@
             "type": "number",
             "minimum": 0,
             "description": "Time unambiguously assigned to a different exhibit; excluded from selected-exhibit denominator. Zero unfiltered."
+          },
+          "sensor_sample_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Recorded point readings in this bucket or period; does not certify coverage."
+          },
+          "occupied_sample_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Readings reporting occupied=true; not proximity starts or unique visitors."
           }
         }
       },
@@ -14051,6 +14179,32 @@
           },
           "evaluation": {
             "$ref": "#/components/schemas/ReportEvaluation"
+          },
+          "sensor_sample_semantics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consistency": {
+                "type": "string",
+                "enum": [
+                  "eventual"
+                ]
+              },
+              "attribution": {
+                "type": "string",
+                "enum": [
+                  "reading_exhibit_id"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "consistency",
+              "attribution",
+              "note"
+            ]
           }
         },
         "description": "Coverage-aware proximity analytics with optional historical exhibit attribution and a captured current-time cutoff. Counts describe proximity starts, not people. Requested/future bucket bounds remain visible; evaluated totals, completeness, details and exports use one effective range. New fields may be absent in snapshots captured before v0.4."
@@ -14722,6 +14876,39 @@
           },
           "evaluation": {
             "$ref": "#/components/schemas/ReportEvaluation"
+          },
+          "sensor_sample_semantics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consistency": {
+                "type": "string",
+                "enum": [
+                  "eventual"
+                ]
+              },
+              "attribution": {
+                "type": "string",
+                "enum": [
+                  "reading_exhibit_id"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "consistency",
+              "attribution",
+              "note"
+            ]
+          },
+          "sensor_samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reading"
+            },
+            "description": "Point readings in the evaluated period, filtered by producer-recorded exhibit_id. Never used to infer duration or coverage."
           }
         },
         "description": "Coverage-aware proximity analytics with optional historical exhibit attribution and a captured current-time cutoff. Counts describe proximity starts, not people. Requested/future bucket bounds remain visible; evaluated totals, completeness, details and exports use one effective range. New fields may be absent in snapshots captured before v0.4."
@@ -15577,15 +15764,49 @@
             "nullable": true,
             "additionalProperties": false,
             "description": "Exact showcase reads derive these limits from the last confirmed assignment command snapshot. Null when no snapshot is available.",
-            "required": ["exhibit_id", "version", "temperature_min_c", "temperature_max_c", "brightness_min_percent", "brightness_max_percent", "warning_seconds"],
+            "required": [
+              "exhibit_id",
+              "version",
+              "temperature_min_c",
+              "temperature_max_c",
+              "brightness_min_percent",
+              "brightness_max_percent",
+              "warning_seconds"
+            ],
             "properties": {
-              "exhibit_id": {"type": "string"},
-              "version": {"type": "integer", "minimum": 1, "maximum": 2147483647},
-              "temperature_min_c": {"type": "number", "minimum": -40, "maximum": 125},
-              "temperature_max_c": {"type": "number", "minimum": -40, "maximum": 125},
-              "brightness_min_percent": {"type": "number", "minimum": 0, "maximum": 100},
-              "brightness_max_percent": {"type": "number", "minimum": 0, "maximum": 100},
-              "warning_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+              "exhibit_id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "temperature_min_c": {
+                "type": "number",
+                "minimum": -40,
+                "maximum": 125
+              },
+              "temperature_max_c": {
+                "type": "number",
+                "minimum": -40,
+                "maximum": 125
+              },
+              "brightness_min_percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "brightness_max_percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "warning_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              }
             }
           },
           "label_reconciliation_required": {
@@ -18179,6 +18400,39 @@
           },
           "evaluation": {
             "$ref": "#/components/schemas/ReportEvaluation"
+          },
+          "sensor_sample_semantics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consistency": {
+                "type": "string",
+                "enum": [
+                  "eventual"
+                ]
+              },
+              "attribution": {
+                "type": "string",
+                "enum": [
+                  "reading_exhibit_id"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "consistency",
+              "attribution",
+              "note"
+            ]
+          },
+          "sensor_samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reading"
+            },
+            "description": "Point readings in the evaluated period, filtered by producer-recorded exhibit_id. Never used to infer duration or coverage."
           }
         },
         "description": "Coverage-aware proximity analytics with optional historical exhibit attribution and a captured current-time cutoff. Counts describe proximity starts, not people. Requested/future bucket bounds remain visible; evaluated totals, completeness, details and exports use one effective range. New fields may be absent in snapshots captured before v0.4."
@@ -18566,6 +18820,39 @@
           },
           "evaluation": {
             "$ref": "#/components/schemas/ReportEvaluation"
+          },
+          "sensor_sample_semantics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "consistency": {
+                "type": "string",
+                "enum": [
+                  "eventual"
+                ]
+              },
+              "attribution": {
+                "type": "string",
+                "enum": [
+                  "reading_exhibit_id"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "consistency",
+              "attribution",
+              "note"
+            ]
+          },
+          "sensor_samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reading"
+            },
+            "description": "Point readings in the evaluated period, filtered by producer-recorded exhibit_id. Never used to infer duration or coverage."
           }
         },
         "description": "Coverage-aware proximity analytics with optional historical exhibit attribution and a captured current-time cutoff. Counts describe proximity starts, not people. Requested/future bucket bounds remain visible; evaluated totals, completeness, details and exports use one effective range. New fields may be absent in snapshots captured before v0.4."
@@ -19021,6 +19308,9 @@
               "type": "string",
               "format": "uri"
             }
+          },
+          "setup_client_id": {
+            "type": "string"
           }
         },
         "required": [

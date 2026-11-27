@@ -35,7 +35,7 @@ def extract_runtime(archive, destination):
                 raise ValueError('Absolute archive path')
             parts = PurePosixPath(member.name).parts
             relative = PurePosixPath(*parts[1:])
-            selected = str(relative) in ('index.html', 'auth/callback.html') or (relative.parts and relative.parts[0] in ('css', 'js', 'assets'))
+            selected = str(relative) in ('index.html', 'auth/callback.html', 'auth/setup.html') or (relative.parts and relative.parts[0] in ('css', 'js', 'assets'))
             if not selected or member.isdir():
                 continue
             if not member.isfile():

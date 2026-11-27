@@ -32,6 +32,8 @@ In Live mode, all six core workspace tabs use the separate live data adapter. Re
 
 **Analytics:** inclusive HKT date filters become UTC requests, limited to 31 calendar days with hourly buckets (at most 744). Backend partial/unknown/ambiguous/out-of-scope/future states and coverage are retained. Current-day results show the backend's effective cutoff. Overview, Activity and report previews share normalization. Saving a preview creates a new server capture, which may differ; exports and printing use the displayed saved snapshot once opened. Warnings count distinct source IDs, not attribution fragments.
 
+**Ultrasonic observations:** Live Activity and Reports also include the existing device readings, with occupied sample counts, timestamps and distances. Activity defaults to an occupied-sample heatmap. The ESP32 currently uploads point readings and device status, but no completed proximity intervals; an occupied reading therefore appears as a sensor observation while occupied duration remains unknown. Samples do not create event starts or coverage. They use the readings index (eventually consistent), the captured report cutoff, and the exhibit ID reported in each reading. Queries follow all pages and reject more than 10,000 readings rather than silently truncate; use a shorter period if needed. New saved reports freeze these samples and exports retain them; older saved reports remain unchanged. Deploy both the backend and static website for this reporting fix. No firmware reflash or reading migration is needed for already accepted readings.
+
 Known backend-dependent limits:
 
 - Historical access attempts identify the card, without inferring its past owner from current staff assignments.

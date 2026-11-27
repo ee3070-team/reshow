@@ -98,6 +98,9 @@ class Cognito:
     def admin_user_global_sign_out(self, **kwargs):
         self.calls.append(("logout", kwargs)); return {}
 
+    def admin_set_user_password(self, **kwargs):
+        self.calls.append(("set_password", kwargs)); return {}
+
 
 class AuthenticationTests(unittest.TestCase):
     def setUp(self):
@@ -408,6 +411,48 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(audits[-1]["data"]["actor"]["subject"], "sub-admin")
         status, body = self.request("POST", "/staff-api/commands", {"actor": "forged", "command_id": "x"})
         self.assertEqual(status, 403, body)
+
+    def test_setup_link_is_admin_only_pending_only_and_never_persisted(self):
+        from urllib.parse import urlparse, parse_qs
+        staff = store.make(app, "staff", "setup-staff", {"staff_id": "setup-staff", "name": "Setup", "email": "setup@example.com", "role": "Viewer"})
+        self.table.items[staff["PK"], staff["SK"]] = staff
+        status, invitation = self.request("POST", "/staff-api/accounts/invitations", {
+            "invitation_id": "setup-invite", "staff_id": "setup-staff", "role": "Viewer"})
+        self.assertEqual(status, 201)
+        path = "/staff-api/accounts/setup-staff/setup-link"
+        version = invitation["item"]["version"]
+        with patch.dict(os.environ, {"COGNITO_SETUP_CLIENT_ID": "setupclient"}):
+            for caller in ("viewer", "operator"):
+                self.assertEqual(self.request("POST", path, {}, version=version, user=caller)[0], 403)
+            self.assertEqual(self.request("POST", path, {}, version=version + 1)[0], 409)
+            event = self.event("POST", path, {}, version=version)
+            response = app.lambda_handler(event, None)
+            self.assertEqual(response["statusCode"], 200, response)
+            self.assertEqual(response["headers"]["cache-control"], "no-store")
+            result = json.loads(response["body"])
+            url = urlparse(result["setup_url"])
+            self.assertEqual(url.path, "/auth/setup.html")
+            self.assertEqual(url.query, "")
+            credential = parse_qs(url.fragment)["credential"][0]
+            self.assertNotIn(credential, repr(self.table.items))
+            self.assertNotIn(credential, repr(self.table.calls))
+            self.assertNotIn(credential, json.dumps(result["item"]))
+            calls = [args for action, args in self.provider.calls if action == "set_password"]
+            self.assertEqual(len(calls), 1)
+            self.assertFalse(calls[0]["Permanent"])
+            self.assertEqual(calls[0]["Password"], credential)
+            self.assertEqual(self.request("POST", path, {}, version=version)[0], 409)
+            new_version = result["item"]["version"]
+            status, second = self.request("POST", path, {}, version=new_version)
+            self.assertEqual(status, 200)
+            self.assertNotEqual(second["setup_url"], result["setup_url"])
+            username = parse_qs(url.fragment)["username"][0]
+            self.provider.users[username]["UserStatus"] = "CONFIRMED"
+            self.assertEqual(self.request("POST", path, {}, version=second["item"]["version"])[0], 409)
+            self.assertEqual(self.request("POST", "/staff-api/accounts/admin/setup-link", {}, version=1)[0], 409)
+
+    def test_setup_client_cannot_authorize_website_requests(self):
+        self.assertEqual(self.request("GET", "/staff-api/session", claims={"client_id": "setupclient"})[0], 401)
 
     def test_demo_scope_and_source_cannot_upload_or_read_real_data(self):
         for device, source in [("real-device", "demo"), ("v04-demo", "device")]:

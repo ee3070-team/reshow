@@ -36,6 +36,7 @@ def config(api):
         raise api.APIError(503, "service_unavailable", "Staff sign-in is not configured.")
     origin = os.environ["FRONTEND_ORIGIN"].rstrip("/")
     return {"issuer": os.environ["COGNITO_ISSUER"], "client_id": os.environ["COGNITO_CLIENT_ID"],
+            **({"setup_client_id": os.environ["COGNITO_SETUP_CLIENT_ID"]} if os.environ.get("COGNITO_SETUP_CLIENT_ID") else {}),
             "authorization_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/authorize",
             "token_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/token",
             "revocation_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/revoke",

@@ -529,17 +529,30 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     const result = await request(`${PREFIX}/accounts/invitations`, { method: "POST", body: { invitation_id: createId(key, "invite"), staff_id: staffId, role: role(accountRole), delivery: "suppress" } });
     pendingCreates.delete(key); void emit(); return { ...accountRecord(result.item), note: result.note || "Account prepared without sending an invitation email." };
   }
+  async function generateSetupLink(staffId, accountVersion) {
+    requirePermission("accounts");
+    return request(`${PREFIX}/accounts/${encode(identifier(staffId))}/setup-link`, {
+      method: "POST", headers: { "If-Match": version(accountVersion) }, body: {},
+    });
+  }
   function filtersFor(raw, showcaseId) {
     return { showcaseId: showcaseId || selectedShowcaseId || "", start: raw.date_selection?.start_date || date(raw.start), end: raw.date_selection?.end_date || endDate(raw.end), exhibitId: raw.filter?.exhibit_id || raw.exhibit_id || "" };
   }
   function normalizeActivity(raw, filters) {
     const showcaseId = filters.showcaseId || selectedShowcaseId || "", summary = raw.summary || {};
     const intervals = (raw.buckets || []).map((bucket, index) => ({ ...clone(bucket), id: `live-bucket-${index}`, start: bucket.start, end: bucket.end, showcaseId, exhibitId: filters.exhibitId || null,
-      availability: ["recorded_activity", "confirmed_quiet"].includes(bucket.status) ? "recorded" : bucket.status, events: bucket.proximity_event_count ?? null, occupiedSeconds: bucket.recorded_occupied_seconds ?? null }));
+      availability: ["recorded_activity", "confirmed_quiet"].includes(bucket.status) ? "recorded" : bucket.status, events: bucket.proximity_event_count ?? null, occupiedSeconds: bucket.recorded_occupied_seconds ?? null,
+      occupiedSamples: bucket.sensor_sample_count > 0 ? bucket.occupied_sample_count : null }));
     const warnings = (raw.environmental_warnings || []).map((item, index) => ({ id: `${item.warning_id}-${index}`, sourceId: item.warning_id, at: item.clipped_start || item.start, end: item.clipped_end || item.end, showcaseId, exhibitId: item.exhibit_id,
       type: item.warning_type, status: "warning", details: `${item.message} · ${item.source === "demo" ? "Synthetic producer data" : "Device producer assertion"}`, source: item.source }));
     const events = (raw.proximity_events || []).map((item, index) => ({ id: `${item.proximity_event_id}-${index}`, sourceId: item.proximity_event_id, at: item.clipped_start || item.start, end: item.clipped_end || item.end,
       showcaseId, exhibitId: filters.exhibitId || null, type: "proximity", status: "recorded", details: `${item.event_start_attributed === false ? "Recorded occupancy carried into the selected exhibit interval; no new event start counted." : "Recorded proximity detection-zone event; not a unique visitor."} · ${item.source === "demo" ? "Synthetic producer data" : "Device producer assertion"}`, source: item.source }));
+    const sensorSamples = clone(raw.sensor_samples || []);
+    events.push(...sensorSamples.filter(item => item.occupied === true).map(item => ({
+      id: `sensor-${item.reading_id}`, sourceId: item.reading_id, at: item.recorded_at,
+      showcaseId, exhibitId: item.exhibit_id, type: "sensor", status: "occupied", source: item.source,
+      details: `Ultrasonic sensor detected occupancy${item.distance_cm == null ? "" : ` at ${item.distance_cm} cm`}. Point observation; duration unknown. · ${item.source === "demo" ? "Synthetic producer data" : "Device producer assertion"}`,
+    })));
     const denominator = summary.coverage_seconds + summary.missing_seconds;
     return { filters: clone(filters), intervals, events: [...events, ...warnings].sort((a, b) => b.at.localeCompare(a.at)), warnings,
       assignments: (raw.display_history || []).map((item, index) => ({ id: `${item.display_id}-${index}`, sourceId: item.display_id, exhibitId: item.exhibit_id, showcaseId, start: item.clipped_start || item.start, end: item.clipped_end || item.end, source: item.source })),
@@ -548,7 +561,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
         recordedIntervals: intervals.filter((item) => item.availability === "recorded").length, expectedIntervals: intervals.filter((item) => !["future", "no_known_display"].includes(item.availability)).length,
         coveragePercent: denominator > 0 ? Math.round(summary.coverage_seconds / denominator * 1000) / 10 : null, coverageSeconds: summary.coverage_seconds ?? null, missingSeconds: summary.missing_seconds ?? null,
         coverageComplete: summary.coverage_complete ?? null, interpretation: summary.totals_interpretation, warningInterpretation: summary.warning_count_interpretation, ...clone(summary) },
-      completeness: clone(raw.data_completeness || {}), missingData: clone(raw.missing_data || {}), provenance: clone(raw.provenance || {}), limitations: clone(raw.limitations || []),
+      sensorSamples, completeness: clone(raw.data_completeness || {}), missingData: clone(raw.missing_data || {}), provenance: clone(raw.provenance || {}), limitations: clone(raw.limitations || []),
       dataQuality: clone(raw.data_quality || {}), evaluation: clone(raw.evaluation || null), notices: [], raw: clone(raw) };
   }
   function validateFilters(filters = {}) {
@@ -692,7 +705,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     getLabel, saveLabelDraft, sendLabel, setLighting: (mode) => { if (!["Auto", "On", "Off"].includes(mode)) return Promise.reject(issue("Choose Auto, On or Off lighting.")); return queue("lighting", { mode }); },
     scanAvailability, scanExhibitTag: (options) => waitForScan("exhibit", options), scanStaffCard: (options) => waitForScan("staff_card", options),
     listStaff, saveStaff, registerCard, setCardAccess, getAccessLog, listAccounts, updateAccount,
-    saveAccount: (profile) => updateAccount(profile.staffId || profile.id, profile), prepareAccountInvitation,
+    saveAccount: (profile) => updateAccount(profile.staffId || profile.id, profile), prepareAccountInvitation, generateSetupLink,
     getActivity, generateReport, saveReport, listReports, getReport,
     selectShowcase: async (id) => {
       const nextId = identifier(id);
