@@ -27,7 +27,6 @@ MAX_RESPONSE_SIZE = 256 * 1024
 MAX_RFID_EVENT_SIZE = 4096
 TRIPO_API = "https://openapi.tripo3d.ai/v3"
 TRIPO_MODEL = "v3.1-20260211"
-RFID_EVENT_FILE = ROOT / "hardware" / "rfid-events.jsonl"
 EPAPER_DESCRIPTION_FILE = ROOT / ".reshow-epaper-description.json"
 RFID_EVENT_LOCK = threading.Lock()
 RFID_WORKFLOW = {
@@ -776,7 +775,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
     def send_head(self):
         path = unquote(urlsplit(self.path).path)
         parts = Path(path.lstrip("/")).parts
-        allowed = path in ("/", "/index.html", "/release.json") or (
+        allowed = path in ("/", "/index.html", "/release.json", "/auth/callback.html") or (
             parts and parts[0] in ("css", "js", "assets")
             and not any(part.startswith(".") for part in parts)
         )
@@ -802,17 +801,24 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if path == "/api/rfid/status":
             with RFID_EVENT_LOCK:
                 status = dict(RFID_WORKFLOW)
+                status["latest_event"] = (
+                    dict(RFID_LATEST_DEVICE_EVENT)
+                    if RFID_LATEST_DEVICE_EVENT is not None
+                    else None
+                )
+                try:
+                    description = read_epaper_description()
+                    status["epaper_delivery"] = (
+                        "confirmed"
+                        if EPAPER_DELIVERED_DESCRIPTION == description
+                        else "pending"
+                    )
+                except FileNotFoundError:
+                    status["epaper_delivery"] = "not_saved"
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.send_json(500, {"error": "Could not read the saved e-paper description."})
+                    return
             self.send_json(200, {"data": status})
-            return
-        if path == "/api/rfid/epaper-status":
-            with RFID_EVENT_LOCK:
-                body = RFID_WORKFLOW["phase"].encode("ascii")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=us-ascii")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
             return
         if path == "/api/rfid/epaper-description":
             with RFID_EVENT_LOCK:
@@ -832,25 +838,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path == "/api/rfid/epaper-delivery":
-            with RFID_EVENT_LOCK:
-                try:
-                    description = read_epaper_description()
-                    state = "confirmed" if EPAPER_DELIVERED_DESCRIPTION == description else "pending"
-                except FileNotFoundError:
-                    state = "not_saved"
-                except (OSError, ValueError, KeyError, TypeError):
-                    self.send_json(500, {"error": "Could not read the saved e-paper description."})
-                    return
-            self.send_json(200, {"data": {"state": state}})
-            return
-        if path == "/api/rfid/device-event":
-            with RFID_EVENT_LOCK:
-                event = dict(RFID_LATEST_DEVICE_EVENT) if RFID_LATEST_DEVICE_EVENT else None
-            if event is None:
-                self.send_json(404, {"error": "No RFID device event has been received yet."})
-                return
-            self.send_json(200, event)
+        if path.startswith("/api/rfid/"):
+            self.send_json(404, {"error": "Not found."})
             return
         super().do_GET()
 
@@ -929,86 +918,6 @@ class StudioHandler(SimpleHTTPRequestHandler):
                             "edit_id": secrets.token_hex(16),
                         })
             self.send_json(200, normalized_event)
-            return
-
-        if path == "/api/rfid/access-event":
-            try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-            except ValueError:
-                self.send_json(400, {"error": "Invalid request length."})
-                return
-            if content_length <= 0 or content_length > MAX_RFID_EVENT_SIZE:
-                self.send_json(400, {"error": "Invalid RFID event."})
-                return
-            try:
-                event = json.loads(self.rfile.read(content_length).decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                self.send_json(400, {"error": "Invalid RFID event JSON."})
-                return
-            uid = event.get("uid") if isinstance(event, dict) else None
-            result = event.get("result") if isinstance(event, dict) else None
-            door = event.get("door") if isinstance(event, dict) else None
-            phase = event.get("phase") if isinstance(event, dict) else None
-            exhibit_id = event.get("exhibit_id") if isinstance(event, dict) else None
-            if not isinstance(uid, str) or not re.fullmatch(r"[A-Fa-f0-9]{4,20}", uid):
-                self.send_json(400, {"error": "Invalid RFID UID."})
-                return
-            if result not in ("accepted", "denied") or door not in ("opened", "closed"):
-                self.send_json(400, {"error": "Invalid RFID event result."})
-                return
-            if phase not in ("first_scan_pending", "second_scan_confirmed", "pending_edit_waiting", "denied"):
-                self.send_json(400, {"error": "Invalid RFID workflow phase."})
-                return
-            with RFID_EVENT_LOCK:
-                if phase == "first_scan_pending":
-                    if RFID_WORKFLOW["phase"] != "idle":
-                        self.send_json(409, {"error": "An exhibit edit is already pending."})
-                        return
-                    if not isinstance(exhibit_id, str) or not exhibit_id.strip():
-                        self.send_json(400, {"error": "ESP32 must provide the exhibit ID for the first scan."})
-                        return
-                    RFID_WORKFLOW.update({
-                        "phase": "pending_edit",
-                        "uid": uid.upper(),
-                        "exhibit_id": exhibit_id.strip(),
-                        "edit_id": secrets.token_hex(16),
-                    })
-                elif phase == "second_scan_confirmed":
-                    self.send_json(409, {"error": "The workflow now finishes when staff marks the update complete; a second scan is not used."})
-                    return
-                record = {
-                    "uid": uid.upper(),
-                    "result": result,
-                    "door": door,
-                    "phase": phase,
-                    "exhibit_id": exhibit_id.strip() if isinstance(exhibit_id, str) else RFID_WORKFLOW["exhibit_id"],
-                }
-                with RFID_EVENT_FILE.open("a", encoding="utf-8") as event_file:
-                    event_file.write(json.dumps(record, separators=(",", ":")) + "\n")
-            with RFID_EVENT_LOCK:
-                workflow = dict(RFID_WORKFLOW)
-            self.send_json(200, {"data": {"recorded": True, **workflow}})
-            return
-
-        if path == "/api/rfid/staff-ready":
-            try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                json.loads(self.rfile.read(content_length).decode("utf-8"))
-            except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-                self.send_json(400, {"error": "Invalid staff confirmation message."})
-                return
-            with RFID_EVENT_LOCK:
-                if RFID_WORKFLOW["phase"] != "pending_edit":
-                    self.send_json(409, {"error": "No RFID exhibit edit is pending."})
-                    return
-                if not isinstance(RFID_WORKFLOW["exhibit_id"], str) or not RFID_WORKFLOW["exhibit_id"]:
-                    self.send_json(409, {"error": "The ESP32 has not assigned an exhibit ID."})
-                    return
-                RFID_WORKFLOW.update({
-                    "phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None,
-                })
-                workflow = dict(RFID_WORKFLOW)
-            self.send_json(200, {"data": workflow})
             return
 
         if path == "/api/rfid/publish-description":

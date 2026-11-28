@@ -18,9 +18,14 @@
 }
 .technology-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(350px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+}
+.technology-section-selector {
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 .technology-grid > .card {
   display: grid;
@@ -170,6 +175,13 @@
 .technology-ai > p {
   font-size: 13px;
 }
+.technology-generation-panel {
+  display: grid;
+  gap: 14px;
+}
+.technology-generation-panel > p {
+  font-size: 13px;
+}
 .technology-credential {
   display: grid;
   gap: 6px;
@@ -316,9 +328,4 @@
   background: #fff;
   color: var(--navy);
   font-size: 13px;
-}
-@media (max-width: 1350px) {
-  .technology-grid {
-    grid-template-columns: 1fr;
-  }
 }

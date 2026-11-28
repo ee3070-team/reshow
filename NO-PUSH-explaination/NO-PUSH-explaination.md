@@ -105,40 +105,35 @@ GET means:
 
 > “Server, please give me the latest information.”
 
-There are two different RFID GET routes in the local prototype:
+The local RFID prototype has two GET routes:
 
 ```text
 GET /api/rfid/status
-GET /api/rfid/device-event
+GET /api/rfid/epaper-description
 ```
 
-`GET /api/rfid/status` returns the current workflow phase. It does not return the
-last raw RFID event:
+`GET /api/rfid/status` returns the workflow phase, latest RFID event and e-paper
+delivery state together:
 
 ```json
 {
   "data": {
     "phase": "pending_edit",
     "uid": "FC6AB516",
-    "exhibit_id": "helmet-001"
+    "exhibit_id": "helmet-001",
+    "edit_id": "example-session-id",
+    "latest_event": {
+      "type": "rfid_event",
+      "uid": "FC6AB516",
+      "result": "accepted",
+      "exhibit_id": "helmet-001"
+    },
+    "epaper_delivery": "pending"
   }
 }
 ```
 
-`GET /api/rfid/device-event` returns the latest received RFID event in the same
-JSON shape as the device's POST body:
-
-```json
-{
-  "type": "rfid_event",
-  "uid": "FC6AB516",
-  "result": "accepted",
-  "exhibit_id": "helmet-001"
-}
-```
-
-The event GET returns the latest event held in local server memory. It returns
-404 until an event has been received. It does not advance or change the workflow.
+This is the only RFID status query. It does not advance or change the workflow.
 
 ### POST: send new information
 
@@ -163,30 +158,16 @@ Example body:
 }
 ```
 
-The separate workflow endpoint `POST /api/rfid/access-event` accepts phase and
-door fields for the two-scan workflow. The current Mega-to-ESP32 demo event does
-not include those fields, so use `/api/rfid/device-event` for the event example.
-
-The staff member or server also sends a POST to tell ESP32 that editing is finished:
-
-```text
-POST /api/rfid/staff-ready
-```
-
-Example body:
-
-```json
-{
-  "manual_update_finished": true
-}
-```
+The current RFID contract has five requests; see `RFID_API_HANDOFF.md` for the
+canonical payloads. The combined status response includes the latest event and
+e-paper delivery state. Older two-scan routes are not supported.
 
 ### Simple comparison
 
 | Method | Question it asks | Used here for |
 |---|---|---|
-| GET | What information has the server received? | Read workflow status or the latest RFID event |
-| POST | Please receive this new event or change. | Send a device event or mark manual work ready |
+| GET | What information has the server received? | Read the combined workflow status or saved e-paper description |
+| POST | Please receive this new event or change. | Send a device event, save a description or confirm e-paper delivery |
 
 ### Where they are written
 
@@ -199,26 +180,19 @@ Python server receives them:
 server.py
 ```
 
-After configuring the ESP32 bridge for the local server:
-
-- `HTTPClient.GET()` can be added to call `GET /api/rfid/device-event` and read the latest event
-- `HTTPClient.POST(payload)` calls `POST /api/rfid/device-event`
-
-In `server.py`:
-
-- `do_GET()` handles workflow-status and latest-event requests
-- `do_POST()` receives RFID events and staff-ready requests
+The five supported requests are listed in `RFID_API_HANDOFF.md`. `GET /api/rfid/status`
+returns the phase, latest event and delivery state together.
+There are no separate latest-event, phase-only or delivery-status routes.
 
 For the current local workflow, see the [RFID state machine](rfid-state-machine.svg).
 Older two-scan descriptions below are historical and do not describe the current
 Mega and ESP32 demo.
 
-The 3D & AI studio includes **Send example RFID event** and **GET latest RFID
-event** buttons for testing this same-shaped POST/GET pair against the local
-server. It also has **Test door card** and **Test e-paper card** buttons. These
-simulated events change the shared workflow state but do not operate hardware;
-use them only when no real workflow is in progress. To test the flow, press door
-or e-paper, then mark the manual update finished.
+The 3D & AI studio includes **Send example RFID event**, **Test door card** and
+**Test e-paper card** buttons. The latest event appears in the combined status.
+Simulated events change the shared workflow state but do not operate hardware;
+use them only when no real workflow is in progress. To finish a test edit, save
+the description or send the configured `edit` card.
 
 ## Small vocabulary
 
@@ -511,7 +485,7 @@ The ESP32 should use the cloud server address:
 
 ```cpp
 const char serverUrl[] =
-  "https://your-cloud-server.com/api/rfid/access-event";
+  "https://your-cloud-server.com/api/rfid/device-event";
 
 const char rfidStatusUrl[] =
   "https://your-cloud-server.com/api/rfid/status";
@@ -536,7 +510,7 @@ ESP32 -> Computer Wi-Fi -> Python server.py
 Use an address such as:
 
 ```cpp
-"http://192.168.1.100:8000/api/rfid/access-event"
+"http://192.168.1.100:8000/api/rfid/device-event"
 ```
 
 ### Cloud test
@@ -548,7 +522,7 @@ ESP32 -> Internet -> Cloud server
 Use an address such as:
 
 ```cpp
-"https://reshow.example.com/api/rfid/access-event"
+"https://reshow.example.com/api/rfid/device-event"
 ```
 
 This project already uses this CloudFront server address:
@@ -557,17 +531,18 @@ This project already uses this CloudFront server address:
 https://dkbznu9f5nh9n.cloudfront.net
 ```
 
-The ESP32 has been given these planned cloud API paths:
+The cloud backend must support these five RFID requests before the ESP32 is
+pointed at it:
 
 ```text
-POST https://dkbznu9f5nh9n.cloudfront.net/api/rfid/access-event
+POST https://dkbznu9f5nh9n.cloudfront.net/api/rfid/device-event
 GET  https://dkbznu9f5nh9n.cloudfront.net/api/rfid/status
-POST https://dkbznu9f5nh9n.cloudfront.net/api/rfid/staff-ready
+POST https://dkbznu9f5nh9n.cloudfront.net/api/rfid/publish-description
+GET  https://dkbznu9f5nh9n.cloudfront.net/api/rfid/epaper-description
+POST https://dkbznu9f5nh9n.cloudfront.net/api/rfid/epaper-delivery
 ```
 
-At the moment, the website Cloud Lambda implements `/api/health` and the Cloudflare
-AI generator only. The three RFID cloud routes are not active yet. The ESP32 will
-receive `404 Not Found` until a lightweight cloud RFID server adds the routes.
+The Cloud Lambda in this repository does not yet implement these RFID routes.
 
 ### What should not be filled
 
@@ -580,9 +555,11 @@ https://your-server.com/#overview
 Use API paths:
 
 ```text
-POST /api/rfid/access-event
+POST /api/rfid/device-event
 GET  /api/rfid/status
-POST /api/rfid/staff-ready
+POST /api/rfid/publish-description
+GET  /api/rfid/epaper-description
+POST /api/rfid/epaper-delivery
 ```
 
 ### Current local implementation
@@ -743,7 +720,7 @@ currently assumes an active-low relay module (`doorRelayActiveLow = true`); set
 it to `false` for a HIGH-trigger module. Verify the trigger with the lock
 disconnected before wiring the actual lock. Use a correctly rated relay and
 separate supply where required. This simple local action is not the
-first-scan/staff-ready/second-scan workflow.
+current webpage edit workflow.
 Install the `MFRC522` Arduino library before compiling the Mega sketch. The
 ESP32 still sends data to its configured HTTP endpoint; this does not connect
 the event to the ReShow website or database.

@@ -480,6 +480,30 @@ class LocalHttpsTests(unittest.TestCase):
             self.assertFalse(thread.is_alive())
 
 
+class LocalCallbackTests(unittest.TestCase):
+    def test_callback_is_served_without_exposing_other_auth_files(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.StudioHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
+            for path, expected in (
+                ("/auth/callback.html?code=test&state=test", 200),
+                ("/auth/private.html", 404),
+                ("/auth/../server.py", 404),
+                ("/server.py", 404),
+            ):
+                connection.request("GET", path)
+                response = connection.getresponse()
+                self.assertEqual(response.status, expected, path)
+                response.read()
+            connection.close()
+        finally:
+            httpd.shutdown()
+            thread.join(timeout=5)
+            httpd.server_close()
+
+
 class LocalRfidDeviceEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -542,11 +566,11 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         self.assertEqual(result["data"]["parts"], parts)
         self.assertEqual(outbound.call_count, 1)
 
-    def test_device_event_get_returns_latest_post_in_the_same_shape(self):
-        self.assertEqual(
-            self.request("GET", "/api/rfid/device-event"),
-            (404, {"error": "No RFID device event has been received yet."}),
-        )
+    def test_status_includes_latest_event_and_delivery_state(self):
+        status, response = self.request("GET", "/api/rfid/status")
+        self.assertEqual(status, 200)
+        self.assertIsNone(response["data"]["latest_event"])
+        self.assertEqual(response["data"]["epaper_delivery"], "not_saved")
         posted_event = {
             "type": "rfid_event",
             "uid": "04833912EE1B90",
@@ -557,8 +581,20 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(response, posted_event)
         status, response = self.request("GET", "/api/rfid/device-event")
+        self.assertEqual(status, 404)
+        status, response = self.request("GET", "/api/rfid/status")
         self.assertEqual(status, 200)
-        self.assertEqual(response, posted_event)
+        self.assertEqual(response["data"]["latest_event"], posted_event)
+
+    def test_rfid_exposes_only_the_five_contract_requests(self):
+        for path in (
+            "/api/rfid/device-event",
+            "/api/rfid/epaper-status",
+            "/api/rfid/epaper-delivery",
+        ):
+            self.assertEqual(self.request("GET", path)[0], 404)
+        for path in ("/api/rfid/access-event", "/api/rfid/staff-ready"):
+            self.assertEqual(self.request("POST", path, {})[0], 404)
 
     def test_device_event_rejects_bad_payload_without_replacing_latest(self):
         accepted = {
@@ -575,7 +611,9 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
             "exhibit_id": "helmet-001",
         })
         self.assertEqual(status, 400)
-        self.assertEqual(self.request("GET", "/api/rfid/device-event"), (200, accepted))
+        status, response = self.request("GET", "/api/rfid/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(response["data"]["latest_event"], accepted)
 
     def test_device_card_roles_drive_local_workflow(self):
         denied = {"type": "rfid_event", "uid": "DEADBEEF", "result": "denied"}
@@ -595,11 +633,9 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
             other = {**card, "uid": "11223344"}
             self.assertEqual(self.request("POST", "/api/rfid/device-event", other), (200, other))
             self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["uid"], card["uid"])
-            status, response = self.request("POST", "/api/rfid/staff-ready", {})
-            self.assertEqual((status, response["data"]), (200, {
-                "phase": "idle", "uid": None, "exhibit_id": None, "edit_id": None,
-            }))
-            self.assertEqual(self.request("POST", "/api/rfid/staff-ready", {})[0], 409)
+            edit = {**card, "uid": "AABBCCDD", "role": "edit"}
+            self.assertEqual(self.request("POST", "/api/rfid/device-event", edit)[0], 200)
+            self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
 
     def test_edit_card_finishes_pending_workflow(self):
         door = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
@@ -609,33 +645,14 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/rfid/device-event", edit), (200, edit))
         self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
 
-    def test_legacy_second_scan_cannot_finish_update(self):
-        door = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
-                "exhibit_id": "helmet-001", "role": "door"}
-        self.request("POST", "/api/rfid/device-event", door)
-        legacy = {"uid": door["uid"], "result": "accepted", "door": "closed",
-                  "phase": "second_scan_confirmed", "exhibit_id": "helmet-001"}
-        self.assertEqual(self.request("POST", "/api/rfid/access-event", legacy)[0], 409)
-        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "pending_edit")
-
-    def test_epaper_status_returns_current_phase_as_plain_text(self):
+    def test_status_contains_phase_for_epaper_fallback(self):
         door = {
             "type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
             "exhibit_id": "helmet-001", "role": "door",
         }
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        try:
-            connection.request("GET", "/api/rfid/epaper-status")
-            response = connection.getresponse()
-            self.assertEqual(response.status, 200)
-            self.assertEqual(response.read(), b"idle")
-            self.assertEqual(self.request("POST", "/api/rfid/device-event", door), (200, door))
-            connection.request("GET", "/api/rfid/epaper-status")
-            response = connection.getresponse()
-            self.assertEqual(response.status, 200)
-            self.assertEqual(response.read(), b"pending_edit")
-        finally:
-            connection.close()
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "idle")
+        self.assertEqual(self.request("POST", "/api/rfid/device-event", door), (200, door))
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["phase"], "pending_edit")
 
     def test_description_is_saved_for_epaper_only_for_current_session(self):
         card = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
@@ -675,7 +692,7 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/rfid/epaper-description")[0], 404)
 
     def test_delivery_confirmation_tracks_latest_saved_description(self):
-        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "not_saved")
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["epaper_delivery"], "not_saved")
         card = {"type": "rfid_event", "uid": "A1B2C3D4", "result": "accepted",
                 "exhibit_id": "helmet-001", "role": "epaper"}
 
@@ -698,14 +715,14 @@ class LocalRfidDeviceEventTests(unittest.TestCase):
                 connection.close()
 
         self.assertEqual(save("Blue vase"), 200)
-        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "pending")
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["epaper_delivery"], "pending")
         self.assertEqual(confirm("Blue vase"), 200)
-        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "confirmed")
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["epaper_delivery"], "confirmed")
         self.assertEqual(save("Green vase"), 200)
         self.assertEqual(confirm("Blue vase"), 409)
-        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "pending")
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["epaper_delivery"], "pending")
         self.assertEqual(confirm("Green vase"), 200)
-        self.assertEqual(self.request("GET", "/api/rfid/epaper-delivery")[1]["data"]["state"], "confirmed")
+        self.assertEqual(self.request("GET", "/api/rfid/status")[1]["data"]["epaper_delivery"], "confirmed")
 
 
 if __name__ == "__main__":

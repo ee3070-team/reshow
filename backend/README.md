@@ -68,7 +68,7 @@ after deployment. No live account is modified by the local tests.
 
 ### RFID and e-paper integration
 
-In live mode, open **3D & AI studio → RFID and e-paper** as an Operator or
+In live mode, open **RFID & epaper → RFID and e-paper** as an Operator or
 Administrator. Select the registered showcase. The showcase must have an
 exhibit assignment acknowledged by its device before a label can be sent.
 

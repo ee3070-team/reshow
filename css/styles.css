@@ -771,17 +771,6 @@ td .button {
   margin: 7px 0;
   color: var(--text);
 }
-.latch {
-  border-top: 1px solid var(--border);
-  margin-top: 20px;
-  padding-top: 17px;
-  display: flex;
-  gap: 14px;
-  font-size: 13px;
-}
-.latch .icon {
-  margin-top: 3px;
-}
 .recent-event {
   display: grid;
   grid-template-columns: 45px 10px 1fr;

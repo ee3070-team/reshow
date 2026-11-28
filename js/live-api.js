@@ -54,7 +54,7 @@ const endDate = (instant) => date(new Date(Date.parse(instant) - 1).toISOString(
 export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTimeoutMs = 60000 } = {}) {
   if (typeof auth?.request !== "function") throw new TypeError("A staff authentication request adapter is required.");
   const listeners = new Set(), drafts = new Map(), staffRecords = new Map(), media = new Map(), mediaWarnings = new Map();
-  const pendingCreates = new Map(), pendingCommands = new Map(), snapshotRequests = new Map();
+  const pendingCreates = new Map(), pendingCommands = new Map(), pendingRecoveries = new Map(), snapshotRequests = new Map();
   const inFlightReads = new Map();
   const minimumRequestIntervalMs = auth.minimumRequestIntervalMs ?? 550;
   let requestTail = Promise.resolve(), nextRequestAt = 0, generation = 0;
@@ -231,6 +231,29 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     // Browser display filtering is not an API authorization boundary. Backend
     // per-type redaction is not promised by the published contract.
     return Promise.all(all.filter((item) => item.type !== "card" || can("cards")).map(commandRecord));
+  }
+  async function requestAssignmentRecovery(commandId) {
+    requirePermission("operate");
+    const id = identifier(commandId, "commandId");
+    const showcase = await requireShowcase();
+    const path = `${PREFIX}/commands/${encode(id)}`;
+    const current = (await request(path)).item;
+    if (!current || current.command_id !== id || current.type !== "assignment" ||
+        current.device_id !== showcase.device_id || current.showcase_id !== showcase.showcase_id)
+      throw issue("This assignment does not belong to the selected showcase.", "command_mismatch", 409);
+    if (current.status === "recovery_pending") return commandRecord(current);
+    if (current.status !== "pending" || !current.execute_before ||
+        !Number.isFinite(Date.parse(current.execute_before)) || Date.parse(current.execute_before) > Date.now())
+      throw issue("Only an expired, pending assignment can be recovered here.", "invalid_recovery", 409);
+    const recoveryId = pendingRecoveries.get(id) || uid("recovery");
+    pendingRecoveries.set(id, recoveryId);
+    const result = await request(`${path}/recovery-requests`, {
+      method: "POST",
+      body: { recovery_id: recoveryId, reason: "Assignment execution deadline passed; device outcome requires reconciliation." },
+    });
+    pendingRecoveries.delete(id);
+    void emit();
+    return commandRecord(result.item);
   }
   async function showcaseRecord(item) {
     const status = item?.device_status, freshness = item?.freshness;
@@ -690,7 +713,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
       previousController.abort();
       stopPolling();
       media.clear(); mediaWarnings.clear(); drafts.clear(); scanEvidence = null; staffRecords.clear();
-      pendingCreates.clear(); pendingCommands.clear(); snapshotRequests.clear(); inFlightReads.clear();
+      pendingCreates.clear(); pendingCommands.clear(); pendingRecoveries.clear(); snapshotRequests.clear(); inFlightReads.clear();
       selectedShowcaseId = null; selectedShowcase = null; snapshotPending.clear();
     }
     void emit();
@@ -706,7 +729,7 @@ export function createLiveApi(auth, { uploadFetch = globalThis.fetch, uploadTime
     scanAvailability, scanExhibitTag: (options) => waitForScan("exhibit", options), scanStaffCard: (options) => waitForScan("staff_card", options),
     listStaff, saveStaff, registerCard, setCardAccess, getAccessLog, listAccounts, updateAccount,
     saveAccount: (profile) => updateAccount(profile.staffId || profile.id, profile), prepareAccountInvitation, generateSetupLink,
-    getActivity, generateReport, saveReport, listReports, getReport,
+    getActivity, requestAssignmentRecovery, generateReport, saveReport, listReports, getReport,
     selectShowcase: async (id) => {
       const nextId = identifier(id);
       stopPolling(); selectedShowcaseId = nextId;

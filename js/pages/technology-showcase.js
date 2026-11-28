@@ -1,5 +1,5 @@
 import { bindCloudRfid } from "./cloud-rfid.js";
-import { confirmAction, icon } from "../ui.js";
+import { icon } from "../ui.js";
 import { serializeUpload } from "../technology-upload.js";
 
 const THREE_URL =
@@ -123,25 +123,30 @@ export async function render(container, ctx) {
   container.innerHTML = `<div class="stack technology-studio">
     <section class="card technology-intro">
       <div>
-        <h2>${icon("cube")}3D & AI studio</h2>
-        <p>Prepare a model preview or turn an artifact photo into structured exhibit data.</p>
+        <h2>${icon("cube")}RFID & epaper</h2>
+        <p>View the RFID and e-paper workflow, or optionally explore 3D and AI tools.</p>
       </div>
-      <span class="badge info">Local showcase tools</span>
+      <span class="badge info">${cloudRfid ? "Live workspace" : "Demo workspace"}</span>
     </section>
+    <div class="segmented technology-section-selector" role="group" aria-label="Studio section">
+      <button type="button" class="active" data-studio-section="rfid" aria-pressed="true" aria-controls="studio-rfid">RFID &amp; e-paper</button>
+      <button type="button" data-studio-section="model" aria-pressed="false" aria-controls="studio-model">3D model studio</button>
+      <button type="button" data-studio-section="ai" aria-pressed="false" aria-controls="studio-ai">Image &amp; AI</button>
+    </div>
     <div class="technology-grid">
-      <section class="card technology-model">
+      <section id="studio-model" class="card technology-model" data-studio-panel="model" hidden>
         <div class="card-head"><h2>3D model studio</h2><span class="badge">Three.js</span></div>
         <div class="technology-viewer" data-viewer aria-label="Interactive 3D model preview"></div>
         <p class="technology-status" data-model-status role="status" aria-live="polite">Loading the 3D viewer…</p>
+        <div class="technology-import">
+          <label class="technology-field">Import a GLB or Three.js Group module
+            <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
+          </label>
+          <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
+        </div>
         <details class="technology-settings">
           <summary>Model settings</summary>
           <div class="technology-settings-content">
-            <div class="technology-import">
-              <label class="technology-field">Import a GLB or Three.js Group module
-                <input data-model-file type="file" accept=".glb,.js,.mjs,model/gltf-binary,text/javascript">
-              </label>
-              <span class="muted small-text">Choose a .glb file or an ES module that exports a THREE.Group, THREE.Object3D, or THREE.Scene. Only import JavaScript modules you trust.</span>
-            </div>
             <div class="technology-controls">
               <label>Zoom <output data-zoom-value>5.6</output>
                 <input data-zoom type="range" min="3" max="10" step="0.1" value="5.6">
@@ -167,39 +172,41 @@ export async function render(container, ctx) {
         </details>
         <div class="actions technology-actions">
           <button class="button" type="button" data-rotation aria-pressed="false">Pause rotation</button>
-          <button class="button" type="button" data-angle="0">Front</button>
-          <button class="button" type="button" data-angle="90">Side</button>
-          <button class="button" type="button" data-angle="180">Back</button>
-          <button class="button" type="button" data-angle="270">Side</button>
           <button class="button" type="button" data-fullscreen aria-pressed="false">Play 4-view fullscreen</button>
           <button class="button primary" type="button" data-export>Export four views</button>
         </div>
         <p class="technology-status" data-export-status role="status" aria-live="polite"></p>
       </section>
-      <section class="card technology-ai">
-        <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
-        <p>Enter your Cloudflare credentials and choose an artifact image to generate a suggested name and description with example exhibit settings. Credentials and images are sent over HTTPS to the ReShow API and then to Cloudflare for this request only; they are not saved.</p>
-        <label class="technology-credential">Cloudflare Account ID
-          <input data-account-id type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Your 32-character account ID" required>
-        </label>
-        <label class="technology-credential">Cloudflare API token
-          <span class="technology-token-input">
-            <input data-api-token type="password" autocomplete="new-password" spellcheck="false" placeholder="Your Workers AI API token" required>
-            <button class="button small" type="button" data-toggle-token aria-pressed="false">Show</button>
-          </span>
-        </label>
+      <section id="studio-ai" class="card technology-ai" data-studio-panel="ai" hidden>
+        <div class="card-head"><h2>Image &amp; AI</h2></div>
         <label class="technology-drop">
-          <span>${icon("upload")}Choose a different JPEG, PNG, or WebP image</span>
+          <span>${icon("upload")}Choose a JPEG, PNG, or WebP image</span>
           <input data-image-file type="file" accept="image/jpeg,image/png,image/webp">
         </label>
         <div class="technology-image-preview" data-image-preview role="img" aria-label="Selected image preview">No image selected</div>
-        <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
-        <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
-        <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
-        <section class="card technology-ai">
+        <div class="segmented technology-section-selector" role="group" aria-label="Generation type">
+          <button type="button" class="active" data-generation-type="json" aria-pressed="true" aria-controls="generation-json">Generate JSON</button>
+          <button type="button" data-generation-type="model" aria-pressed="false" aria-controls="generation-model">Generate 3D model</button>
+        </div>
+        <section id="generation-json" class="technology-generation-panel" data-generation-panel="json">
+          <div class="card-head"><h2>Image-to-JSON assistant</h2><span class="badge info">Workers AI</span></div>
+          <p>Your image and credentials go to Cloudflare via ReShow. They are not saved.</p>
+          <label class="technology-credential">Cloudflare Account ID
+            <input data-account-id type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Your 32-character account ID" required>
+          </label>
+          <label class="technology-credential">Cloudflare API token
+            <span class="technology-token-input">
+              <input data-api-token type="password" autocomplete="new-password" spellcheck="false" placeholder="Your Workers AI API token" required>
+              <button class="button small" type="button" data-toggle-token aria-pressed="false">Show</button>
+            </span>
+          </label>
+          <button class="button primary" data-generate type="button" disabled>Generate exhibit JSON</button>
+          <p class="technology-status" data-ai-status role="status" aria-live="polite">Select an image to generate exhibit data.</p>
+          <pre class="technology-json" data-json-output aria-live="polite">Generated exhibit JSON will appear here.</pre>
+        </section>
+        <section id="generation-model" class="technology-ai technology-generation-panel" data-generation-panel="model" hidden>
           <div class="card-head"><h2>Tripo 3D generation</h2><span class="badge info">Pay per task</span></div>
-          <p>Generate a textured GLB from the image selected above (about $0.30 per task), or retexture a generated model using a text description (about $0.10 per task). Prices may change; check Tripo pricing before submitting.</p>
-          <p class="technology-small">Your key is used only for these requests and is not saved. Use HTTPS or localhost. Tripo receives your image or texture description. Closing this page does not cancel a submitted task.</p>
+          <p class="technology-small">Closing this page won't cancel a task.</p>
           <label class="technology-credential">Tripo API key
             <input data-tripo-key type="password" autocomplete="off" spellcheck="false" placeholder="Enter your Tripo API key">
           </label>
@@ -219,10 +226,11 @@ export async function render(container, ctx) {
           <a data-tripo-download hidden target="_blank" rel="noopener noreferrer">Download GLB from Tripo</a>
         </section>
       </section>
-      ${cloudRfid ? `<section class="card technology-rfid">
+      <section id="studio-rfid" class="card technology-rfid" data-studio-panel="rfid">
         <div class="card-head"><h2>RFID and e-paper</h2></div>
-        <label class="technology-field">Showcase <select data-cloud-showcase></select></label>
-        <p data-cloud-rfid-state role="status">Loading showcases…</p>
+        ${cloudRfid ? "" : `<p class="technology-status">Preview only. Sign out and choose Live to connect to the cloud and use real RFID cards.</p>`}
+        <label class="technology-field">Showcase <select data-cloud-showcase disabled></select></label>
+        <p data-cloud-rfid-state role="status">${cloudRfid ? "Loading showcases…" : "Real RFID sessions are available in Live."}</p>
         <p data-cloud-rfid-delivery role="status"></p>
         <form data-cloud-rfid-form>
           <label class="technology-field">E-paper description
@@ -235,60 +243,41 @@ export async function render(container, ctx) {
           </div>
           <p data-cloud-rfid-message role="status"></p>
         </form>
-      </section>` : `<section class="card technology-ai technology-rfid">
-        <div class="card-head"><h2>ESP32/RFID workflow</h2><span class="badge info">Hardware</span></div>
-        <h3>Card roles</h3>
-        <dl class="rfid-phase-guide">
-          <div><dt>Door card</dt><dd>Opens the door for about 3 seconds. When idle, it also starts a manual exhibit update.</dd></div>
-          <div><dt>E-paper card</dt><dd>Does not open the door. It requests the saved description for the e-paper display and, when idle, starts a manual exhibit update.</dd></div>
-        </dl>
-        <p class="technology-status">After saving a description, the ESP32 checks the server and updates the e-paper automatically. No second tap is needed.</p>
-        <p class="technology-status" data-rfid-delivery role="status" aria-live="polite">Checking e-paper delivery…</p>
-        <pre class="technology-json" data-rfid-status aria-live="polite">Loading RFID workflow…</pre>
-        <dl class="rfid-phase-guide">
-          <div><dt>idle</dt><dd>No manual update is in progress. Scan a door or e-paper card to begin.</dd></div>
-          <div><dt>pending_edit</dt><dd>A card was accepted. Select an exhibit and save its description, or finish without changing it.</dd></div>
-        </dl>
-        <label class="technology-credential">Exhibit ID
-          <output data-rfid-exhibit>Waiting for ESP32 scan</output>
-        </label>
-        <form data-rfid-edit>
-          <label class="technology-field">Exhibit to edit
-            <select data-rfid-edit-exhibit required disabled><option value="">Scan a card first</option></select>
-          </label>
-          <label class="technology-field">Description for the exhibit and e-paper
-            <textarea data-rfid-description rows="5" maxlength="180" required disabled></textarea>
-          </label>
-          <p class="technology-small">Use 1–180 printable English characters. Select the exhibit explicitly: the hardware ID may not match the website ID.</p>
-          <button class="button primary" type="submit" data-rfid-save disabled>Save description and finish</button>
-          <p class="technology-status" data-rfid-edit-message role="status" aria-live="polite"></p>
-        </form>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-refresh>Refresh</button>
-          <button class="button primary" type="button" data-rfid-ready>Mark manual update finished</button>
-        </div>
-        <p class="technology-small">Mark manual update finished ends the workflow without sending a description.</p>
-        <p class="technology-status" data-rfid-message role="status" aria-live="polite">Waiting for the ESP32 workflow server.</p>
-        <h3>RFID event GET/POST example</h3>
-        <p class="technology-status">The example POST records a demo event and starts the workflow, exactly like a real card tap. GET returns that event in the same JSON shape.</p>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-example-post>Send example RFID event</button>
-          <button class="button" type="button" data-rfid-event-get>GET latest RFID event</button>
-        </div>
-        <h3>Test card roles</h3>
-        <p class="technology-status">These simulated taps change the server's RFID workflow but do not operate the door or e-paper. Use only when no real workflow is in progress. Test a door or e-paper card, then mark the update finished.</p>
-        <div class="actions">
-          <button class="button" type="button" data-rfid-test-role="door">Test door card</button>
-          <button class="button" type="button" data-rfid-test-role="epaper">Test e-paper card</button>
-        </div>
-        <pre class="technology-json" data-rfid-event aria-live="polite">No RFID event loaded.</pre>
-        <p class="technology-status" data-rfid-event-message role="status" aria-live="polite"></p>
-      </section>`}
+      </section>
     </div>
   </div>`;
 
   const controller = new AbortController();
   const { signal } = controller;
+  const sectionButtons = container.querySelectorAll("[data-studio-section]");
+  const sectionPanels = container.querySelectorAll("[data-studio-panel]");
+  sectionButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const selected = button.dataset.studioSection;
+      sectionButtons.forEach((item) => {
+        const isSelected = item === button;
+        item.classList.toggle("active", isSelected);
+        item.setAttribute("aria-pressed", String(isSelected));
+      });
+      sectionPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.studioPanel !== selected;
+      });
+    }, { signal });
+  });
+  const generationButtons = container.querySelectorAll("[data-generation-type]");
+  const generationPanels = container.querySelectorAll("[data-generation-panel]");
+  generationButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      generationButtons.forEach((item) => {
+        const isSelected = item === button;
+        item.classList.toggle("active", isSelected);
+        item.setAttribute("aria-pressed", String(isSelected));
+      });
+      generationPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.generationPanel !== button.dataset.generationType;
+      });
+    }, { signal });
+  });
   const viewer = container.querySelector("[data-viewer]");
   const modelStatus = container.querySelector("[data-model-status]");
   const exportStatus = container.querySelector("[data-export-status]");
@@ -324,6 +313,7 @@ export async function render(container, ctx) {
   let fullscreenExitButton = null;
   let loadedImage = null;
   let selectedImage = null;
+  const disposeRfid = cloudRfid ? bindCloudRfid(container, ctx, signal) : () => {};
 
   const updateCamera = () => {
     if (!camera || !THREE) return;
@@ -342,495 +332,488 @@ export async function render(container, ctx) {
     rotationButton.textContent = enabled ? "Pause rotation" : "Resume rotation";
     rotationButton.setAttribute("aria-pressed", String(!enabled));
   };
-  try {
-    THREE = await loadThree();
-    if (!active) return;
-    const scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(
-      45,
-      viewer.clientWidth / viewer.clientHeight,
-      0.1,
-      1000,
-    );
-    renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      preserveDrawingBuffer: true,
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(viewer.clientWidth, viewer.clientHeight);
-    viewer.replaceChildren(renderer.domElement);
-    scene.add(camera);
-    const pink = new THREE.DirectionalLight(0xff69b4, 1);
-    pink.position.set(-1.2, 1, 1);
-    pink.target.position.set(0, 0, -1);
-    camera.add(pink, pink.target);
-    const blue = new THREE.DirectionalLight(0x3498db, 1);
-    blue.position.set(1.2, -0.5, 1);
-    blue.target.position.set(0, 0, -1);
-    camera.add(blue, blue.target);
-    lights = [pink, blue];
-    ambient = new THREE.AmbientLight(0x222222, 1);
-    scene.add(ambient);
-    model = new THREE.Group();
-    modelContent = new THREE.Group();
-    model.add(modelContent);
-    addBunny(THREE, modelContent);
-    scene.add(model);
-    updateCamera();
-    modelStatus.textContent = "Drag the model to rotate it; use the wheel to zoom.";
-
-    const resizeRenderer = () => {
-      if (!active || !renderer) return;
-      if (fourViewCanvas) {
-        camera.aspect = 1;
-        camera.updateProjectionMatrix();
-        renderer.setSize(FOUR_VIEW_TILE_SIZE, FOUR_VIEW_TILE_SIZE, false);
-        return;
-      }
-      const width = Math.max(1, viewer.clientWidth);
-      const height = Math.max(1, viewer.clientHeight);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      renderer.setSize(width, height);
-    };
-    const resize = new ResizeObserver(() => {
-      resizeRenderer();
-    });
-    resize.observe(viewer);
-
-    const isFourViewMode = () =>
-      document.fullscreenElement === viewer ||
-      viewer.classList.contains("is-pseudo-fullscreen");
-    const leaveFourView = () => {
-      if (viewer.classList.contains("is-pseudo-fullscreen")) {
-        viewer.classList.remove("is-pseudo-fullscreen");
-        syncFullscreen();
-        return;
-      }
-      document.exitFullscreen().catch((error) => {
-        exportStatus.textContent =
-          error instanceof Error && error.message
-            ? `Could not exit fullscreen: ${error.message}`
-            : "Could not exit fullscreen. Press Escape to close it.";
-      });
-    };
-    const syncFullscreen = () => {
-      const isFullscreen = isFourViewMode();
-      if (isFullscreen && !fourViewCanvas) {
-        fourViewCanvas = document.createElement("canvas");
-        fourViewCanvas.className = "technology-four-view";
-        fourViewCanvas.setAttribute(
-          "aria-label",
-          "Four-view fullscreen model playback",
-        );
-        fourViewContext = fourViewCanvas.getContext("2d");
-        if (!fourViewContext) {
-          fourViewCanvas = null;
-          exportStatus.textContent =
-            "Could not create the fullscreen four-view display.";
-          leaveFourView();
-          return;
-        }
-        fourViewCanvas.width = FOUR_VIEW_TILE_SIZE * 3;
-        fourViewCanvas.height = FOUR_VIEW_TILE_SIZE * 3;
-        fullscreenExitButton = document.createElement("button");
-        fullscreenExitButton.type = "button";
-        fullscreenExitButton.className = "technology-fullscreen-exit";
-        fullscreenExitButton.textContent = "Exit 4-view";
-        fullscreenExitButton.setAttribute("aria-label", "Exit fullscreen 4-view");
-        fullscreenExitButton.addEventListener(
-          "click",
-          () => leaveFourView(),
-          { signal },
-        );
-        viewer.append(fourViewCanvas, fullscreenExitButton);
-        renderer.domElement.hidden = true;
-        viewer.classList.add("is-four-view");
-        fullscreenButton.setAttribute("aria-pressed", "true");
-        exportStatus.textContent =
-          "Four-view fullscreen playback is active. Press Escape to exit.";
-      } else if (!isFullscreen && fourViewCanvas) {
-        fourViewCanvas.remove();
-        fullscreenExitButton.remove();
-        fourViewCanvas = null;
-        fourViewContext = null;
-        fullscreenExitButton = null;
-        renderer.domElement.hidden = false;
-        viewer.classList.remove("is-four-view");
-        fullscreenButton.setAttribute("aria-pressed", "false");
-        exportStatus.textContent = "Four-view fullscreen playback closed.";
-      }
-      resizeRenderer();
-    };
-    document.addEventListener("fullscreenchange", syncFullscreen, { signal });
-    const playFourViewInPage = () => {
-      // The Fullscreen API can be refused (for example inside an embedded
-      // preview). Show the same four views as an in-page overlay instead.
-      viewer.classList.add("is-pseudo-fullscreen");
-      syncFullscreen();
-      exportStatus.textContent =
-        "The browser blocked fullscreen, so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
-    };
-    document.addEventListener(
-      "keydown",
-      (event) => {
-        if (event.key === "Escape" && viewer.classList.contains("is-pseudo-fullscreen")) {
-          leaveFourView();
-        }
-      },
-      { signal },
-    );
-    fullscreenButton.addEventListener(
-      "click",
-      async () => {
-        if (!renderer || !camera || !model) {
-          exportStatus.textContent = "The 3D viewer is not ready yet.";
-          return;
-        }
-        exportStatus.textContent = "Opening four-view playback…";
-        if (!viewer.requestFullscreen) {
-          playFourViewInPage();
-          return;
-        }
-        try {
-          await Promise.race([
-            viewer.requestFullscreen(),
-            new Promise((resolve) => window.setTimeout(resolve, 900)),
-          ]);
-        } catch (error) {
-          playFourViewInPage();
-          exportStatus.textContent =
-            "The browser blocked fullscreen (" +
-            (error instanceof Error && error.message
-              ? error.message
-              : "unknown reason") +
-            "), so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
-          return;
-        }
-        if (!isFourViewMode()) {
-          // Embedded previews may swallow the request without reporting an
-          // error, so fall back whenever fullscreen did not actually start.
-          playFourViewInPage();
-        }
-      },
-      { signal },
-    );
-
-    const renderFrame = () => {
+  const initializeViewer = async () => {
+    try {
+      THREE = await loadThree();
       if (!active) return;
-      if (autoRotate && !dragging) {
-        model.rotation.y += Number(rotationSpeedY.value);
-        model.rotation.x += Number(rotationSpeedX.value);
-      }
-      if (fourViewCanvas) {
-        const oldAngle = cameraAngle;
-        fourViewContext.fillStyle = "#000";
-        fourViewContext.fillRect(
-          0,
-          0,
-          fourViewCanvas.width,
-          fourViewCanvas.height,
-        );
-        for (const view of FOUR_VIEWS) {
-          cameraAngle = view.angle;
-          updateCamera();
-          renderer.render(scene, camera);
-          fourViewContext.save();
-          fourViewContext.translate(
-            (view.cell[0] + 0.5) * FOUR_VIEW_TILE_SIZE,
-            (view.cell[1] + 0.5) * FOUR_VIEW_TILE_SIZE,
-          );
-          fourViewContext.rotate(view.rotation);
-          fourViewContext.drawImage(
-            renderer.domElement,
-            -FOUR_VIEW_TILE_SIZE / 2,
-            -FOUR_VIEW_TILE_SIZE / 2,
-            FOUR_VIEW_TILE_SIZE,
-            FOUR_VIEW_TILE_SIZE,
-          );
-          fourViewContext.restore();
-        }
-        cameraAngle = oldAngle;
-        updateCamera();
-      } else {
-        renderer.render(scene, camera);
-      }
-      animationFrame = requestAnimationFrame(renderFrame);
-    };
-    renderFrame();
+      const scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(
+        45,
+        Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight),
+        0.1,
+        1000,
+      );
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true,
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(Math.max(1, viewer.clientWidth), Math.max(1, viewer.clientHeight));
+      viewer.replaceChildren(renderer.domElement);
+      scene.add(camera);
+      const pink = new THREE.DirectionalLight(0xff69b4, 1);
+      pink.position.set(-1.2, 1, 1);
+      pink.target.position.set(0, 0, -1);
+      camera.add(pink, pink.target);
+      const blue = new THREE.DirectionalLight(0x3498db, 1);
+      blue.position.set(1.2, -0.5, 1);
+      blue.target.position.set(0, 0, -1);
+      camera.add(blue, blue.target);
+      lights = [pink, blue];
+      ambient = new THREE.AmbientLight(0x222222, 1);
+      scene.add(ambient);
+      model = new THREE.Group();
+      modelContent = new THREE.Group();
+      model.add(modelContent);
+      addBunny(THREE, modelContent);
+      scene.add(model);
+      updateCamera();
+      modelStatus.textContent = "Drag the model to rotate it; use the wheel to zoom.";
 
-    viewer.addEventListener(
-      "pointerdown",
-      (event) => {
-        if (event.target.closest(".technology-fullscreen-exit")) return;
-        dragging = true;
-        previousPointer = { x: event.clientX, y: event.clientY };
-        viewer.setPointerCapture(event.pointerId);
-      },
-      { signal },
-    );
-    viewer.addEventListener(
-      "pointermove",
-      (event) => {
-        if (!dragging || !previousPointer) return;
-        model.rotation.y += (event.clientX - previousPointer.x) * 0.01;
-        model.rotation.x += (event.clientY - previousPointer.y) * 0.01;
-        previousPointer = { x: event.clientX, y: event.clientY };
-      },
-      { signal },
-    );
-    viewer.addEventListener(
-      "pointerup",
-      () => {
-        dragging = false;
-        previousPointer = null;
-      },
-      { signal },
-    );
-    viewer.addEventListener(
-      "wheel",
-      (event) => {
-        event.preventDefault();
-        cameraDistance = Math.min(
-          10,
-          Math.max(3, cameraDistance + Math.sign(event.deltaY) * 0.35),
-        );
-        zoom.value = String(cameraDistance);
-        zoomValue.value = cameraDistance.toFixed(1);
-        updateCamera();
-      },
-      { passive: false, signal },
-    );
-    zoom.addEventListener(
-      "input",
-      () => {
-        cameraDistance = Number(zoom.value);
-        zoomValue.value = cameraDistance.toFixed(1);
-        updateCamera();
-      },
-      { signal },
-    );
-    intensity.addEventListener(
-      "input",
-      () => {
-        lights.forEach((light) => (light.intensity = Number(intensity.value)));
-        ambient.intensity = Number(intensity.value);
-        intensityValue.value = Number(intensity.value).toFixed(1);
-      },
-      { signal },
-    );
-    container.querySelectorAll("[data-light-color]").forEach((input) => {
-      input.addEventListener(
-        "input",
-        () => {
-          lights[Number(input.dataset.lightColor)].color.set(input.value);
-        },
-        { signal },
-      );
-    });
-    rotationControls.forEach(({ input, output }) => {
-      input.addEventListener("input", () => {
-        output.textContent = Number(input.value).toFixed(3);
-      }, { signal });
-    });
-    rotationButton.addEventListener(
-      "click",
-      () => setAutoRotate(!autoRotate),
-      { signal },
-    );
-    container.querySelectorAll("[data-angle]").forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => {
-          cameraAngle = Number(button.dataset.angle);
-          updateCamera();
-        },
-        { signal },
-      );
-    });
-    container.querySelector("[data-model-file]").addEventListener(
-      "change",
-      async (event) => {
-        const file = event.currentTarget.files?.[0];
-        event.currentTarget.value = "";
-        if (!file) return;
-        const fileName = file.name.toLowerCase();
-        const groupModule = fileName.endsWith(".js") || fileName.endsWith(".mjs");
-        if (!fileName.endsWith(".glb") && !groupModule) {
-          modelStatus.textContent = "Choose a .glb file or a .js/.mjs Three.js Group module.";
-          return;
-        }
-        if (!THREE.GLTFLoader) {
-          modelStatus.textContent = "The 3D model loader is unavailable.";
-          return;
-        }
-        modelStatus.textContent = `Loading ${file.name}…`;
-        if (groupModule) {
-          try {
-            const imported = await loadThreeGroupModule(file, THREE);
-            imported.updateMatrixWorld(true);
-            const bounds = new THREE.Box3().setFromObject(imported);
-            const size = bounds.getSize(new THREE.Vector3());
-            const largest = Math.max(size.x, size.y, size.z);
-            if (!Number.isFinite(largest) || largest <= 0) {
-              disposeModel(THREE, imported);
-              modelStatus.textContent = "This model has no displayable geometry.";
-              return;
-            }
-            imported.scale.multiplyScalar(2.8 / largest);
-            imported.updateMatrixWorld(true);
-            imported.position.sub(
-              new THREE.Box3()
-                .setFromObject(imported)
-                .getCenter(new THREE.Vector3()),
-            );
-            model.remove(modelContent);
-            disposeModel(THREE, modelContent);
-            modelContent = imported;
-            model.add(modelContent);
-            model.rotation.set(0, 0, 0);
-            targetY = 0;
-            cameraAngle = 0;
-            updateCamera();
-            modelStatus.textContent =
-              `Loaded ${file.name}. The model has been centered and resized.`;
-          } catch (error) {
-            modelStatus.textContent =
-              error instanceof Error && error.message
-                ? error.message
-                : "This Three.js Group module could not be loaded.";
-          }
-          return;
-        }
-        const url = URL.createObjectURL(file);
-        new THREE.GLTFLoader().load(
-          url,
-          (gltf) => {
-            URL.revokeObjectURL(url);
-            if (!active) {
-              disposeModel(THREE, gltf.scene);
-              return;
-            }
-            const imported = gltf.scene;
-            imported.updateMatrixWorld(true);
-            const bounds = new THREE.Box3().setFromObject(imported);
-            const size = bounds.getSize(new THREE.Vector3());
-            const largest = Math.max(size.x, size.y, size.z);
-            if (!Number.isFinite(largest) || largest <= 0) {
-              disposeModel(THREE, imported);
-              modelStatus.textContent = "This model has no displayable geometry.";
-              return;
-            }
-            imported.scale.multiplyScalar(2.8 / largest);
-            imported.updateMatrixWorld(true);
-            imported.position.sub(
-              new THREE.Box3()
-                .setFromObject(imported)
-                .getCenter(new THREE.Vector3()),
-            );
-            model.remove(modelContent);
-            disposeModel(THREE, modelContent);
-            modelContent = imported;
-            model.add(modelContent);
-            model.rotation.set(0, 0, 0);
-            targetY = 0;
-            cameraAngle = 0;
-            updateCamera();
-            modelStatus.textContent = `Loaded ${file.name}. The model has been centered and resized.`;
-          },
-          undefined,
-          () => {
-            URL.revokeObjectURL(url);
-            if (active)
-              modelStatus.textContent =
-                "Model loading failed. Check that the file is a valid GLB.";
-          },
-        );
-      },
-      { signal },
-    );
-    container.querySelector("[data-export]").addEventListener(
-      "click",
-      () => {
-        if (!renderer || !camera || !model) {
-          exportStatus.textContent = "The 3D viewer is not ready yet.";
-          return;
-        }
-        const size = FOUR_VIEW_TILE_SIZE;
-        const output = document.createElement("canvas");
-        output.width = size * 3;
-        output.height = size * 3;
-        const context = output.getContext("2d");
-        if (!context) {
-          exportStatus.textContent = "Could not create an image for export.";
-          return;
-        }
-        const oldRotation = model.rotation.clone();
-        const oldAngle = cameraAngle;
-        const oldAspect = camera.aspect;
-        const oldSize = renderer.getSize(new THREE.Vector2());
-        try {
-          context.fillStyle = "#000";
-          context.fillRect(0, 0, output.width, output.height);
-          model.rotation.set(0, 0, 0);
-          renderer.setSize(size, size, false);
+      const resizeRenderer = () => {
+        if (!active || !renderer) return;
+        if (fourViewCanvas) {
           camera.aspect = 1;
           camera.updateProjectionMatrix();
+          renderer.setSize(FOUR_VIEW_TILE_SIZE, FOUR_VIEW_TILE_SIZE, false);
+          return;
+        }
+        const width = Math.max(1, viewer.clientWidth);
+        const height = Math.max(1, viewer.clientHeight);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      };
+      const resize = new ResizeObserver(() => {
+        resizeRenderer();
+      });
+      resize.observe(viewer);
+
+      const isFourViewMode = () =>
+        document.fullscreenElement === viewer ||
+        viewer.classList.contains("is-pseudo-fullscreen");
+      const leaveFourView = () => {
+        if (viewer.classList.contains("is-pseudo-fullscreen")) {
+          viewer.classList.remove("is-pseudo-fullscreen");
+          syncFullscreen();
+          return;
+        }
+        document.exitFullscreen().catch((error) => {
+          exportStatus.textContent =
+            error instanceof Error && error.message
+              ? `Could not exit fullscreen: ${error.message}`
+              : "Could not exit fullscreen. Press Escape to close it.";
+        });
+      };
+      const syncFullscreen = () => {
+        const isFullscreen = isFourViewMode();
+        if (isFullscreen && !fourViewCanvas) {
+          fourViewCanvas = document.createElement("canvas");
+          fourViewCanvas.className = "technology-four-view";
+          fourViewCanvas.setAttribute(
+            "aria-label",
+            "Four-view fullscreen model playback",
+          );
+          fourViewContext = fourViewCanvas.getContext("2d");
+          if (!fourViewContext) {
+            fourViewCanvas = null;
+            exportStatus.textContent =
+              "Could not create the fullscreen four-view display.";
+            leaveFourView();
+            return;
+          }
+          fourViewCanvas.width = FOUR_VIEW_TILE_SIZE * 3;
+          fourViewCanvas.height = FOUR_VIEW_TILE_SIZE * 3;
+          fullscreenExitButton = document.createElement("button");
+          fullscreenExitButton.type = "button";
+          fullscreenExitButton.className = "technology-fullscreen-exit";
+          fullscreenExitButton.textContent = "Exit 4-view";
+          fullscreenExitButton.setAttribute("aria-label", "Exit fullscreen 4-view");
+          fullscreenExitButton.addEventListener(
+            "click",
+            () => leaveFourView(),
+            { signal },
+          );
+          viewer.append(fourViewCanvas, fullscreenExitButton);
+          renderer.domElement.hidden = true;
+          viewer.classList.add("is-four-view");
+          fullscreenButton.setAttribute("aria-pressed", "true");
+          exportStatus.textContent =
+            "Four-view fullscreen playback is active. Press Escape to exit.";
+        } else if (!isFullscreen && fourViewCanvas) {
+          fourViewCanvas.remove();
+          fullscreenExitButton.remove();
+          fourViewCanvas = null;
+          fourViewContext = null;
+          fullscreenExitButton = null;
+          renderer.domElement.hidden = false;
+          viewer.classList.remove("is-four-view");
+          fullscreenButton.setAttribute("aria-pressed", "false");
+          exportStatus.textContent = "Four-view fullscreen playback closed.";
+        }
+        resizeRenderer();
+      };
+      document.addEventListener("fullscreenchange", syncFullscreen, { signal });
+      const playFourViewInPage = () => {
+        // The Fullscreen API can be refused (for example inside an embedded
+        // preview). Show the same four views as an in-page overlay instead.
+        viewer.classList.add("is-pseudo-fullscreen");
+        syncFullscreen();
+        exportStatus.textContent =
+          "The browser blocked fullscreen, so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
+      };
+      document.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key === "Escape" && viewer.classList.contains("is-pseudo-fullscreen")) {
+            leaveFourView();
+          }
+        },
+        { signal },
+      );
+      fullscreenButton.addEventListener(
+        "click",
+        async () => {
+          if (!renderer || !camera || !model) {
+            exportStatus.textContent = "The 3D viewer is not ready yet.";
+            return;
+          }
+          exportStatus.textContent = "Opening four-view playback…";
+          if (!viewer.requestFullscreen) {
+            playFourViewInPage();
+            return;
+          }
+          try {
+            await Promise.race([
+              viewer.requestFullscreen(),
+              new Promise((resolve) => window.setTimeout(resolve, 900)),
+            ]);
+          } catch (error) {
+            playFourViewInPage();
+            exportStatus.textContent =
+              "The browser blocked fullscreen (" +
+              (error instanceof Error && error.message
+                ? error.message
+                : "unknown reason") +
+              "), so the four views are shown inside the page. Click Exit 4-view or press Escape to close them.";
+            return;
+          }
+          if (!isFourViewMode()) {
+            // Embedded previews may swallow the request without reporting an
+            // error, so fall back whenever fullscreen did not actually start.
+            playFourViewInPage();
+          }
+        },
+        { signal },
+      );
+
+      const renderFrame = () => {
+        if (!active) return;
+        if (autoRotate && !dragging) {
+          model.rotation.y += Number(rotationSpeedY.value);
+          model.rotation.x += Number(rotationSpeedX.value);
+        }
+        if (fourViewCanvas) {
+          const oldAngle = cameraAngle;
+          fourViewContext.fillStyle = "#000";
+          fourViewContext.fillRect(
+            0,
+            0,
+            fourViewCanvas.width,
+            fourViewCanvas.height,
+          );
           for (const view of FOUR_VIEWS) {
             cameraAngle = view.angle;
             updateCamera();
-            renderer.render(model.parent, camera);
-            context.save();
-            context.translate(
-              (view.cell[0] + 0.5) * size,
-              (view.cell[1] + 0.5) * size,
+            renderer.render(scene, camera);
+            fourViewContext.save();
+            fourViewContext.translate(
+              (view.cell[0] + 0.5) * FOUR_VIEW_TILE_SIZE,
+              (view.cell[1] + 0.5) * FOUR_VIEW_TILE_SIZE,
             );
-            context.rotate(view.rotation);
-            context.drawImage(
+            fourViewContext.rotate(view.rotation);
+            fourViewContext.drawImage(
               renderer.domElement,
-              -size / 2,
-              -size / 2,
-              size,
-              size,
+              -FOUR_VIEW_TILE_SIZE / 2,
+              -FOUR_VIEW_TILE_SIZE / 2,
+              FOUR_VIEW_TILE_SIZE,
+              FOUR_VIEW_TILE_SIZE,
             );
-            context.restore();
+            fourViewContext.restore();
           }
-        } catch (error) {
-          console.error("Could not export the four model views.", error);
-          exportStatus.textContent = "Export failed. Please try again.";
-          return;
-        } finally {
-          model.rotation.copy(oldRotation);
           cameraAngle = oldAngle;
-          camera.aspect = oldAspect;
-          camera.updateProjectionMatrix();
-          renderer.setSize(oldSize.x, oldSize.y, false);
           updateCamera();
+        } else {
+          renderer.render(scene, camera);
         }
-        output.toBlob((blob) => {
-          if (!blob) {
-            exportStatus.textContent = "Image export failed. Please try again.";
+        animationFrame = requestAnimationFrame(renderFrame);
+      };
+      renderFrame();
+
+      viewer.addEventListener(
+        "pointerdown",
+        (event) => {
+          if (event.target.closest(".technology-fullscreen-exit")) return;
+          dragging = true;
+          previousPointer = { x: event.clientX, y: event.clientY };
+          viewer.setPointerCapture(event.pointerId);
+        },
+        { signal },
+      );
+      viewer.addEventListener(
+        "pointermove",
+        (event) => {
+          if (!dragging || !previousPointer) return;
+          model.rotation.y += (event.clientX - previousPointer.x) * 0.01;
+          model.rotation.x += (event.clientY - previousPointer.y) * 0.01;
+          previousPointer = { x: event.clientX, y: event.clientY };
+        },
+        { signal },
+      );
+      viewer.addEventListener(
+        "pointerup",
+        () => {
+          dragging = false;
+          previousPointer = null;
+        },
+        { signal },
+      );
+      viewer.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          cameraDistance = Math.min(
+            10,
+            Math.max(3, cameraDistance + Math.sign(event.deltaY) * 0.35),
+          );
+          zoom.value = String(cameraDistance);
+          zoomValue.value = cameraDistance.toFixed(1);
+          updateCamera();
+        },
+        { passive: false, signal },
+      );
+      zoom.addEventListener(
+        "input",
+        () => {
+          cameraDistance = Number(zoom.value);
+          zoomValue.value = cameraDistance.toFixed(1);
+          updateCamera();
+        },
+        { signal },
+      );
+      intensity.addEventListener(
+        "input",
+        () => {
+          lights.forEach((light) => (light.intensity = Number(intensity.value)));
+          ambient.intensity = Number(intensity.value);
+          intensityValue.value = Number(intensity.value).toFixed(1);
+        },
+        { signal },
+      );
+      container.querySelectorAll("[data-light-color]").forEach((input) => {
+        input.addEventListener(
+          "input",
+          () => {
+            lights[Number(input.dataset.lightColor)].color.set(input.value);
+          },
+          { signal },
+        );
+      });
+      rotationControls.forEach(({ input, output }) => {
+        input.addEventListener("input", () => {
+          output.textContent = Number(input.value).toFixed(3);
+        }, { signal });
+      });
+      rotationButton.addEventListener(
+        "click",
+        () => setAutoRotate(!autoRotate),
+        { signal },
+      );
+      container.querySelector("[data-model-file]").addEventListener(
+        "change",
+        async (event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (!file) return;
+          const fileName = file.name.toLowerCase();
+          const groupModule = fileName.endsWith(".js") || fileName.endsWith(".mjs");
+          if (!fileName.endsWith(".glb") && !groupModule) {
+            modelStatus.textContent = "Choose a .glb file or a .js/.mjs Three.js Group module.";
             return;
           }
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = "reshow-hologram-4view.png";
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-          exportStatus.textContent = "Four-view hologram downloaded.";
-        }, "image/png");
-      },
-      { signal },
-    );
-    signal.addEventListener("abort", () => resize.disconnect(), { once: true });
-  } catch (error) {
-    if (active) {
-      viewer.textContent = "The 3D engine could not be loaded. Check your internet connection and refresh this tab.";
-      modelStatus.textContent = error.message;
+          if (!THREE.GLTFLoader) {
+            modelStatus.textContent = "The 3D model loader is unavailable.";
+            return;
+          }
+          modelStatus.textContent = `Loading ${file.name}…`;
+          if (groupModule) {
+            try {
+              const imported = await loadThreeGroupModule(file, THREE);
+              imported.updateMatrixWorld(true);
+              const bounds = new THREE.Box3().setFromObject(imported);
+              const size = bounds.getSize(new THREE.Vector3());
+              const largest = Math.max(size.x, size.y, size.z);
+              if (!Number.isFinite(largest) || largest <= 0) {
+                disposeModel(THREE, imported);
+                modelStatus.textContent = "This model has no displayable geometry.";
+                return;
+              }
+              imported.scale.multiplyScalar(2.8 / largest);
+              imported.updateMatrixWorld(true);
+              imported.position.sub(
+                new THREE.Box3()
+                  .setFromObject(imported)
+                  .getCenter(new THREE.Vector3()),
+              );
+              model.remove(modelContent);
+              disposeModel(THREE, modelContent);
+              modelContent = imported;
+              model.add(modelContent);
+              model.rotation.set(0, 0, 0);
+              targetY = 0;
+              cameraAngle = 0;
+              updateCamera();
+              modelStatus.textContent =
+                `Loaded ${file.name}. The model has been centered and resized.`;
+            } catch (error) {
+              modelStatus.textContent =
+                error instanceof Error && error.message
+                  ? error.message
+                  : "This Three.js Group module could not be loaded.";
+            }
+            return;
+          }
+          const url = URL.createObjectURL(file);
+          new THREE.GLTFLoader().load(
+            url,
+            (gltf) => {
+              URL.revokeObjectURL(url);
+              if (!active) {
+                disposeModel(THREE, gltf.scene);
+                return;
+              }
+              const imported = gltf.scene;
+              imported.updateMatrixWorld(true);
+              const bounds = new THREE.Box3().setFromObject(imported);
+              const size = bounds.getSize(new THREE.Vector3());
+              const largest = Math.max(size.x, size.y, size.z);
+              if (!Number.isFinite(largest) || largest <= 0) {
+                disposeModel(THREE, imported);
+                modelStatus.textContent = "This model has no displayable geometry.";
+                return;
+              }
+              imported.scale.multiplyScalar(2.8 / largest);
+              imported.updateMatrixWorld(true);
+              imported.position.sub(
+                new THREE.Box3()
+                  .setFromObject(imported)
+                  .getCenter(new THREE.Vector3()),
+              );
+              model.remove(modelContent);
+              disposeModel(THREE, modelContent);
+              modelContent = imported;
+              model.add(modelContent);
+              model.rotation.set(0, 0, 0);
+              targetY = 0;
+              cameraAngle = 0;
+              updateCamera();
+              modelStatus.textContent = `Loaded ${file.name}. The model has been centered and resized.`;
+            },
+            undefined,
+            () => {
+              URL.revokeObjectURL(url);
+              if (active)
+                modelStatus.textContent =
+                  "Model loading failed. Check that the file is a valid GLB.";
+            },
+          );
+        },
+        { signal },
+      );
+      container.querySelector("[data-export]").addEventListener(
+        "click",
+        () => {
+          if (!renderer || !camera || !model) {
+            exportStatus.textContent = "The 3D viewer is not ready yet.";
+            return;
+          }
+          const size = FOUR_VIEW_TILE_SIZE;
+          const output = document.createElement("canvas");
+          output.width = size * 3;
+          output.height = size * 3;
+          const context = output.getContext("2d");
+          if (!context) {
+            exportStatus.textContent = "Could not create an image for export.";
+            return;
+          }
+          const oldRotation = model.rotation.clone();
+          const oldAngle = cameraAngle;
+          const oldAspect = camera.aspect;
+          const oldSize = renderer.getSize(new THREE.Vector2());
+          try {
+            context.fillStyle = "#000";
+            context.fillRect(0, 0, output.width, output.height);
+            model.rotation.set(0, 0, 0);
+            renderer.setSize(size, size, false);
+            camera.aspect = 1;
+            camera.updateProjectionMatrix();
+            for (const view of FOUR_VIEWS) {
+              cameraAngle = view.angle;
+              updateCamera();
+              renderer.render(model.parent, camera);
+              context.save();
+              context.translate(
+                (view.cell[0] + 0.5) * size,
+                (view.cell[1] + 0.5) * size,
+              );
+              context.rotate(view.rotation);
+              context.drawImage(
+                renderer.domElement,
+                -size / 2,
+                -size / 2,
+                size,
+                size,
+              );
+              context.restore();
+            }
+          } catch (error) {
+            console.error("Could not export the four model views.", error);
+            exportStatus.textContent = "Export failed. Please try again.";
+            return;
+          } finally {
+            model.rotation.copy(oldRotation);
+            cameraAngle = oldAngle;
+            camera.aspect = oldAspect;
+            camera.updateProjectionMatrix();
+            renderer.setSize(oldSize.x, oldSize.y, false);
+            updateCamera();
+          }
+          output.toBlob((blob) => {
+            if (!blob) {
+              exportStatus.textContent = "Image export failed. Please try again.";
+              return;
+            }
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "reshow-hologram-4view.png";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            exportStatus.textContent = "Four-view hologram downloaded.";
+          }, "image/png");
+        },
+        { signal },
+      );
+      signal.addEventListener("abort", () => resize.disconnect(), { once: true });
+    } catch (error) {
+      if (active) {
+        viewer.textContent = "The 3D engine could not be loaded. Check your internet connection and refresh this tab.";
+        modelStatus.textContent = error.message;
+      }
     }
-  }
+  };
+  void initializeViewer();
 
   const imageInput = container.querySelector("[data-image-file]");
   const generateButton = container.querySelector("[data-generate]");
@@ -936,7 +919,7 @@ export async function render(container, ctx) {
         tripoStatus.textContent = `Task complete${cost}. Loading the GLB…`;
         try {
           await loadTripoModel(url.href);
-          if (active) tripoStatus.textContent = `Task complete${cost}. Download the GLB soon; the link expires.`;
+          if (active) tripoStatus.textContent = `Task complete${cost}. Open 3D model studio to view it. Download the GLB soon; the link expires.`;
         } catch (error) {
           if (active) tripoStatus.textContent = `Task complete${cost}. ${error.message} The download link expires soon.`;
         }
@@ -1151,10 +1134,6 @@ export async function render(container, ctx) {
     { signal },
   );
 
-  const disposeRfid = cloudRfid
-    ? bindCloudRfid(container, ctx, signal)
-    : bindLocalRfid(container, ctx, signal, () => active, confirmAction);
-
   return () => {
     active = false;
     controller.abort();
@@ -1166,313 +1145,4 @@ export async function render(container, ctx) {
       renderer.domElement.remove();
     }
   };
-}
-
-function bindLocalRfid(container, ctx, signal, isActive, confirmAction) {
-  const rfidStatus = container.querySelector("[data-rfid-status]");
-  const rfidMessage = container.querySelector("[data-rfid-message]");
-  const rfidDelivery = container.querySelector("[data-rfid-delivery]");
-  const rfidRefresh = container.querySelector("[data-rfid-refresh]");
-  const rfidReady = container.querySelector("[data-rfid-ready]");
-  const rfidExhibit = container.querySelector("[data-rfid-exhibit]");
-  const rfidExamplePost = container.querySelector("[data-rfid-example-post]");
-  const rfidEventGet = container.querySelector("[data-rfid-event-get]");
-  const rfidEvent = container.querySelector("[data-rfid-event]");
-  const rfidEventMessage = container.querySelector("[data-rfid-event-message]");
-  const rfidTestButtons = container.querySelectorAll("[data-rfid-test-role]");
-  const rfidForm = container.querySelector("[data-rfid-edit]");
-  const rfidSelect = container.querySelector("[data-rfid-edit-exhibit]");
-  const rfidDescription = container.querySelector("[data-rfid-description]");
-  const rfidSave = container.querySelector("[data-rfid-save]");
-  const rfidEditMessage = container.querySelector("[data-rfid-edit-message]");
-  let rfidEditId = null;
-  let rfidProfiles = [];
-  let rfidSaving = false;
-  let rfidDirty = false;
-  let rfidSelectedId = "";
-  let rfidRefreshSequence = 0;
-  let rfidPolling;
-
-  const syncRfidEditor = async (workflow) => {
-    if (rfidSaving) return;
-    if (workflow.phase === "pending_edit" && !workflow.edit_id) {
-      rfidEditId = null;
-      rfidSelect.disabled = true;
-      rfidDescription.disabled = true;
-      rfidSave.disabled = true;
-      rfidEditMessage.textContent = "The local server needs to be restarted before you can select an exhibit.";
-      return;
-    }
-    const editId = workflow.phase === "pending_edit" ? workflow.edit_id : null;
-    if (editId === rfidEditId) return;
-    rfidEditId = editId;
-    rfidSelect.disabled = true;
-    rfidDescription.disabled = true;
-    rfidSave.disabled = true;
-    if (rfidDirty) {
-      rfidEditMessage.textContent = "The RFID session changed. Unsaved text was kept; copy it before starting another edit.";
-      return;
-    }
-    rfidSelect.replaceChildren(new Option(editId ? "Select an exhibit" : "Scan a card first", ""));
-    rfidSelectedId = "";
-    rfidDescription.value = "";
-    if (!editId) return;
-    try {
-      const profiles = await ctx.api.listExhibits();
-      if (!isActive() || rfidEditId !== editId) return;
-      rfidProfiles = profiles;
-      profiles.forEach((profile) => rfidSelect.add(new Option(`${profile.name} (${profile.id})`, profile.id)));
-      rfidSelect.disabled = false;
-      rfidDescription.disabled = false;
-      rfidSave.disabled = false;
-      rfidEditMessage.textContent = profiles.length ? "Select the exhibit to edit." : "No exhibits are available.";
-    } catch (error) {
-      rfidEditId = null;
-      rfidEditMessage.textContent = `Could not load exhibits: ${error.message}`;
-    }
-  };
-
-  const refreshRfidStatus = async () => {
-    const refreshSequence = ++rfidRefreshSequence;
-    try {
-      const response = await fetch("/api/rfid/status", { signal });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-      const workflow = result.data || {};
-      rfidStatus.textContent = JSON.stringify(workflow, null, 2);
-      rfidExhibit.textContent = workflow.exhibit_id || "Waiting for ESP32 scan";
-      rfidMessage.textContent = "ESP32 workflow status is available.";
-      await syncRfidEditor(workflow);
-    } catch (error) {
-      if (error.name === "AbortError") return;
-      rfidStatus.textContent = '{"phase":"unavailable"}';
-      rfidMessage.textContent = error.message;
-    }
-    try {
-      const response = await fetch("/api/rfid/epaper-delivery", { signal });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-      const messages = {
-        not_saved: "No e-paper description has been saved yet.",
-        pending: "Description saved; waiting for the ESP32 and Mega to confirm the display update.",
-        confirmed: "The Mega last confirmed this e-paper update.",
-      };
-      if (!Object.prototype.hasOwnProperty.call(messages, result.data?.state)) throw new Error("Invalid delivery status.");
-      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = messages[result.data.state];
-    } catch (error) {
-      if (error.name === "AbortError") return;
-      if (refreshSequence === rfidRefreshSequence) rfidDelivery.textContent = `E-paper delivery status unavailable: ${error.message}`;
-    }
-    try {
-      // Show the newest card tap automatically so the panel reacts to the reader
-      // without anyone pressing the GET button.
-      const response = await fetch("/api/rfid/device-event", { signal });
-      if (!response.ok) return;
-      const event = await response.json().catch(() => null);
-      if (!event) return;
-      rfidEvent.textContent = JSON.stringify(event, null, 2);
-      rfidEventMessage.textContent = `Card tap received: ${event.uid} (${event.result}).`;
-    } catch (error) {
-      if (error.name === "AbortError") return;
-    }
-  };
-
-  rfidSelect.addEventListener("change", async () => {
-    const nextId = rfidSelect.value;
-    if (rfidDirty) {
-      const editId = rfidEditId;
-      rfidSelect.disabled = true;
-      rfidDescription.disabled = true;
-      rfidSave.disabled = true;
-      try {
-        const discard = await confirmAction(
-          "Discard unsaved description?",
-          "Switching exhibits will discard your unsaved description.",
-          "Discard changes",
-        );
-        if (!isActive() || rfidEditId !== editId) return;
-        if (!discard) {
-          rfidSelect.value = rfidSelectedId;
-          return;
-        }
-      } catch (error) {
-        if (isActive() && rfidEditId === editId) {
-          rfidSelect.value = rfidSelectedId;
-          rfidEditMessage.textContent = `Could not switch exhibits: ${error.message}`;
-        }
-        return;
-      } finally {
-        if (isActive() && rfidEditId === editId) {
-          rfidSelect.disabled = false;
-          rfidDescription.disabled = false;
-          rfidSave.disabled = false;
-        }
-      }
-    }
-    rfidSelectedId = nextId;
-    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
-    rfidDescription.value = profile?.description || "";
-    rfidDirty = false;
-    ctx.setDirty(false);
-    rfidEditMessage.textContent = profile ? "Edit the description, then save." : "Select an exhibit.";
-  }, { signal });
-  rfidDescription.addEventListener("input", () => {
-    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
-    rfidDirty = rfidDescription.value !== (profile?.description || "");
-    ctx.setDirty(rfidDirty);
-  }, { signal });
-  rfidForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const profile = rfidProfiles.find((item) => item.id === rfidSelect.value);
-    const description = rfidDescription.value.trim();
-    if (!profile || !rfidEditId || !/^[\x20-\x7e]{1,180}$/.test(description)) {
-      rfidEditMessage.textContent = "Select an exhibit and enter 1–180 printable English characters.";
-      return;
-    }
-    const editId = rfidEditId;
-    rfidSaving = true;
-    rfidSelect.disabled = true;
-    rfidDescription.disabled = true;
-    rfidSave.disabled = true;
-    let profileSaved = false;
-    try {
-      await ctx.api.saveExhibit({ ...profile, description });
-      profileSaved = true;
-      const response = await fetch("/api/rfid/publish-description", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ edit_id: editId, exhibit_id: profile.id, description }),
-        signal,
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Request failed (HTTP ${response.status}).`);
-      rfidDirty = false;
-      ctx.setDirty(false);
-      rfidEditMessage.textContent = "Description saved on the server. ESP32 will try to update the e-paper automatically.";
-      rfidDelivery.textContent = "Description saved; waiting for the ESP32 and Mega to confirm the display update.";
-      rfidSaving = false;
-      await refreshRfidStatus();
-    } catch (error) {
-      if (error.name !== "AbortError") {
-        rfidEditMessage.textContent = `${profileSaved ? "Exhibit saved locally, but the e-paper update was not saved. " : ""}${error.message}`;
-      }
-    } finally {
-      rfidSaving = false;
-      if (isActive() && rfidEditId === editId) {
-        rfidSelect.disabled = false;
-        rfidDescription.disabled = false;
-        rfidSave.disabled = false;
-      }
-    }
-  }, { signal });
-
-  rfidRefresh.addEventListener("click", refreshRfidStatus, { signal });
-  rfidTestButtons.forEach((button) => {
-    button.addEventListener(
-      "click",
-      async () => {
-        const role = button.dataset.rfidTestRole;
-        rfidTestButtons.forEach((testButton) => { testButton.disabled = true; });
-        rfidEventMessage.textContent = `Sending simulated ${role} card tap…`;
-        try {
-          const response = await fetch("/api/rfid/device-event", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              type: "rfid_event",
-              uid: role === "door" ? "A1B2C3D4" : "AABBCCDD",
-              result: "accepted",
-              exhibit_id: "helmet-001",
-              role,
-            }),
-            signal,
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-          rfidEvent.textContent = JSON.stringify(result, null, 2);
-          await refreshRfidStatus();
-          if (isActive()) rfidEventMessage.textContent = `Simulated ${role} card tap sent. Check the workflow status above.`;
-        } catch (error) {
-          if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
-        } finally {
-          if (isActive()) rfidTestButtons.forEach((testButton) => { testButton.disabled = false; });
-        }
-      },
-      { signal },
-    );
-  });
-  rfidExamplePost.addEventListener(
-    "click",
-    async () => {
-      rfidExamplePost.disabled = true;
-      try {
-        const response = await fetch("/api/rfid/device-event", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "rfid_event",
-            uid: "04833912EE1B90",
-            result: "accepted",
-            exhibit_id: "helmet-001",
-          }),
-          signal,
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-        rfidEvent.textContent = JSON.stringify(result, null, 2);
-        rfidEventMessage.textContent = "Example RFID event POST received. Use GET to retrieve the latest event.";
-      } catch (error) {
-        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
-      } finally {
-        if (isActive()) rfidExamplePost.disabled = false;
-      }
-    },
-    { signal },
-  );
-  rfidEventGet.addEventListener(
-    "click",
-    async () => {
-      rfidEventGet.disabled = true;
-      try {
-        const response = await fetch("/api/rfid/device-event", { signal });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-        rfidEvent.textContent = JSON.stringify(result, null, 2);
-        rfidEventMessage.textContent = "Latest RFID event returned by GET.";
-      } catch (error) {
-        if (error.name !== "AbortError") rfidEventMessage.textContent = error.message;
-      } finally {
-        if (isActive()) rfidEventGet.disabled = false;
-      }
-    },
-    { signal },
-  );
-  rfidReady.addEventListener(
-    "click",
-    async () => {
-    rfidReady.disabled = true;
-    try {
-      const response = await fetch("/api/rfid/staff-ready", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-        signal,
-      });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || `RFID request failed (HTTP ${response.status}).`);
-        rfidStatus.textContent = JSON.stringify(result.data || {}, null, 2);
-        rfidMessage.textContent = "Manual update finished. The workflow is idle.";
-      } catch (error) {
-        if (error.name !== "AbortError") rfidMessage.textContent = error.message;
-      } finally {
-        if (isActive()) rfidReady.disabled = false;
-      }
-    },
-    { signal },
-  );
-
-  void refreshRfidStatus();
-  rfidPolling = window.setInterval(refreshRfidStatus, 3000);
-
-  return () => window.clearInterval(rfidPolling);
 }
