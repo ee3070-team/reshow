@@ -75,3 +75,57 @@ test("profile apply sends the selected version and reuses its command ID after a
   assert.deepEqual(requests[2].payload, { exhibit_id: "sample-exhibit", profile_version: 4 });
   assert.notEqual(requests[2].command_id, requests[1].command_id);
 });
+
+test("assignment recovery checks scope and retries an ambiguous request with the same ID", async () => {
+  const requests = [];
+  const showcase = { showcase_id: "case-1", device_id: "device-1" };
+  const command = { command_id: "assignment-1", type: "assignment", status: "pending",
+    showcase_id: "case-1", device_id: "device-1", execute_before: "2020-01-01T00:00:00Z" };
+  const api = createLiveApi({
+    minimumRequestIntervalMs: 0,
+    getSession: () => ({ id: "recovery-fixture" }),
+    can: permission => permission === "device_commands",
+    request: async (path, options) => {
+      if (path.startsWith("/staff-api/showcases?")) return { items: [showcase], next_cursor: null };
+      if (path === "/staff-api/showcases/case-1") return { item: showcase };
+      if (path === "/staff-api/commands/assignment-1") return { item: command };
+      assert.equal(path, "/staff-api/commands/assignment-1/recovery-requests");
+      requests.push(options.body);
+      if (requests.length === 1) throw new TypeError("Response lost");
+      return { item: { ...command, status: "recovery_pending" } };
+    },
+  });
+
+  await assert.rejects(api.requestAssignmentRecovery("assignment-1"));
+  const result = await api.requestAssignmentRecovery("assignment-1");
+  assert.equal(result.status, "recovery_pending");
+  assert.deepEqual(requests[0], requests[1]);
+  command.device_id = "other-device";
+  await assert.rejects(api.requestAssignmentRecovery("assignment-1"), /selected showcase/);
+  assert.equal(requests.length, 2);
+});
+
+test("RFID Live uses the existing cloud session routes and request bodies", async () => {
+  const calls = [];
+  const expected = { showcase_id: "case-1", edit_id: "edit-1", exhibit_id: "ex-1" };
+  const api = createLiveApi({
+    minimumRequestIntervalMs: 0,
+    getSession: () => ({ id: "rfid-fixture" }),
+    can: permission => permission === "device_commands",
+    request: async (path, options = {}) => {
+      calls.push({ path, ...options });
+      return { data: expected };
+    },
+  });
+  assert.deepEqual(await api.getRfidSession("case-1"), expected);
+  assert.deepEqual(await api.finishRfidSession("case-1", "edit-1", {
+    exhibit_id: "ex-1", description: "Exhibit label",
+  }), expected);
+  assert.deepEqual(await api.finishRfidSession("case-1", "edit-1", null), expected);
+  assert.deepEqual(calls, [
+    { path: "/staff-api/rfid-sessions/case-1" },
+    { path: "/staff-api/rfid-sessions/case-1/publish", method: "POST",
+      body: { edit_id: "edit-1", exhibit_id: "ex-1", description: "Exhibit label" } },
+    { path: "/staff-api/rfid-sessions/case-1/cancel", method: "POST", body: { edit_id: "edit-1" } },
+  ]);
+});

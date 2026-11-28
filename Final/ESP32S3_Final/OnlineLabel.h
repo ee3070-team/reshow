@@ -6,6 +6,11 @@
 #include "DisplayConfig.h"
 #include "LabelLayout.h"
 
+namespace RfidBridge {
+uint32_t megaBootCount();
+bool draw(const String &text, bool status, uint32_t boot);
+}
+
 // Included after API_ORIGIN, DEVICE_ID, EXHIBIT_ID, CA and validIdentifier().
 // All cloud/display state is owned by the Arduino loop, never the UART task.
 namespace OnlineLabel {
@@ -51,7 +56,7 @@ void begin() {
       Serial.println("LABEL: bench test and online mode cannot run together.");
       return;
     }
-    SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
+    if (!RFID_PANEL_ON_MEGA) SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
     LabelLayout layout;
     makeLabelLayout("ReShow display test", "GDEH0154D67 200x200",
                     "Offline wiring test.\nNo AWS acknowledgement is sent.", layout);
@@ -64,7 +69,10 @@ void begin() {
     Serial.println("LABEL: configure SHOWCASE_ID first.");
     return;
   }
-  if (!preferences.begin("reshow-label", false)) return;
+  if (!preferences.begin("reshow-label", false)) {
+    Serial.println("LABEL: cannot open NVS journal; executor stopped.");
+    return;
+  }
   size_t size = preferences.getBytesLength("journal");
   if (size) {
     if (size != sizeof(journal) ||
@@ -133,7 +141,7 @@ int request(const String &path, JsonDocument &document, const char *body = nullp
         deserializeJson(document, response.body, DeserializationOption::NestingLimit(12))) code = -2;
   }
   http.end();
-  Serial.printf("LABEL %s -> %d\n", body ? "ACK" : "GET", code);
+  Serial.printf("COMMAND %s -> %d\n", body ? "ACK" : "GET", code);
   return code;
 }
 
@@ -243,34 +251,57 @@ void execute(JsonObjectConst command) {
       deadline(command["execute_before"]) <= time(nullptr) + 30) return;
   if (*journal.lock && strcmp(lock, journal.lock)) { block("Label lock changed"); return; }
   JsonObjectConst payload = command["payload"];
-  if (strcmp(payload["exhibit_id"] | "", EXHIBIT_ID)) return;
+  if (ONLINE_ASSIGNMENTS_ENABLED) {
+    if (!OnlineAssignment::labelBindingMatches(payload["exhibit_id"] | "",
+                                                payload["assignment_command_id"] | "")) return;
+  } else if (strcmp(payload["exhibit_id"] | "", EXHIBIT_ID)) return;
   if (!validIdentifier(payload["assignment_command_id"] | "") ||
       !payload["draft_version"].is<uint32_t>() || payload["draft_version"].as<uint32_t>() == 0) return;
   JsonObjectConst content = payload["content"];
   LabelLayout layout;
+  char megaText[181];
   bool fits = plainJsonText(content["title"]) && plainJsonText(content["collection"]) &&
-    plainJsonText(content["description"]) && content["image_media_id"].isNull() &&
-    makeLabelLayout(content["title"], content["collection"], content["description"], layout);
+    plainJsonText(content["description"]) && content["image_media_id"].isNull();
+  if (fits) {
+    if (RFID_PANEL_ON_MEGA)
+      fits = formatMegaLabel(content["title"], content["collection"], content["description"],
+                             megaText, sizeof(megaText));
+    else
+      fits = makeLabelLayout(content["title"], content["collection"], content["description"], layout);
+  }
   strlcpy(journal.lock, lock, sizeof(journal.lock));
   strlcpy(journal.command, id, sizeof(journal.command));
   journal.generation = generation;
   journal.phase = EXECUTING;
   if (!saveJournal()) return;  // Fence is durable BEFORE any display side effect.
   if (!fits) {
-    prepareAcknowledgement(false, "Text-only 200x200 label: use printable ASCII, remove image, shorten text to fit.");
+    prepareAcknowledgement(false, "Text-only label: use printable ASCII, remove image, shorten text to fit.");
     return;
   }
-  if (!render(layout)) {
+  bool displayed;
+  if (RFID_PANEL_ON_MEGA) {
+    uint32_t boot = RfidBridge::megaBootCount();
+    displayed = RfidBridge::draw(String(megaText), false, boot) &&
+                RfidBridge::megaBootCount() == boot;
+    lastRefresh = millis();
+    refreshed = true;
+  } else {
+    displayed = render(layout);
+  }
+  if (!displayed) {
     // BUSY faults are ambiguous: pixels might be partially changed. Never claim
     // that the previous label is intact or that the new one has been applied.
     block("E-paper BUSY missing/timeout; display outcome uncertain");
     return;
   }
-  prepareAcknowledgement(true, "GDEH0154D67 full refresh completed; BUSY cycle observed.");
+  prepareAcknowledgement(true, RFID_PANEL_ON_MEGA
+    ? "Mega confirmed GDEH0154D67 full refresh and BUSY cycle."
+    : "GDEH0154D67 full refresh completed; BUSY cycle observed.");
 }
 
 void tick() {
   if (!ready || journal.phase == BLOCKED || (int32_t)(millis() - nextPoll) < 0) return;
+  if (ONLINE_ASSIGNMENTS_ENABLED && !OnlineAssignment::labelReady()) return;
   nextPoll = millis() + LABEL_POLL_MS;
   JsonDocument document;
   if (journal.phase == ACK_PENDING) {

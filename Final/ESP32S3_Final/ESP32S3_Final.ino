@@ -1,4 +1,5 @@
 /*
+
   ReShow: Mega_Final -> UART -> ESP32-S3 -> existing AWS HTTPS API.
   Board: ESP32S3 Dev Module, Espressif Arduino core 3.x (tested with 3.3.12).
   Display libraries: GxEPD2, Adafruit GFX, ArduinoJson 7. See ../README.md.
@@ -79,6 +80,8 @@ struct Sample {
   bool output;
   char timestamp[28];
   char id[64];
+  char exhibit[65];
+  bool identityPresent;
 };
 
 HardwareSerial MegaLink(1);
@@ -121,8 +124,14 @@ bool validIdentifier(const char *value) {
   return true;
 }
 
+namespace OnlineAssignment {
+bool labelReady();
+bool labelBindingMatches(const char *exhibit, const char *assignment);
+}
 #include "OnlineLabel.h"
 #include "RfidBridge.h"
+#include "OnlineAssignment.h"
+#include "OnlineAssignmentRecovery.h"
 
 bool parseFrame(char *line, Sample &s) {
   char *star = strchr(line, '*');
@@ -131,7 +140,8 @@ bool parseFrame(char *line, Sample &s) {
     if (!isxdigit((unsigned char)star[i])) return false;
   uint16_t suppliedCrc = (uint16_t)strtoul(star + 1, nullptr, 16);
   *star = '\0';
-  if (crc16(line) != suppliedCrc || strncmp(line, "V1,", 3) != 0) return false;
+  bool withIdentity = strncmp(line, "V2,", 3) == 0;
+  if (crc16(line) != suppliedCrc || (!withIdentity && strncmp(line, "V1,", 3) != 0)) return false;
 
   int64_t fields[9];
   char *cursor = line + 3;
@@ -143,6 +153,9 @@ bool parseFrame(char *line, Sample &s) {
     fields[i] = strtoll(cursor, &end, 10);
     if (errno == ERANGE || end == cursor) return false;
     if (i < 8) {
+      if (*end != ',') return false;
+      cursor = end + 1;
+    } else if (withIdentity) {
       if (*end != ',') return false;
       cursor = end + 1;
     } else if (*end != '\0') return false;
@@ -165,12 +178,18 @@ bool parseFrame(char *line, Sample &s) {
   s.events = (uint32_t)fields[6];
   s.mode = (uint8_t)fields[7];
   s.output = fields[8] == 1;
+  s.identityPresent = withIdentity;
+  s.exhibit[0] = '\0';
+  if (withIdentity && strcmp(cursor, "-")) {
+    if (!validIdentifier(cursor)) return false;
+    strlcpy(s.exhibit, cursor, sizeof(s.exhibit));
+  }
   return true;
 }
 
 // Separate task drains UART even during DNS, TLS handshakes and HTTP timeouts.
 void receiveTask(void *) {
-  char line[160];
+  char line[256];
   size_t used = 0;
   bool discard = false;
   uint32_t lastByteAt = 0;
@@ -191,6 +210,8 @@ void receiveTask(void *) {
       if (!discard && used && RfidBridge::receive(line)) {
         // Only this task reads MegaLink. HTTP and display work run in loop().
       } else if (!discard && used > 0 && parseFrame(line, s)) {
+        if (!s.identityPresent && !ONLINE_ASSIGNMENTS_ENABLED)
+          strlcpy(s.exhibit, EXHIBIT_ID, sizeof(s.exhibit));
         Serial.printf("Mega seq=%lu temp=%.2fC light=%u distance_mm=%d occupied=%d events=%lu\n",
           (unsigned long)s.sequence, s.temperatureCenti / 100.0, s.lightRaw,
           s.distanceMm, s.occupied, (unsigned long)s.events);
@@ -250,13 +271,13 @@ bool makePayload(const Sample &s, bool status, char *out, size_t capacity) {
       occupancy, distance, mode, s.output ? "On" : "Off", s.mode == 0 ? "false" : "true");
   } else {
     // ReadingInput cannot represent unknown temperature or occupancy. Do not fabricate them.
-    if (s.temperatureCenti == -32768 || s.occupied < 0) return false;
+    if (s.temperatureCenti == -32768 || s.occupied < 0 || !s.exhibit[0]) return false;
     // Keep the actual Mega 10-bit ADC result. The API's 0..4095 bound includes 0..1023.
     n = snprintf(out, capacity,
       "{\"reading_id\":\"r-%s\",\"device_id\":\"%s\",\"exhibit_id\":\"%s\","
       "\"recorded_at\":\"%s\",\"temperature_c\":%s,\"brightness_raw\":%u,"
       "\"occupied\":%s,\"distance_cm\":%s,\"source\":\"device\"}",
-      s.id, DEVICE_ID, EXHIBIT_ID, s.timestamp, temperature, s.lightRaw, occupancy, distance);
+      s.id, DEVICE_ID, s.exhibit, s.timestamp, temperature, s.lightRaw, occupancy, distance);
   }
   return n > 0 && (size_t)n < capacity;
 }
@@ -325,6 +346,8 @@ void uploadPending() {
   String retryAfter = http.header("Retry-After");
   http.end();
   Serial.printf("POST %s -> %d; record %s\n", path, code, pending.id);
+  if (pendingStage == 0 && (code == 200 || code == 201))
+    OnlineAssignmentRecovery::statusUploaded(pending);
   handleUploadResult(code, retryAfter);
 }
 
@@ -424,6 +447,8 @@ void setup() {
     while (true) delay(1000);
   }
   OnlineLabel::begin();
+  OnlineAssignment::begin();
+  OnlineAssignmentRecovery::begin();
   if (RfidBridge::useEspPanel()) SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   Serial.println("ReShow ESP32-S3 ready; Mega RX=GPIO18, UART=9600, USB=115200.");
 }
@@ -474,6 +499,8 @@ void loop() {
     delay(10);
     return;
   }
+  OnlineAssignmentRecovery::tick();
+  OnlineAssignment::tick();
   OnlineLabel::tick();  // UART task continues during HTTPS/full e-paper refresh.
   now = millis();
   if ((int32_t)(now - nextAttempt) < 0) {
@@ -490,7 +517,7 @@ void loop() {
     pendingJson[0] = '\0';
   }
   if (!pendingJson[0] && !makePayload(pending, pendingStage == 0, pendingJson, sizeof(pendingJson))) {
-    Serial.println("Endpoint record skipped: missing required measurement or payload too large.");
+    Serial.println("Endpoint record skipped: missing measurement or exhibit identity, or payload too large.");
     finishStage();
     return;
   }

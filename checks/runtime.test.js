@@ -117,6 +117,16 @@ test("Staff self-account protection uses backend staff_id even when provider sub
   assert.equal(isOwnStaffRecord({}, null), false);
 });
 
+test("RFID is the default section in both workspace modes", async () => {
+  const showcase = await readFile("js/pages/technology-showcase.js", "utf8");
+  assert.match(showcase, /class="active" data-studio-section="rfid" aria-pressed="true"/);
+  assert.match(showcase, /data-studio-panel="model" hidden/);
+  assert.match(showcase, /data-studio-panel="ai" hidden/);
+  const rfidPanels = [...showcase.matchAll(/<section id="studio-rfid"[^>]*>/g)];
+  assert.equal(rfidPanels.length, 1);
+  for (const [panel] of rfidPanels) assert.doesNotMatch(panel, /\bhidden\b/);
+});
+
 test("3D studio supports fullscreen four-view playback", async () => {
   const showcase = await readFile("js/pages/technology-showcase.js", "utf8");
   assert.match(showcase, /data-fullscreen[^>]*>Play 4-view fullscreen/);
@@ -144,23 +154,23 @@ test("studio retains JSON and Tripo generation without Workers AI 3D generation"
   assert.doesNotMatch(showcase, /data-agree-terms|\/api\/technology\/agree-terms/);
   assert.doesNotMatch(showcase, /Gemini|data-gemini/);
   const jsonGenerationStart = showcase.indexOf("generateButton.addEventListener(");
-  const jsonGenerationEnd = showcase.indexOf("const rfidStatus");
+  const jsonGenerationEnd = showcase.indexOf("  return () => {", jsonGenerationStart);
   assert.ok(jsonGenerationStart >= 0 && jsonGenerationEnd > jsonGenerationStart);
   const jsonGeneration = showcase.slice(jsonGenerationStart, jsonGenerationEnd);
   assert.match(jsonGeneration, /data\.append\("api_token", apiToken\)/);
   assert.doesNotMatch(jsonGeneration, /data\.append\("task"/);
 });
 
-test("RFID panel explains door and e-paper card roles", async () => {
+test("RFID preview requires Live for real card sessions", async () => {
   const showcase = await readFile("js/pages/technology-showcase.js", "utf8");
-  assert.match(showcase, /<dt>Door card<\/dt><dd>Opens the door for about 3 seconds/);
-  assert.match(showcase, /<dt>E-paper card<\/dt><dd>Does not open the door/);
-  assert.match(showcase, /updates the e-paper automatically\. No second tap is needed/);
-  assert.match(showcase, /data-rfid-edit/);
-  assert.match(showcase, /data-rfid-description/);
+  assert.match(showcase, /cloudRfid \? bindCloudRfid\(container, ctx, signal\)/);
+  assert.match(showcase, /Sign out and choose Live/);
+  assert.match(showcase, /data-cloud-showcase disabled/);
+  assert.doesNotMatch(showcase, /data-demo-rfid-tap|Simulate .*card/);
+  assert.doesNotMatch(showcase, /\/api\/rfid\//);
 });
 
-test("RFID contract has exactly five routes and combines status reads", async () => {
+test("legacy RFID server retains its five routes", async () => {
   const server = await read("server.py");
   const routes = [...server.matchAll(/if path == "(\/api\/rfid\/[^"]+)":/g)]
     .map(match => match[1]).sort();
@@ -171,8 +181,4 @@ test("RFID contract has exactly five routes and combines status reads", async ()
     "/api/rfid/publish-description",
     "/api/rfid/status",
   ]);
-  const showcase = await read("js/pages/technology-showcase.js");
-  assert.match(showcase, /workflow\.latest_event/);
-  assert.match(showcase, /workflow\.epaper_delivery/);
-  assert.doesNotMatch(showcase, /data-rfid-event-get|GET latest RFID event/);
 });

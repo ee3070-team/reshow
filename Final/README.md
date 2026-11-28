@@ -15,7 +15,44 @@ The merge uses the five sketches under [hardware_updated at 8927fef](https://git
 
 Upload only these two final sketches. The historical sketches are alternatives, not extra Arduino tabs. The original `LM35IC.h` dependency is replaced by direct calibrated ADC conversion; install the libraries listed below. The latest lock sketch's RGB pin layout is the default.
 
-RFID tap events are sent to AWS only; the local `server.py` RFID workflow is disabled. AWS also receives sensor/status records. The merge does not add AWS staff-card synchronization, remote unlock, remote lighting/profile/assignment execution, or a latch-position sensor. Cloud latch status remains unknown (`null`). AWS labels require the ESP-mounted panel. UID matching retains the prototype's access behavior and is not cryptographic card authentication.
+RFID tap events are sent to AWS only; the local `server.py` RFID workflow is disabled. AWS also receives sensor/status records. Cloud assignment and label execution are separate opt-in workflows and require the matching firmware on both boards. The merge does not add AWS staff-card synchronization, remote unlock, remote lighting, or a latch-position sensor. Cloud latch status remains unknown (`null`). Cloud label commands can target a Mega- or ESP-mounted panel. UID matching retains the prototype's access behavior and is not cryptographic card authentication.
+
+The Mega can validate, persist and restore a profile received over its serial
+link. When enabled, the ESP32 polls the existing cloud assignment endpoints,
+durably fences the command and sends a success receipt only after the Mega
+confirms the saved, active profile. Values too close to an ADC boundary for
+reliable floating-point conversion are rejected rather than rounded
+ambiguously. This path still requires physical and cloud integration testing.
+
+## Cloud teammate handoff
+
+The target is the existing [cloud OpenAPI 0.4.1](https://urauw4ckw1.execute-api.us-east-1.amazonaws.com/docs),
+not a request to create new APIs. The earlier five `/api/rfid/...` endpoints
+in [RFID_API_HANDOFF.md](../RFID_API_HANDOFF.md) describe a different local
+workflow; they are not listed in this cloud OpenAPI. Their deployment
+elsewhere has not been verified.
+
+| Purpose | Existing cloud route | Final firmware status |
+| --- | --- | --- |
+| Upload a card event | `POST /api/rfid-events` | Implemented; real device/token access needs testing |
+| Get a pending label | `GET /api/commands?device_id=...&type=label&status=pending` and `GET /api/commands/{command_id}` | Implemented behind `ONLINE_LABELS_ENABLED`; integration and recovery are not verified |
+| Confirm a label | `POST /api/commands/{command_id}/acknowledgements` | Implemented after correlated display completion; not hardware/cloud tested |
+| Get a pending assignment | `GET /api/commands?device_id=...&type=assignment&status=pending` and `GET /api/commands/{command_id}` | Implemented behind `ONLINE_ASSIGNMENTS_ENABLED`; not hardware/cloud tested |
+| Confirm an assignment | `POST /api/commands/{command_id}/acknowledgements` | Implemented only after Mega confirms persistence and activation; not hardware/cloud tested |
+| Recover an unresolved assignment | `GET /api/commands` with `status=recovery_pending`, then `POST /api/commands/{command_id}/recovery-acknowledgements` | Implemented behind `ONLINE_ASSIGNMENTS_ENABLED`; requires updated Mega firmware and has not been hardware/cloud tested |
+
+Confirm with the cloud teammate that the deployed version matches this contract,
+that the showcase is bound to the intended device, and that its hardware bearer
+credential is authorized for RFID and its own assignment/label command reads and
+receipts. Device status for recovery uses `POST /api/device-status`. The device
+uses `source=device`; staff credentials must not be put into firmware. Do not
+send credentials in the handoff. HTTP 401 without a credential only demonstrates
+an authentication response, not that the real credential or end-to-end flow works.
+Assignment and label commands require separate durable generation fences, exact
+reads and correlated device outcomes; see the
+[producer contract](../backend/docs/PRODUCER-RESPONSIBILITIES-v0.4.md).
+An expired pending command keeps its lock and requires recovery, not a late
+success receipt.
 
 ## Install and upload
 
@@ -35,20 +72,20 @@ Select the matching USB port for each upload. Both USB Serial Monitors use **115
 | Reference | Common GND between both boards and peripherals |
 | LM35 and light sensor | Mega A1 and A0 respectively |
 | Ultrasonic sensor | Mega D3 trigger, D2 echo |
-| Two RGB LEDs in R/G/B order | Mega **40/42/38** and **36/34/32**, active high. If your harness follows the original sensor sketch, set `LED_PINS` to `{13,12,11,48,46,44}` in Mega_Final.ino. Set `LED_ACTIVE_HIGH=false` for common-anode wiring. |
+| Two RGB LEDs in R/G/B order | Mega **40/42/38** (proximity / card feedback) and **36/34/32** (light warning), active high. If your harness follows the original sensor sketch, set `LED_PINS` to `{13,12,11,48,46,44}` in Mega_Final.ino. Set `LED_ACTIVE_HIGH=false` for common-anode wiring. |
 | RC522 | Mega D53 SS/SDA, D49 RST, D51 MOSI, D50 MISO, D52 SCK. Use 3.3 V power and level-shift Mega outputs for a 3.3 V reader. |
 | Door relay module | Mega D47 IN, active low by default. Match `doorRelayActiveLow` in RfidAccess.h to the module. Test the relay indicator with the lock load disconnected first. |
 | SSD1306 OLED, 128×64 I²C | Mega D20 SDA, D21 SCL. Addresses 0x3C and 0x3D are probed. Use power and I²C levels rated for your breakout. |
 | Mega-mounted e-paper, RFID-lock wiring | Mega D51 MOSI, D52 SCK, D43 CS, D41 DC, D39 RST, D37 BUSY. RC522 shares SPI and has its own CS. |
 | ESP-mounted e-paper, alternative wiring | ESP GPIO11 MOSI, GPIO12 SCK, GPIO10 CS, GPIO9 DC, GPIO8 RST, GPIO7 BUSY. |
 
-Use the GDEH0154D67 1.54-inch 200×200 B/W panel and its SPI driver board. Use 3.3 V logic or a level-shifting breakout for Mega outputs. Connect a panel to **one** board. Cloud label commands use the ESP-mounted panel. The Mega-mounted panel remains available for its local bench test, but RFID taps no longer trigger the local server/e-paper workflow.
+Use the GDEH0154D67 1.54-inch 200×200 B/W panel and its SPI driver board. Use 3.3 V logic or a level-shifting breakout for Mega outputs. Connect a panel to **one** board. Set `RFID_PANEL_ON_MEGA` in DisplayConfig.h to match its location. RFID taps no longer trigger the local server/e-paper workflow.
 
 ## First test without Wi-Fi
 
 1. Upload both sketches. Open both monitors. Within about ten seconds the Mega should print `To ESP32: V1,...` and the ESP should print `Mega seq=...`. Compare the sequence numbers. With no Wi-Fi credentials the ESP prints `WIFI NOT CONFIGURED`; UART reception continues.
-2. Cover the light sensor and move an object inside 15 cm of the ultrasonic sensor. Check the OLED and the next ESP reading. Auto lighting clears after a second of valid far readings. Send `O`, `F`, and `A` to the **Mega USB** monitor for on, off, and auto.
-3. Tap the configured door card. Expect an accepted door event on both monitors and a roughly three-second relay pulse. Tap an unregistered card and expect a denied event with the relay staying locked. The white e-paper card produces a green flash. The Wi-Fi test card is ignored by the ESP and sends no network request. Card mappings are in rfid_cards.h.
+2. Move an object inside 15 cm of the ultrasonic sensor: the first RGB LED turns white. Auto lighting clears after a second of valid far readings, or immediately on an invalid echo. Send `O`, `F`, and `A` to the **Mega USB** monitor for manual on, off, and auto of this white light. `lighting_output` reports the actual white light, not warning or card feedback. The second RGB LED turns yellow when light is below its configured range, red when above it, and off when in range. It responds on the next sensor reading, without waiting for the warning hold. The sensor is normally read once per second; OLED warnings still use the configured hold. Without a cloud profile, the default limits and five-second warning hold apply. Check the OLED and the next ESP reading.
+3. Tap the configured door card. Expect an accepted door event on both monitors and a roughly three-second relay pulse. Tap an unregistered card and expect a denied event with the relay staying locked. An accepted e-paper card makes the first LED green for one second, temporarily replacing white; the second LED keeps showing any light warning. This is card feedback, not confirmation of a panel refresh. The Wi-Fi test card is ignored by the ESP and sends no network request. Card mappings are in rfid_cards.h.
 4. To exercise EEPROM learning, scan a spare unlisted card and send `M` for an edit card or `L` for a door card on Mega USB. Reset, rescan, and check the role. `D` lists roles. `X` clears all learned cards. Cards with a fixed role, including the explicitly denied blue tag, are configured in rfid_cards.h.
 5. For a Mega-mounted panel, send `P` to the Mega USB monitor. Expect the bench text and `Panel OK`. For an ESP-mounted panel, set `EPAPER_BENCH_TEST=true` with `ONLINE_LABELS_ENABLED=false`, upload, and inspect the printed BUSY result and the image. Restore the flag after the test. Both tests replace the current panel image. Space full refreshes at least three minutes apart.
 
@@ -84,13 +121,73 @@ retried. A tap received when it is full generates a serial error; a reboot
 loses queued events. A rejected event stays at the head of the queue for
 operator investigation, so later events may fill the queue. Cloud event
 logging does not control the Mega relay; cloud label commands are a separate
-optional workflow for the ESP-mounted panel.
+optional workflow.
+
+## Cloud assignment and Mega e-paper
+
+`ONLINE_ASSIGNMENTS_ENABLED` defaults to `false`. To bench-test a fresh
+assignment, configure the matching `SHOWCASE_ID`, `DEVICE_ID`, Wi-Fi and
+hardware token, enable the flag, then compile and upload **both** final
+sketches. Confirm the two-way UART wiring and permissions first. The ESP prints
+`ASSIGNMENT: cloud acknowledged the Mega profile.` only after receiving an
+accepted cloud receipt. A successful compile or upload is not an end-to-end
+test. Check the actual Mega warning limits and the webpage before relying on
+them.
+
+An existing pending command may have expired while the device was offline.
+Do not submit a late success or repeatedly create new assignments. An expired
+or recovery-pending command blocks the executor. The local website Activity
+page can request recovery using the existing staff API; this does not release
+the lock. Website changes must be deployed before appearing on the live site.
+
+Assignment recovery is a separate opt-in: `ONLINE_ASSIGNMENT_RECOVERY_ENABLED`
+defaults to `false` and must remain disabled until an isolated hardware/backend
+test is completed. After both boards have the matching firmware, the ESP persists the cloud fence
+and asks the Mega to verify the exact profile, or to confirm that its intact
+profile store is older or empty. It then uses a fresh post-fence device status
+and submits the corresponding recovery receipt. This assumes the same Mega and
+its intact EEPROM; replacing the board or erasing its store destroys evidence
+needed for reconciliation. An unknown result, invalid storage, changed binding,
+or rejected receipt stays blocked. Do not erase fences blindly. This recovery
+path has not been compiled or tested against hardware or the deployed backend.
+
+Profiles use nonnegative centi-degree temperature limits and 10-bit light ADC
+limits. The local caution and daily swing warnings are disabled while a cloud
+profile is active. The Mega emits the actual exhibit identity with each
+subsequent measurement; when assignments are enabled, old-format samples with
+unknown exhibit identity are omitted from historical readings instead of being
+relabeled. Device status is still uploaded.
+
+The cloud label bridge is disabled until configured. Keep `RFID_PANEL_ON_MEGA=true`,
+configure the matching `SHOWCASE_ID`, `DEVICE_ID`, `EXHIBIT_ID`, Wi-Fi and
+hardware token, then enable `ONLINE_LABELS_ENABLED` and upload the ESP sketch.
+The backend must authorize the hardware token for command reads and receipts,
+bind the device to the showcase and already have a confirmed exhibit assignment.
+When both cloud flags are enabled, the label must match the assignment verified
+by the Mega. A pre-existing assignment not recorded in this ESP journal needs
+device-side reconciliation; it must not be assumed from a hard-coded exhibit ID.
+
+In the Live website, sign in as Operator or Administrator, open RFID & epaper
+and select the showcase under RFID and e-paper. Tap a door or e-paper card,
+enter a short description and publish. The cloud queues a label command; the
+ESP validates it, sends the title, optional collection and description to the
+Mega, then reports success only after the Mega confirms its display BUSY cycle.
+The entire text including ` | ` separators must fit 180 printable ASCII
+characters; images are unsupported. For a registered `reshow-mega-01` device
+the backend enforces that limit too.
+
+Full refreshes have a three-minute cooldown, including after an ESP reboot.
+On a timeout, Mega restart or display BUSY fault the result is uncertain: the
+ESP blocks further label execution and reports the error on Serial Monitor.
+Inspect the physical panel and reconcile the command with the backend owner;
+do not erase the journal or assert a success receipt. This path requires the
+two-way UART wiring above and still needs an end-to-end hardware/cloud test.
 
 ## Optional AWS tests
 
 Set the device token in local_config.h. Confirm `DEVICE_ID` and `EXHIBIT_ID` in ESP32S3_Final.ino with the backend owner, then enable `HARDWARE_UPLOADS_ENABLED`. The default exhibit is `helmet-001` from the RFID prototype. Wait for Wi-Fi and NTP. Expect HTTP 200/201 for device status and for readings with valid temperature and occupancy.
 
-For an ESP-mounted label, configure `SHOWCASE_ID`, select the ESP panel and enable `ONLINE_LABELS_ENABLED` in DisplayConfig.h. The device token needs command read and acknowledgement permissions as well as a confirmed exhibit assignment. Send a short text-only label in the website's Live workspace. The first refresh can take three minutes after boot. If the executor reports a blocked or uncertain outcome, inspect the physical display and reconcile the persisted command with the backend owner before changing the journal. The original [display and recovery notes](https://github.com/ee3070-team/reshow/blob/8927fef4f8325418b7973ef6d7b44fe3c5184822/hardware_updated/DISPLAYS.md) describe the AWS command protocol.
+For an ESP-mounted label, set `RFID_PANEL_ON_MEGA=false` and follow the same cloud configuration steps. The first refresh can take three minutes after boot. The original [display and recovery notes](https://github.com/ee3070-team/reshow/blob/8927fef4f8325418b7973ef6d7b44fe3c5184822/hardware_updated/DISPLAYS.md) describe the AWS command protocol.
 
 ## Wi-Fi v2 troubleshooting
 

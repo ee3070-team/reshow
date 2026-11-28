@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 // 200x200 panel, 6x8 built-in GFX font. One shared layout for validation/drawing.
@@ -24,6 +25,21 @@ inline bool labelAscii(const char *text, size_t maximum, bool required) {
     if (c > 32) visible = true;
   }
   return !required || visible;
+}
+
+inline bool formatMegaLabel(const char *title, const char *collection,
+                            const char *description, char *out, size_t capacity) {
+  if (!title || !collection || !description || !out || capacity == 0 ||
+      !*title || !*description) return false;
+  const char *fields[] = {title, collection, description};
+  for (const char *text : fields) {
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+      if (*p < 32 || *p > 126) return false;
+  }
+  int n = *collection
+    ? snprintf(out, capacity, "%s | %s | %s", title, collection, description)
+    : snprintf(out, capacity, "%s | %s", title, description);
+  return n > 0 && n <= 180 && (size_t)n < capacity;
 }
 
 inline bool appendLabelText(LabelLayout &layout, const char *text) {

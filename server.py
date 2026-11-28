@@ -775,7 +775,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
     def send_head(self):
         path = unquote(urlsplit(self.path).path)
         parts = Path(path.lstrip("/")).parts
-        allowed = path in ("/", "/index.html", "/release.json") or (
+        allowed = path in ("/", "/index.html", "/release.json", "/auth/callback.html") or (
             parts and parts[0] in ("css", "js", "assets")
             and not any(part.startswith(".") for part in parts)
         )

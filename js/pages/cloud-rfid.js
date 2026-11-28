@@ -19,6 +19,7 @@ export function bindCloudRfid(container, ctx, signal) {
   let dirty = false;
   let draftEditId;
   let pending = false;
+  let revision = 0;
 
   function enableControls() {
     const canEdit = !busy && Boolean(session?.edit_id);
@@ -56,12 +57,13 @@ export function bindCloudRfid(container, ctx, signal) {
   async function refresh() {
     if (pending || busy || !showcase.value || signal.aborted) return;
     const id = showcase.value;
+    const requestRevision = revision;
     pending = true;
     try {
       const next = await ctx.api.getRfidSession(id, { signal });
-      if (!signal.aborted && id === showcase.value && !busy) showSession(next);
+      if (!signal.aborted && id === showcase.value && !busy && requestRevision === revision) showSession(next);
     } catch (error) {
-      if (!signal.aborted && id === showcase.value && !busy) {
+      if (!signal.aborted && id === showcase.value && !busy && requestRevision === revision) {
         session = null;
         state.textContent = error.message;
         delivery.textContent = "";
@@ -80,6 +82,7 @@ export function bindCloudRfid(container, ctx, signal) {
       return;
     }
     const label = publish ? { exhibit_id: session.exhibit_id, description: text } : null;
+    revision++;
     busy = true;
     enableControls();
     try {
@@ -109,6 +112,7 @@ export function bindCloudRfid(container, ctx, signal) {
     enableControls();
   }, { signal });
   showcase.addEventListener("change", () => {
+    revision++;
     session = null;
     state.textContent = "Loading RFID session…";
     delivery.textContent = message.textContent = "";
@@ -120,7 +124,6 @@ export function bindCloudRfid(container, ctx, signal) {
     void finish(true);
   }, { signal });
   cancel.addEventListener("click", () => void finish(false), { signal });
-
   ctx.api.getShowcases().then((items) => {
     if (signal.aborted) return;
     showcase.replaceChildren(...items.map(({ id, name }) => new Option(name, id)));

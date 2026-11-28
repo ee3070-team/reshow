@@ -43,11 +43,69 @@ void checkEpaperResponse() {
   static uint8_t receivedLength = 0;
   static uint8_t nextChunk = 0;
   static bool receiving = false;
+  static char profile[201];
+  static uint32_t profileTransfer = 0;
+  static uint8_t profileExpected = 0, profileReceived = 0, profileChunk = 0;
+  static bool profileReceiving = false;
   while (Serial2.available()) {
     char c = Serial2.read();
     if (c == '\n') {
       line[length] = '\0';
-      if (!overflow && strncmp(line, "EPD:", 4) == 0) {
+      if (!overflow && strncmp(line, "PRO:", 4) == 0) {
+        char *end;
+        unsigned long id = strtoul(line + 4, &end, 10);
+        if (end != line + 4 && *end == ':' && id > 0) {
+          char *command = end + 1;
+          char *separator = strchr(command, ':');
+          if (separator) *separator++ = '\0';
+          bool accepted = false;
+          if (!strcmp(command, "H") && !separator) {
+            Serial2.println(F("EPD_READY"));
+            accepted = true;
+          } else if (!strcmp(command, "B") && separator) {
+            unsigned long size = strtoul(separator, &end, 10);
+            profileReceiving = *separator && !*end && size >= 1 && size <= 200;
+            if (profileReceiving) {
+              profileTransfer = (uint32_t)id;
+              profileExpected = (uint8_t)size;
+              profileReceived = profileChunk = 0;
+              accepted = true;
+            }
+          } else if (profileReceiving && id == profileTransfer &&
+                     (!strcmp(command, "E") || !strcmp(command, "Q") ||
+                      !strcmp(command, "N")) && separator) {
+            bool hex = strlen(separator) == 4;
+            for (uint8_t i = 0; hex && i < 4; ++i)
+              hex = isxdigit((unsigned char)separator[i]);
+            profile[profileReceived] = '\0';
+            accepted = profileReceived == profileExpected && hex &&
+                       crc16(profile) == (uint16_t)strtoul(separator, NULL, 16) &&
+                       receiveCloudProfile(profile, !strcmp(command, "Q"), !strcmp(command, "N"));
+            profileReceiving = false;
+          } else if (profileReceiving && id == profileTransfer && separator) {
+            unsigned long chunk = strtoul(command, &end, 10);
+            size_t size = strlen(separator);
+            if (*command && !*end && chunk == profileChunk && size > 0 && size <= 24 &&
+                profileReceived + size <= profileExpected) {
+              memcpy(profile + profileReceived, separator, size);
+              profileReceived += size;
+              ++profileChunk;
+              accepted = true;
+            }
+          }
+          char reply[32], checksum[5];
+          int replyLength = snprintf(reply, sizeof(reply), "%s:%lu:%s",
+                                     accepted ? "PRO_ACK" : "PRO_ERR", id, command);
+          if (replyLength > 0 && (size_t)replyLength < sizeof(reply)) {
+            snprintf(checksum, sizeof(checksum), "%04X", (unsigned int)crc16(reply));
+            Serial2.print(reply);
+            Serial2.print('*');
+            Serial2.println(checksum);
+          } else {
+            Serial.println(F("PROFILE ERROR: invalid reply command."));
+          }
+        }
+      } else if (!overflow && strncmp(line, "EPD:", 4) == 0) {
         const char *phase = line + 4;
         if (strcmp(phase, "idle") == 0 || strcmp(phase, "pending_edit") == 0 ||
             strcmp(phase, "ready_to_confirm") == 0) {

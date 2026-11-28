@@ -21,6 +21,7 @@ constexpr uint32_t POLL_MS = 10000;
 uint32_t nextPoll = 0, nextEvent = 0, lastDraw = 0, displayedBoot = 0;
 uint32_t nextCloudEvent = 0, cloudRetryMs = 2000, cloudSequence = 0;
 uint16_t transfer = 0;
+uint32_t profileTransfer = 0;
 bool drew = false, cardRequested = false;
 String displayed;
 
@@ -39,6 +40,10 @@ bool useEspPanel() {
          !ONLINE_LABELS_ENABLED && !EPAPER_BENCH_TEST;
 }
 
+uint32_t megaBootCount() {
+  return megaBoots.load();
+}
+
 bool cloudConfigured() {
   return CLOUD_RFID_ENABLED && validIdentifier(DEVICE_ID) &&
          strlen(DEVICE_BEARER_TOKEN) > 0 &&
@@ -46,6 +51,7 @@ bool cloudConfigured() {
 }
 
 void begin() {
+  profileTransfer = esp_random();
   events = xQueueCreate(12, sizeof(Event));
   replies = xQueueCreate(8, sizeof(Reply));
   if (CLOUD_RFID_ENABLED) cloudEvents = xQueueCreate(11, sizeof(CloudEvent)); // plus one in-flight tap
@@ -83,11 +89,12 @@ void queueCloudEvent(JsonDocument &doc) {
 // Called only on the UART task, after the whole bounded line has arrived.
 bool receive(const char *line) {
   if (!strcmp(line, "EPD_READY")) { ++megaBoots; return true; }
-  if (!strncmp(line, "EPD_ACK:", 8) || !strncmp(line, "EPD_ERR:", 8)) {
+  if (!strncmp(line, "EPD_ACK:", 8) || !strncmp(line, "EPD_ERR:", 8) ||
+      !strncmp(line, "PRO_ACK:", 8) || !strncmp(line, "PRO_ERR:", 8)) {
     Reply reply = {};
     if (strlen(line) < sizeof(reply.text) && replies) {
       strlcpy(reply.text, line, sizeof(reply.text));
-      if (!xQueueSend(replies, &reply, 0)) Serial.println("E-paper reply queue full.");
+      if (!xQueueSend(replies, &reply, 0)) Serial.println("Mega reply queue full.");
     }
     return true;
   }
@@ -234,10 +241,19 @@ void tickCloud() {
                 code, reason, event.id, (unsigned long)waitMs);
 }
 
-bool sendPart(uint16_t id, const String &command, const String &payload, uint32_t boot) {
+bool sendPart(uint32_t id, const String &command, const String &payload, uint32_t boot,
+              bool profile = false) {
   String suffix = String(id) + ":" + command;
-  String expected = "EPD_ACK:" + suffix, error = "EPD_ERR:" + suffix;
-  MegaLink.print("EPD:" + suffix);
+  String prefix = profile ? "PRO" : "EPD";
+  String expected = prefix + "_ACK:" + suffix, error = prefix + "_ERR:" + suffix;
+  if (profile) {
+    char checksum[6];
+    snprintf(checksum, sizeof(checksum), "*%04X", (unsigned int)crc16(expected.c_str()));
+    expected += checksum;
+    snprintf(checksum, sizeof(checksum), "*%04X", (unsigned int)crc16(error.c_str()));
+    error += checksum;
+  }
+  MegaLink.print(prefix + ":" + suffix);
   if (payload.length()) MegaLink.print(":" + payload);
   MegaLink.println();
   uint32_t started = millis();
@@ -248,8 +264,41 @@ bool sendPart(uint16_t id, const String &command, const String &payload, uint32_
       if (error == reply.text) break;
     }
   }
-  Serial.printf("Mega display did not confirm %s\n", suffix.c_str());
+  Serial.printf("Mega %s did not confirm %s\n", profile ? "profile" : "display", suffix.c_str());
   return false;
+}
+
+bool sendProfile(const String &data, uint32_t boot, time_t executeBefore, bool verifyOnly = false,
+                 bool verifyNotApplied = false) {
+  if (!replies || !boot || megaBoots.load() != boot || !data.length() ||
+      data.length() > 200 || executeBefore <= time(nullptr) + 30) {
+    Serial.println("PROFILE: transfer unavailable, invalid or too close to deadline.");
+    return false;
+  }
+  for (size_t i = 0; i < data.length(); ++i) {
+    if (data[i] < 32 || data[i] > 126) {
+      Serial.println("PROFILE: invalid transfer character.");
+      return false;
+    }
+  }
+  if (++profileTransfer == 0) ++profileTransfer;
+  if (!sendPart(profileTransfer, "B", String(data.length()), boot, true)) return false;
+  for (size_t offset = 0; offset < data.length(); offset += 24) {
+    if (executeBefore <= time(nullptr) + 30 ||
+        !sendPart(profileTransfer, String(offset / 24), data.substring(offset, offset + 24), boot, true)) {
+      Serial.println("PROFILE: transfer interrupted or deadline too close.");
+      return false;
+    }
+  }
+  if (executeBefore <= time(nullptr) + 30 || megaBoots.load() != boot) {
+    Serial.println("PROFILE: final transfer blocked by deadline or Mega reset.");
+    return false;
+  }
+  char checksum[5];
+  snprintf(checksum, sizeof(checksum), "%04X", (unsigned int)crc16(data.c_str()));
+  return sendPart(profileTransfer, verifyNotApplied ? "N" : (verifyOnly ? "Q" : "E"),
+                  String(checksum), boot, true) &&
+         megaBoots.load() == boot;
 }
 
 bool draw(const String &text, bool status, uint32_t boot) {

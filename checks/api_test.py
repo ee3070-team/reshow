@@ -480,6 +480,30 @@ class LocalHttpsTests(unittest.TestCase):
             self.assertFalse(thread.is_alive())
 
 
+class LocalCallbackTests(unittest.TestCase):
+    def test_callback_is_served_without_exposing_other_auth_files(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.StudioHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
+            for path, expected in (
+                ("/auth/callback.html?code=test&state=test", 200),
+                ("/auth/private.html", 404),
+                ("/auth/../server.py", 404),
+                ("/server.py", 404),
+            ):
+                connection.request("GET", path)
+                response = connection.getresponse()
+                self.assertEqual(response.status, expected, path)
+                response.read()
+            connection.close()
+        finally:
+            httpd.shutdown()
+            thread.join(timeout=5)
+            httpd.server_close()
+
+
 class LocalRfidDeviceEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -17,7 +17,7 @@ import {
 } from "../ui.js";
 
 export async function render(container, ctx) {
-  const snapshot = await ctx.api.getSnapshot({ include: ["exhibits"] });
+  let snapshot = await ctx.api.getSnapshot({ include: ["exhibits", "operations"] });
   const exhibits = snapshot.exhibits;
   const live = ctx.api.getMode?.() === "live";
   const today = dateKey(snapshot.now);
@@ -41,8 +41,12 @@ export async function render(container, ctx) {
     results.innerHTML =
       '<div class="loading-state" role="status"><div class="spinner"></div>Loading activity…</div>';
     try {
-      const data = await ctx.api.getActivity(filters);
+      const [data, current] = await Promise.all([
+        ctx.api.getActivity(filters),
+        live ? ctx.api.getSnapshot({ include: ["exhibits", "operations"] }) : snapshot,
+      ]);
       if (disposed || run !== sequence) return;
+      snapshot = current;
       draw(data);
     } catch (error) {
       if (!disposed)
@@ -52,7 +56,12 @@ export async function render(container, ctx) {
   function draw(data) {
     const s = data.summary;
     const shown = data.events.filter((e) => !eventType || e.type === eventType);
-    results.innerHTML = `<div class="stack"><div class="metrics">${metric("Proximity events", (live || s.expectedIntervals) ? (s.proximityEvents ?? "—") : "—", "Recorded events in selected period", "activity")}${metric("Occupied duration", s.occupiedSeconds == null || (!live && !s.expectedIntervals) ? "—" : duration(s.occupiedSeconds), live ? "Recorded duration through cutoff" : "Completed intervals only", "clock")}${metric("Environmental warnings", s.warnings, "Temperature and brightness", "warning", "amber")}${metric("Data coverage", s.coveragePercent == null ? "—" : `${s.coveragePercent}%`, live ? "Time-based proximity coverage" : `${s.missingIntervals} missing intervals · ${s.recordedIntervals}/${s.expectedIntervals} recorded`, "database")}</div>${sensorObservations(data)}${activityNotes(data)}<div class="activity-columns"><section class="card"><div class="card-head"><h2>${icon("activity")}Activity heatmap</h2><select data-measure aria-label="Heatmap measure" style="width:180px">${live ? `<option value="occupiedSamples" ${measure === "occupiedSamples" ? "selected" : ""}>Occupied sensor samples</option>` : ""}<option value="occupiedSeconds" ${measure === "occupiedSeconds" ? "selected" : ""}>Occupied duration</option><option value="events" ${measure === "events" ? "selected" : ""}>Event frequency</option></select></div><p class="small-text">${measure === "occupiedSamples" ? "Occupied sensor samples" : measure === "events" ? "Proximity events" : "Occupied minutes"} ${live ? "per hour through captured cutoff · API records" : "per completed hour · illustrative data"}</p>${heatmap(data.intervals, measure)}<p class="footnote">${live ? "Partial buckets show recorded lower bounds. Future time is outside evaluated coverage." : "Missing intervals are excluded from activity totals. The open hour and future hours are not counted yet."}</p></section><section class="card"><h2 class="section-title">${icon("clock")}Reading the activity</h2><div class="reading-item">${icon("activity")}<div><h3>Proximity events</h3><p>A new event starts when the detection zone becomes occupied.</p></div></div><div class="reading-item">${icon("clock")}<div><h3>Occupied duration</h3><p>Time with an object detected in the zone. It does not measure attention.</p></div></div><div class="reading-item">${icon("database")}<div><h3>Missing data</h3><p>No retained readings; activity is unknown. White outlined cells indicate confirmed zero activity.</p></div></div><p class="footnote">Groups or stationary objects may produce one continuous event.</p></section></div><section class="card"><div class="card-head"><h2>${icon("report")}Event log</h2><select data-event-type aria-label="Event type" style="width:195px"><option value="">All event types</option>${[
+    const expired = live && ctx.api.can("operate") && snapshot.operations.find(
+      (op) => op.type === "assignment" && op.status === "pending" &&
+        op.executeBefore && Date.parse(op.executeBefore) <= Date.now(),
+    );
+    const recovery = expired ? `<section class="card"><h2>Expired assignment</h2><p>The command stays locked until the device confirms its actual outcome. Requesting recovery does not unlock it. Recovery requires updated ESP and Mega firmware with recovery enabled after testing; do not erase their stored state.</p><button class="button" type="button" data-recovery>Request recovery</button><p class="muted small-text" data-recovery-status role="status"></p></section>` : "";
+    results.innerHTML = `<div class="stack">${recovery}<div class="metrics">${metric("Proximity events", (live || s.expectedIntervals) ? (s.proximityEvents ?? "—") : "—", "Recorded events in selected period", "activity")}${metric("Occupied duration", s.occupiedSeconds == null || (!live && !s.expectedIntervals) ? "—" : duration(s.occupiedSeconds), live ? "Recorded duration through cutoff" : "Completed intervals only", "clock")}${metric("Environmental warnings", s.warnings, "Temperature and brightness", "warning", "amber")}${metric("Data coverage", s.coveragePercent == null ? "—" : `${s.coveragePercent}%`, live ? "Time-based proximity coverage" : `${s.missingIntervals} missing intervals · ${s.recordedIntervals}/${s.expectedIntervals} recorded`, "database")}</div>${sensorObservations(data)}${activityNotes(data)}<div class="activity-columns"><section class="card"><div class="card-head"><h2>${icon("activity")}Activity heatmap</h2><select data-measure aria-label="Heatmap measure" style="width:180px">${live ? `<option value="occupiedSamples" ${measure === "occupiedSamples" ? "selected" : ""}>Occupied sensor samples</option>` : ""}<option value="occupiedSeconds" ${measure === "occupiedSeconds" ? "selected" : ""}>Occupied duration</option><option value="events" ${measure === "events" ? "selected" : ""}>Event frequency</option></select></div><p class="small-text">${measure === "occupiedSamples" ? "Occupied sensor samples" : measure === "events" ? "Proximity events" : "Occupied minutes"} ${live ? "per hour through captured cutoff · API records" : "per completed hour · illustrative data"}</p>${heatmap(data.intervals, measure)}<p class="footnote">${live ? "Partial buckets show recorded lower bounds. Future time is outside evaluated coverage." : "Missing intervals are excluded from activity totals. The open hour and future hours are not counted yet."}</p></section><section class="card"><h2 class="section-title">${icon("clock")}Reading the activity</h2><div class="reading-item">${icon("activity")}<div><h3>Proximity events</h3><p>A new event starts when the detection zone becomes occupied.</p></div></div><div class="reading-item">${icon("clock")}<div><h3>Occupied duration</h3><p>Time with an object detected in the zone. It does not measure attention.</p></div></div><div class="reading-item">${icon("database")}<div><h3>Missing data</h3><p>No retained readings; activity is unknown. White outlined cells indicate confirmed zero activity.</p></div></div><p class="footnote">Groups or stationary objects may produce one continuous event.</p></section></div><section class="card"><div class="card-head"><h2>${icon("report")}Event log</h2><select data-event-type aria-label="Event type" style="width:195px"><option value="">All event types</option>${[
       ["proximity", "Proximity"],
       ["sensor", "Sensor occupancy"],
       ["temperature", "Temperature warning"],
@@ -84,6 +93,19 @@ export async function render(container, ctx) {
       measure = e.target.value;
       draw(data);
     };
+    results.querySelector("[data-recovery]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const status = results.querySelector("[data-recovery-status]");
+      button.disabled = true;
+      status.textContent = "Requesting recovery; the command will remain locked.";
+      try {
+        await ctx.api.requestAssignmentRecovery(expired.id);
+        status.textContent = "Recovery requested. Waiting for device reconciliation; the command remains locked.";
+      } catch (error) {
+        status.textContent = `Recovery request failed: ${error.message}`;
+        button.disabled = false;
+      }
+    });
     results.querySelector("[data-event-type]").onchange = (e) => {
       eventType = e.target.value;
       limit = 12;

@@ -67,8 +67,8 @@ const pages = {
     render: liveDemo,
   },
   technology: {
-    title: "3D & AI studio",
-    subtitle: "Preview 3D models and generate exhibit details from an image",
+    title: "RFID & epaper",
+    subtitle: "Manage RFID and e-paper, with optional 3D and AI tools",
     icon: "cube",
     render: technologyShowcase,
   },

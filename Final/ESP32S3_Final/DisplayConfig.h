@@ -1,11 +1,15 @@
 #pragma once
 
 // Enable once the backend grants command and receipt access for this device.
-constexpr bool ONLINE_LABELS_ENABLED = false;
+constexpr bool ONLINE_LABELS_ENABLED = true;
+// Enable only after both boards have the matching firmware and cloud permissions.
+constexpr bool ONLINE_ASSIGNMENTS_ENABLED = true;
+// Enable only after verifying recovery on isolated hardware and backend data.
+constexpr bool ONLINE_ASSIGNMENT_RECOVERY_ENABLED = true;
 // Offline wiring test: replaces the panel image once at boot, never sends an ACK.
 // Use only on the bench with ONLINE_LABELS_ENABLED=false. Restore false afterwards.
 constexpr bool EPAPER_BENCH_TEST = false;
-const char SHOWCASE_ID[] = "REPLACE_SHOWCASE_ID";
+const char SHOWCASE_ID[] = "showcase-reshow-mega-01";
 
 // GDEH0154D67, 1.54-inch 200x200 B/W, Waveshare SPI driver board.
 // ESP32-S3 GPIO numbers (not board silkscreen Dx aliases). UART stays on 18/17.

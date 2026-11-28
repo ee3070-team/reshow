@@ -17,10 +17,15 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include "WarningState.h"
+#include "ProfileStore.h"
 #include "RfidAccess.h"
+
+bool receiveCloudProfile(const char *text, bool verifyOnly, bool verifyNotApplied = false);
+uint16_t crc16(const char *text);
 #include "MegaPanel.h"
 
 const uint8_t OLED_ADDRESS = 0x3C;  // Set 0x3D if that is your module's address.
@@ -66,6 +71,103 @@ uint32_t lastEnvironment = 0;
 uint32_t lastSonar = 0;
 uint32_t lastSend = 0;
 uint32_t dayStarted = 0;
+bool profileStorageHealthy = true;
+ProfileStore::Profile activeProfile = {};
+bool activeProfileValid = false;
+
+bool profileNumber(const char *text, uint32_t maximum, uint32_t &value) {
+  if (!*text) return false;
+  value = 0;
+  for (; *text; ++text) {
+    if (*text < '0' || *text > '9') return false;
+    uint8_t digit = (uint8_t)(*text - '0');
+    if (value > (maximum - digit) / 10) return false;
+    value = value * 10 + digit;
+  }
+  return value <= maximum;
+}
+
+bool receiveCloudProfile(const char *text, bool verifyOnly, bool verifyNotApplied) {
+  if (!profileStorageHealthy || strlen(text) > 200) return false;
+  char data[201];
+  strcpy(data, text);
+  char *parts[9];
+  char *cursor = data;
+  for (uint8_t i = 0; i < 9; ++i) {
+    parts[i] = cursor;
+    char *comma = strchr(cursor, ',');
+    if (i == 8) {
+      if (comma) return false;
+    } else {
+      if (!comma) return false;
+      *comma = '\0';
+      cursor = comma + 1;
+    }
+  }
+  uint32_t values[7];
+  if (!profileNumber(parts[0], 999999999UL, values[0]) ||
+      !profileNumber(parts[1], 2147483647UL, values[1]) ||
+      !profileNumber(parts[4], 12500, values[2]) ||
+      !profileNumber(parts[5], 12500, values[3]) ||
+      !profileNumber(parts[6], 1023, values[4]) ||
+      !profileNumber(parts[7], 1023, values[5]) ||
+      !profileNumber(parts[8], 3600, values[6]) ||
+      strlen(parts[2]) > 64 || strlen(parts[3]) > 64) return false;
+  ProfileStore::Profile profile = {};
+  profile.generation = values[0];
+  profile.version = values[1];
+  strcpy(profile.exhibit, parts[2]);
+  strcpy(profile.command, parts[3]);
+  profile.limits = {(int16_t)values[2], (int16_t)values[3], (uint16_t)values[4],
+                    (uint16_t)values[5], (uint16_t)values[6]};
+  ProfileStore::Profile current = {};
+  uint8_t slot = 0;
+  ProfileStore::Result state = ProfileStore::load(current, slot);
+  if (state == ProfileStore::CORRUPT) {
+    profileStorageHealthy = false;
+    activeProfileValid = false;
+    Serial.println(F("PROFILE ERROR: EEPROM state corrupt; assignment blocked."));
+    return false;
+  }
+  bool alreadyApplied = state == ProfileStore::VALID &&
+                        ProfileStore::same(current, profile) && warningState.profileActive;
+  if (verifyNotApplied) {
+    if (!ProfileStore::valid(profile) || !profileStorageHealthy) return false;
+    if (state == ProfileStore::EMPTY)
+      return !activeProfileValid && !warningState.profileActive;
+    const MonitoringLimits &active = warningState.limits;
+    return current.generation < profile.generation && activeProfileValid &&
+           ProfileStore::same(current, activeProfile) && warningState.profileActive &&
+           active.temperatureMin == current.limits.temperatureMin &&
+           active.temperatureMax == current.limits.temperatureMax &&
+           active.lightMin == current.limits.lightMin && active.lightMax == current.limits.lightMax &&
+           active.warningSeconds == current.limits.warningSeconds;
+  }
+  if (verifyOnly) {
+    const MonitoringLimits &active = warningState.limits;
+    return alreadyApplied && active.temperatureMin == profile.limits.temperatureMin &&
+           active.temperatureMax == profile.limits.temperatureMax &&
+           active.lightMin == profile.limits.lightMin && active.lightMax == profile.limits.lightMax &&
+           active.warningSeconds == profile.limits.warningSeconds;
+  }
+  if (!ProfileStore::save(profile)) {
+    Serial.println(F("PROFILE ERROR: invalid, stale or EEPROM write failed."));
+    return false;
+  }
+  if (!alreadyApplied) {
+    if (!warningState.applyProfile(profile.limits)) {
+      Serial.println(F("PROFILE ERROR: persisted settings could not be activated."));
+      return false;
+    }
+    activeProfile = profile;
+    activeProfileValid = true;
+    dayMinTemp = 32767;
+    dayMaxTemp = -32767;
+    dayStarted = millis();
+  }
+  Serial.println(F("PROFILE: saved and activated."));
+  return true;
+}
 
 uint16_t crc16(const char *text) {
   uint16_t crc = 0xFFFF;
@@ -143,15 +245,18 @@ void measureProximity() {
 }
 
 void updateLighting() {
-  // Explicit fault policy: Auto turns outputs off while proximity is unknown.
-  lightsOn = lightingMode == 1 || (lightingMode == 0 && occupancyKnown && occupied);
   if (millis() - epaperCardFeedbackStartedAt >= epaperCardFeedbackDuration)
     epaperCardFeedbackActive = false;
+  bool whiteRequested = lightingMode == 1 || (lightingMode == 0 && occupancyKnown && occupied);
+  lightsOn = whiteRequested && !epaperCardFeedbackActive;
+  bool lightLow = lightRaw < warningState.limits.lightMin;
+  bool lightHigh = lightRaw > warningState.limits.lightMax;
   for (uint8_t i = 0; i < sizeof(LED_PINS); ++i) {
-    bool channelOn = epaperCardFeedbackActive ? (i == 1 || i == 4) : lightsOn;
+    bool channelOn = i < 3
+      ? (epaperCardFeedbackActive ? i == 1 : lightsOn)
+      : ((i == 3 && (lightLow || lightHigh)) || (i == 4 && lightLow));
     digitalWrite(LED_PINS[i], channelOn == LED_ACTIVE_HIGH ? HIGH : LOW);
   }
-  lightsOn = lightsOn || epaperCardFeedbackActive;
 }
 
 void checkLocalCommands() {
@@ -212,7 +317,7 @@ void drawOled() {
   oled.println(!occupancyKnown ? F("UNKNOWN") : occupied ? F("OCCUPIED") : F("CLEAR"));
   if (!warningMask) {
     oled.println(F("OK / checking limits"));
-    oled.print(F("Hold: ")); oled.print(WARNING_HOLD_MS / 1000UL); oled.println(F(" sec"));
+    oled.print(F("Hold: ")); oled.print(warningState.holdMs() / 1000UL); oled.println(F(" sec"));
   } else {
     // Up to six simultaneous faults; rotate through four rows without blocking.
     uint8_t count = 0;
@@ -245,7 +350,7 @@ void drawOled() {
 }
 
 void sendSample() {
-  char body[128];
+  char body[224];
   char checksum[5];
   int length = snprintf(body, sizeof(body), "V1,%lu,%lu,%d,%u,%d,%d,%lu,%u,%u",
     (unsigned long)++sequenceNumber, (unsigned long)millis(),
@@ -255,6 +360,15 @@ void sendSample() {
   if (length <= 0 || (size_t)length >= sizeof(body)) {
     Serial.println(F("ERROR: serial frame too long; sample dropped."));
     return;
+  }
+  if (activeProfileValid || !profileStorageHealthy) {
+    body[1] = '2';
+    int extra = snprintf(body + length, sizeof(body) - length, ",%s",
+                         activeProfileValid ? activeProfile.exhibit : "-");
+    if (extra <= 0 || (size_t)extra >= sizeof(body) - length) {
+      Serial.println(F("ERROR: serial profile identity too long; sample dropped."));
+      return;
+    }
   }
   snprintf(checksum, sizeof(checksum), "%04X", (unsigned int)crc16(body));
   Serial2.print(body);
@@ -281,6 +395,22 @@ void setup() {
   SPI.begin();
   rfidReader.PCD_Init();
   loadLearnedRfidUids();
+  ProfileStore::Profile savedProfile = {};
+  uint8_t profileSlot = 0;
+  ProfileStore::Result profileState = ProfileStore::load(savedProfile, profileSlot);
+  if (profileState == ProfileStore::VALID) {
+    if (!warningState.applyProfile(savedProfile.limits)) {
+      profileStorageHealthy = false;
+      Serial.println(F("PROFILE ERROR: saved profile could not be activated."));
+    } else {
+      activeProfile = savedProfile;
+      activeProfileValid = true;
+      Serial.println(F("PROFILE: restored from EEPROM."));
+    }
+  } else if (profileState == ProfileStore::CORRUPT) {
+    profileStorageHealthy = false;
+    Serial.println(F("PROFILE ERROR: EEPROM state corrupt; assignment blocked."));
+  }
   Serial2.println(F("EPD_READY"));
   analogReference(DEFAULT);
   pinMode(TEMP_PIN, INPUT);
@@ -310,13 +440,13 @@ void loop() {
     lastSonar = now;
     measureProximity();
   }
-  updateLighting();
   now = millis();
   if ((uint32_t)(now - lastEnvironment) >= ENVIRONMENT_INTERVAL_MS) {
     lastEnvironment = now;
     readEnvironment();
   }
   updateWarnings();
+  updateLighting();
   if ((uint32_t)(now - lastOled) >= 1000UL) {
     lastOled = now;
     drawOled();
@@ -327,7 +457,7 @@ void loop() {
     sendSample();
   }
   if ((uint32_t)(now - dayStarted) >= DAY_MS) {
-    if (dayMinTemp <= dayMaxTemp && dayMaxTemp - dayMinTemp > 200)
+    if (!warningState.profileActive && dayMinTemp <= dayMaxTemp && dayMaxTemp - dayMinTemp > 200)
       Serial.println(F("Local warning: temperature swing exceeded 2 C over 24 hours."));
     dayMinTemp = 32767;
     dayMaxTemp = -32767;
