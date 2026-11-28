@@ -1,12 +1,15 @@
 """Administrator-controlled Cognito enrollment and authoritative website roles.
 
 Provider operations are deliberately resumable: deterministic usernames and an
-immutable invitation request precede Cognito creation. No password is generated,
-stored or returned by this application. Directory/card records remain separate.
+immutable invitation request precede Cognito creation. Setup links return a new
+temporary credential once, without storing it. Permanent passwords go directly
+to Cognito. Directory/card records remain separate.
 """
 import hashlib
 import os
 import re
+import secrets
+from urllib.parse import urlencode
 
 import auth
 import workflow_store as store
@@ -222,6 +225,30 @@ def resend(api, staff_id, body, person):
                               "note": "Provider resend requested; an HTTP timeout does not prove email delivery failed."})
 
 
+def setup_link(api, staff_id, body, headers, person):
+    """Return a new temporary credential once, never persist it or include it in audit."""
+    api.exact_fields(body, ())
+    if not os.environ.get("COGNITO_SETUP_CLIENT_ID"):
+        raise api.APIError(503, "service_unavailable", "Password setup has not been deployed yet.")
+    previous = store.get(api, "account", staff_id)
+    if previous["version"] != expected_version(api, headers):
+        raise api.APIError(409, "version_conflict", "Reload the account before generating a setup link.")
+    data = previous["data"]
+    if data.get("status") != "invited" or not data.get("subject"):
+        raise api.APIError(409, "account_not_invited", "Setup links are only available for pending invitations.")
+    user = provider_call(api, "admin_get_user", Username=data["username"])
+    if user.get("UserStatus") != "FORCE_CHANGE_PASSWORD" or user.get("Enabled") is False:
+        raise api.APIError(409, "setup_unavailable", "This account has already completed password setup or is disabled. Use normal sign-in or password recovery.")
+    # Serialize concurrent administrator requests and recheck caller permissions.
+    item = change(api, previous, data, person, "setup_link_requested")
+    temporary = "Aa1!" + secrets.token_urlsafe(32)
+    provider_call(api, "admin_set_user_password", Username=data["username"], Password=temporary, Permanent=False)
+    fragment = urlencode({"username": data["username"], "credential": temporary})
+    url = os.environ["FRONTEND_ORIGIN"].rstrip("/") + "/auth/setup.html#" + fragment
+    return api.response(200, {"setup_url": url, "item": public(item)},
+                        {"cache-control": "no-store", "pragma": "no-cache"})
+
+
 def session(api, person):
     staff = store.get(api, "staff", person["staff_id"])
     role_name = person["role"]
@@ -261,10 +288,12 @@ def route(api, method, path, query, event, headers):
         return api.response(200, result)
     if path == "/api/accounts/invitations" and method == "POST":
         return invite(api, api.parse_body(event, headers), person)
-    match = re.fullmatch(r"/api/accounts/([A-Za-z0-9_-]+)(/resend-invitation)?", path)
+    match = re.fullmatch(r"/api/accounts/([A-Za-z0-9_-]+)(/resend-invitation|/setup-link)?", path)
     if match:
         staff_id = api.identifier(match[1], "staff_id")
-        if match[2] and method == "POST":
+        if match[2] == "/setup-link" and method == "POST":
+            return setup_link(api, staff_id, api.parse_body(event, headers), headers, person)
+        if match[2] == "/resend-invitation" and method == "POST":
             return resend(api, staff_id, api.parse_body(event, headers), person)
         if not match[2] and method == "GET":
             return api.response(200, {"item": public(store.get(api, "account", staff_id))})

@@ -47,12 +47,13 @@ export async function render(container, ctx) {
   let stopSubscription = () => {};
   const defaultContent = () => {
     const exhibit = exhibits.find((item) => item.id === selectedId);
+    const textOnly = live && snapshot.showcase.deviceId === "reshow-mega-01";
     return {
       title: exhibit?.name || "",
       collection: exhibit?.collection || (live ? "" : "Student collection"),
       description: exhibit?.description || "",
-      image: exhibit?.image || "",
-      ...(live ? { imageMediaId: exhibit?.imageMediaId ?? null } : {}),
+      image: textOnly ? "" : exhibit?.image || "",
+      ...(live ? { imageMediaId: textOnly ? null : exhibit?.imageMediaId ?? null } : {}),
     };
   };
   const initialContent = () =>

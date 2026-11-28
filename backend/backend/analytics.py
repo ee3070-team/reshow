@@ -138,7 +138,7 @@ def duplicate_response(api, entity, record_id, data):
     return api.response(200, {"status": "duplicate", "item": api.public_record(existing)})
 
 
-def read_timeline(api, device_id):
+def read_timeline(api, device_id, start=None, end=None):
     """Read bounded complete base-table pages, including arbitrary carry-in.
 
     This small project deliberately reads the device's complete interval history
@@ -162,6 +162,40 @@ def read_timeline(api, device_id):
             item.get("data", {}).get("source") == "demo" and auth.demo_device(item.get("data", {}).get("device_id", ""))))
         if seen > MAX_SOURCE_RECORDS:
             raise api.APIError(413, "report_too_large", "Device history exceeds 10000 interval records. Narrowing dates cannot reduce this prototype's full-history query; archive or partition history first.")
+        following = result.get("LastEvaluatedKey")
+        if not following:
+            if start is not None and end is not None and start < end:
+                items.extend(read_sensor_samples(api, device_id, start, end, producer))
+            return items
+        if following == cursor:
+            raise api.APIError(503, "service_unavailable", "Storage pagination did not advance.")
+        cursor = following
+
+
+def read_sensor_samples(api, device_id, start, end, producer=False):
+    """Read existing point observations; never infer intervals or coverage.
+
+    The readings GSI is eventual. Query whole boundary seconds because legacy
+    recorded_at values can use different fractional-second precision, then
+    apply the exact half-open window in calculate().
+    """
+    items, cursor, seen = [], None, 0
+    while True:
+        request = {"IndexName": "device-readings-index",
+                   "KeyConditionExpression": "GSI1PK = :device AND GSI1SK BETWEEN :start AND :end",
+                   "ExpressionAttributeValues": {":device": "DEVICE#" + device_id,
+                       ":start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                       ":end": end.strftime("%Y-%m-%dT%H:%M:%S") + "~"},
+                   "ScanIndexForward": True, "Limit": min(250, MAX_SOURCE_RECORDS + 1 - seen)}
+        if cursor:
+            request["ExclusiveStartKey"] = cursor
+        result = api.get_table().query(**request)
+        page = result.get("Items", [])
+        seen += len(page)
+        if seen > MAX_SOURCE_RECORDS:
+            raise api.APIError(413, "report_too_large", "Selected period exceeds 10000 sensor readings; narrow the date range.")
+        items.extend(item for item in page if not producer or (
+            item.get("data", {}).get("source") == "demo" and auth.demo_device(item.get("data", {}).get("device_id", ""))))
         following = result.get("LastEvaluatedKey")
         if not following:
             return items
@@ -344,8 +378,13 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
     effective_end = min(end, max(start, captured_at))
     evaluated = [(start, effective_end)] if start < effective_end else []
     records = {entity: [] for entity in ("proximity_event", "coverage", "display", "warning")}
+    samples = {}
     for item in items:
         entity, data = item["entity_type"], api.public_record(item)
+        if entity == "reading" and data.get("device_id") == device:
+            at = parse_time(api, data["recorded_at"], "recorded_at")
+            if start <= at < effective_end and (not exhibit_id or data.get("exhibit_id") == exhibit_id):
+                samples[data["reading_id"]] = data
         if entity in records:
             original = (parse_time(api, data["start"], "start"), parse_time(api, data["end"], "end"))
             clipped = clip(original, start, effective_end)
@@ -353,6 +392,9 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
                 records[entity].append((data, original, clipped))
     for values in records.values():
         values.sort(key=lambda row: (row[1][0], row[0].get("received_at", ""), json.dumps(row[0], default=api.json_default, sort_keys=True)))
+    samples = sorted(samples.values(), key=lambda row: (parse_time(api, row["recorded_at"], "recorded_at"), row["reading_id"]))
+    sample_times = [parse_time(api, row["recorded_at"], "recorded_at") for row in samples]
+    occupied_sample_times = [at for at, row in zip(sample_times, samples) if row["occupied"]]
     raw_occupancy = union([row[2] for row in records["proximity_event"]])
     raw_coverage = {stream: union([row[2] for row in records["coverage"] if stream in row[0]["streams"]]) for stream in STREAMS}
     assignment = display_assignment(records["display"], start, effective_end, exhibit_id) if evaluated else {
@@ -422,6 +464,8 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
                         "evaluated_end": api.timestamp(evaluated_right) if width else None,
                         "evaluated_seconds": width, "future_seconds": (right - evaluated_right).total_seconds(),
                         "status": status, "coverage_seconds": covered,
+                        "sensor_sample_count": bisect_left(sample_times, evaluated_right) - bisect_left(sample_times, left),
+                        "occupied_sample_count": bisect_left(occupied_sample_times, evaluated_right) - bisect_left(occupied_sample_times, left),
                         "coverage_fraction": round(covered_microseconds / denominator_microseconds, 6) if denominator_microseconds else None,
                         "coverage_complete": complete, **fields,
                         "proximity_event_count": event_count if known else None,
@@ -456,7 +500,9 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
                         raise api.APIError(413, "report_too_large", "Attribution expands to more than 10000 detail fragments; narrow the selected date range.")
                 index += 1
         details[output] = rows
+    details["sensor_samples"] = samples
     summary = {"proximity_event_count": len(event_starts) if any_known else None,
+               "sensor_sample_count": len(samples), "occupied_sample_count": len(occupied_sample_times),
                "recorded_occupied_seconds": seconds(occupancy) if any_known else None,
                "coverage_seconds": seconds(coverage["proximity"]), "missing_seconds": seconds(missing["proximity"]),
                "coverage_complete": not missing["proximity"] if scope else None,
@@ -466,7 +512,7 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
                "warning_count_interpretation": "complete_recorded_intervals" if scope and not missing["warnings"] else "recorded_lower_bounds",
                "display_history_interpretation": "complete_recorded_intervals" if scope and not missing["display"] else "recorded_lower_bounds"}
     sources = sorted({row[0]["source"] for values in records.values() for row in values}
-                     | ({event["source"]} if event else set()))
+                     | {row["source"] for row in samples} | ({event["source"]} if event else set()))
     denominator_note = ("Known selected-display time plus unknown and contradictory assignment time; known-other time and future time are excluded. Stream coverage must also certify display uploads within unambiguous selected spans."
                         if exhibit_id else "Evaluated device-wide elapsed time; future time is excluded.")
     base = {"device_id": device, "start": api.timestamp(start), "end": api.timestamp(end),
@@ -480,6 +526,8 @@ def calculate(api, items, device, start, end, event, interval, zone_name, zone,
             "bucket_alignment": "fixed elapsed UTC intervals beginning at requested start; final bucket may be shorter; metrics stop at evaluated_end",
             "interval_semantics": "half-open [start,end); event counts count original starts only; occupied duration merges overlapping events and is split at unambiguous exhibit changes",
             "consistency": "strong", "snapshot_semantics": "Each timeline page is strongly consistent; concurrent uploads can change a multi-page report. Re-run after uploads finish.",
+            "sensor_sample_semantics": {"consistency": "eventual", "attribution": "reading_exhibit_id",
+                "note": "Sensor samples are point observations from the readings index, which may lag recent uploads. Occupied samples are not event starts, visitors, occupied duration or completeness coverage. Exhibit filtering uses the exhibit ID recorded by the producer, not confirmed display history."},
             "summary": summary, "buckets": buckets,
             "data_completeness": {stream: {"coverage_seconds": seconds(coverage[stream]), "missing_seconds": seconds(missing[stream]),
                                                 "denominator_seconds": scope_seconds, "denominator_note": denominator_note,
@@ -530,6 +578,11 @@ def csv_response(api, result, details):
                  "start", "end", "status", "proximity_event_count", "recorded_occupied_seconds", "coverage_seconds")}))
     for section, rows in details.items():
         for row in rows:
+            if section == "sensor_samples":
+                emit(section=section, device_id=result["device_id"], start=row["recorded_at"],
+                     record_id=row["reading_id"], status="occupied" if row["occupied"] else "clear",
+                     source=row["source"], detail=json.dumps(row, default=api.json_default))
+                continue
             record_id = next((row[key] for key in ("proximity_event_id", "display_id", "warning_id", "coverage_id") if key in row), "")
             emit(section=section, device_id=result["device_id"], start=row["clipped_start"], end=row["clipped_end"],
                  record_id=record_id, source=row["source"], detail=json.dumps(row, default=api.json_default))
@@ -563,7 +616,7 @@ def route(api, method, path, query, event, headers):
             raise api.APIError(405, "method_not_allowed", "This route accepts GET.")
         device, start, end, selected, interval, zone_name, zone, output_format = configuration(api, query)
         captured = api.now_utc()
-        items = read_timeline(api, device) if start < captured else []
+        items = read_timeline(api, device, start, min(end, captured)) if start < captured else []
         base, details = calculate(api, items, device, start, end, selected, interval, zone_name, zone,
                                   exhibit_id=query.get("exhibit_id"), captured_at=captured)
         is_report = path == "/api/reports/event"

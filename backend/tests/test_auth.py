@@ -98,6 +98,9 @@ class Cognito:
     def admin_user_global_sign_out(self, **kwargs):
         self.calls.append(("logout", kwargs)); return {}
 
+    def admin_set_user_password(self, **kwargs):
+        self.calls.append(("set_password", kwargs)); return {}
+
 
 class AuthenticationTests(unittest.TestCase):
     def setUp(self):
@@ -409,6 +412,48 @@ class AuthenticationTests(unittest.TestCase):
         status, body = self.request("POST", "/staff-api/commands", {"actor": "forged", "command_id": "x"})
         self.assertEqual(status, 403, body)
 
+    def test_setup_link_is_admin_only_pending_only_and_never_persisted(self):
+        from urllib.parse import urlparse, parse_qs
+        staff = store.make(app, "staff", "setup-staff", {"staff_id": "setup-staff", "name": "Setup", "email": "setup@example.com", "role": "Viewer"})
+        self.table.items[staff["PK"], staff["SK"]] = staff
+        status, invitation = self.request("POST", "/staff-api/accounts/invitations", {
+            "invitation_id": "setup-invite", "staff_id": "setup-staff", "role": "Viewer"})
+        self.assertEqual(status, 201)
+        path = "/staff-api/accounts/setup-staff/setup-link"
+        version = invitation["item"]["version"]
+        with patch.dict(os.environ, {"COGNITO_SETUP_CLIENT_ID": "setupclient"}):
+            for caller in ("viewer", "operator"):
+                self.assertEqual(self.request("POST", path, {}, version=version, user=caller)[0], 403)
+            self.assertEqual(self.request("POST", path, {}, version=version + 1)[0], 409)
+            event = self.event("POST", path, {}, version=version)
+            response = app.lambda_handler(event, None)
+            self.assertEqual(response["statusCode"], 200, response)
+            self.assertEqual(response["headers"]["cache-control"], "no-store")
+            result = json.loads(response["body"])
+            url = urlparse(result["setup_url"])
+            self.assertEqual(url.path, "/auth/setup.html")
+            self.assertEqual(url.query, "")
+            credential = parse_qs(url.fragment)["credential"][0]
+            self.assertNotIn(credential, repr(self.table.items))
+            self.assertNotIn(credential, repr(self.table.calls))
+            self.assertNotIn(credential, json.dumps(result["item"]))
+            calls = [args for action, args in self.provider.calls if action == "set_password"]
+            self.assertEqual(len(calls), 1)
+            self.assertFalse(calls[0]["Permanent"])
+            self.assertEqual(calls[0]["Password"], credential)
+            self.assertEqual(self.request("POST", path, {}, version=version)[0], 409)
+            new_version = result["item"]["version"]
+            status, second = self.request("POST", path, {}, version=new_version)
+            self.assertEqual(status, 200)
+            self.assertNotEqual(second["setup_url"], result["setup_url"])
+            username = parse_qs(url.fragment)["username"][0]
+            self.provider.users[username]["UserStatus"] = "CONFIRMED"
+            self.assertEqual(self.request("POST", path, {}, version=second["item"]["version"])[0], 409)
+            self.assertEqual(self.request("POST", "/staff-api/accounts/admin/setup-link", {}, version=1)[0], 409)
+
+    def test_setup_client_cannot_authorize_website_requests(self):
+        self.assertEqual(self.request("GET", "/staff-api/session", claims={"client_id": "setupclient"})[0], 401)
+
     def test_demo_scope_and_source_cannot_upload_or_read_real_data(self):
         for device, source in [("real-device", "demo"), ("v04-demo", "device")]:
             event = self.event("POST", "/api/device-status", {"device_id": device, "source": source})
@@ -586,13 +631,13 @@ class AuthenticationTests(unittest.TestCase):
         commands = "/api/commands"
         query = {"device_id": HARDWARE_DEVICE, "type": "label", "status": "pending", "limit": "1"}
         for identity, device, kind in (("a-label", HARDWARE_DEVICE, "label"),
-                                       ("z-lighting", HARDWARE_DEVICE, "lighting"),
+                                       ("z-card", HARDWARE_DEVICE, "card"),
                                        ("foreign-label", "other-device", "label")):
             item = store.make(app, "command", identity, {"command_id": identity, "device_id": device,
                               "type": kind, "status": "pending", "protocol": "device-fence-v1"})
             store.transact(app, [store.put_action(app, item), *store.index_actions(app, item)])
 
-        for invalid in ({}, {**query, "device_id": "other-device"}, {**query, "type": "lighting"},
+        for invalid in ({}, {**query, "device_id": "other-device"}, {**query, "type": "card"},
                         {**query, "status": "acknowledged"}):
             self.assertEqual(self.producer_request("GET", commands, query=invalid)[0], 403)
         status, page = self.producer_request("GET", commands, query=query)
@@ -606,6 +651,8 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual([item["command_id"] for item in page["items"]], ["a-label"])
         self.assertEqual(self.producer_request("GET", commands,
                          query={**query, "status": "recovery_pending", "cursor": cursor})[0], 400)
+        self.assertEqual(self.producer_request("GET", commands,
+                         query={**query, "type": "lighting", "cursor": cursor})[0], 400)
         self.table.items[key]["data"]["device_id"] = "other-device"
         self.assertEqual(self.producer_request("GET", commands,
                          query={**query, "device_id": "other-device", "cursor": cursor})[0], 400)
@@ -614,7 +661,7 @@ class AuthenticationTests(unittest.TestCase):
         status, result = self.producer_request("GET", commands + "/a-label")
         self.assertEqual(status, 200, result)
         self.assertEqual(result["item"]["protocol"], "device-fence-v1")
-        for identity in ("missing", "foreign-label", "z-lighting"):
+        for identity in ("missing", "foreign-label", "z-card"):
             path = commands + "/" + identity
             self.assertEqual(self.producer_request("GET", path)[0], 404)
             for suffix in ("/acknowledgements", "/recovery-acknowledgements"):
@@ -629,6 +676,113 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(self.producer_request("POST", commands + "/a-label/recovery-requests", {})[0], 403)
         self.table.items[key]["data"]["active"] = False
         self.assertEqual(self.producer_request("GET", commands, query=query)[0], 401)
+
+    def lighting_ready_status(self):
+        payload = {key: None for key in workflows.STATUS_FIELDS}
+        payload.update(status_id="lighting-ready", device_id=HARDWARE_DEVICE, source="device",
+                       recorded_at=app.timestamp(NOW), remote_lighting=True)
+        self.assertEqual(self.producer_request("POST", "/api/device-status", payload)[0], 201)
+        for user in ("admin", "operator", "viewer"):
+            status, result = self.request("GET", "/staff-api/device-status/lighting-ready", user=user)
+            self.assertEqual(status, 200, result)
+            self.assertIs(result["item"]["remote_lighting"], True)
+
+    def test_hardware_lighting_without_assignment_requires_own_device_receipt(self):
+        key = self.hardware_credential()
+        showcase_id = "lighting-case"
+        self.assertEqual(self.request("POST", "/staff-api/showcases", {
+            "showcase_id": showcase_id, "name": "Lighting fixture", "device_id": HARDWARE_DEVICE,
+        })[0], 201)
+        self.lighting_ready_status()
+        query = {"device_id": HARDWARE_DEVICE, "type": "lighting", "status": "pending"}
+        for mode in ("Auto", "On", "Off"):
+            with self.subTest(mode=mode):
+                request = {"command_id": "light-" + mode, "showcase_id": showcase_id,
+                           "type": "lighting", "payload": {"mode": mode}}
+                self.assertEqual(self.request("POST", "/staff-api/commands", request, user="viewer")[0], 403)
+                previous_mode = store.get(app, "showcase", showcase_id)["data"]["lighting_mode"]
+                status, queued = self.request("POST", "/staff-api/commands", request, user="operator")
+                self.assertEqual(status, 201, queued)
+                self.assertIsNone(queued["item"]["exhibit_id"])
+                status, polled = self.producer_request("GET", "/api/commands", query=query)
+                self.assertEqual(status, 200, polled)
+                self.assertEqual([row["command_id"] for row in polled["items"]], [request["command_id"]])
+                path = "/api/commands/" + request["command_id"]
+                status, exact = self.producer_request("GET", path)
+                self.assertEqual(status, 200, exact)
+                self.assertEqual(exact["item"]["payload"], {"mode": mode})
+                self.assertTrue(exact["item"]["resource_generation"])
+                self.assertEqual(store.get(app, "showcase", showcase_id)["data"]["lighting_mode"], previous_mode)
+                receipt = {"acknowledgement_id": "receipt-" + mode, "device_id": HARDWARE_DEVICE,
+                           "source": "device", "recorded_at": app.timestamp(NOW), "success": True}
+                ack_path = path + "/acknowledgements"
+                for invalid in ({**receipt, "source": "demo"}, {**receipt, "device_id": "other-device"}):
+                    self.assertEqual(self.producer_request("POST", ack_path, invalid)[0], 403)
+                self.assertEqual(self.request("POST", ack_path.replace("/api/", "/staff-api/"), receipt)[0], 403)
+                self.table.items[key]["data"]["device_id"] = "other-device"
+                self.assertEqual(self.producer_request("GET", path)[0], 404)
+                self.assertEqual(self.producer_request("POST", ack_path, receipt)[0], 404)
+                self.assertEqual(self.producer_request("GET", "/api/commands", query=query)[0], 403)
+                self.table.items[key]["data"]["device_id"] = HARDWARE_DEVICE
+                self.assertEqual(self.producer_request("POST", ack_path, receipt)[0], 201)
+                self.assertEqual(self.producer_request("POST", ack_path, receipt)[0], 200)
+                self.assertEqual(self.producer_request("POST", ack_path, {**receipt, "success": False})[0], 409)
+                case = store.get(app, "showcase", showcase_id)["data"]
+                self.assertEqual(case["lighting_mode"], mode)
+                self.assertIsNone(case["confirmed_exhibit_id"])
+                self.assertNotIn("lighting_output", case)
+
+    def test_hardware_lighting_expiry_revocation_and_fenced_recovery(self):
+        key = self.hardware_credential()
+        self.assertEqual(self.request("POST", "/staff-api/showcases", {
+            "showcase_id": "lighting-case", "name": "Lighting fixture", "device_id": HARDWARE_DEVICE,
+        })[0], 201)
+        self.lighting_ready_status()
+        request = {"command_id": "expired-light", "showcase_id": "lighting-case",
+                   "type": "lighting", "payload": {"mode": "On"}}
+        self.assertEqual(self.request("POST", "/staff-api/commands", request)[0], 201)
+        path = "/api/commands/expired-light"
+        receipt = {"acknowledgement_id": "late-light-receipt", "device_id": HARDWARE_DEVICE,
+                   "source": "device", "recorded_at": app.timestamp(NOW), "success": True}
+        self.table.items[key]["data"]["active"] = False
+        self.assertEqual(self.producer_request("GET", path)[0], 401)
+        self.assertEqual(self.producer_request("POST", path + "/acknowledgements", receipt)[0], 401)
+        self.table.items[key]["data"]["active"] = True
+        with patch.object(app, "now_utc", return_value=NOW + timedelta(seconds=301)):
+            status, rejected = self.producer_request("POST", path + "/acknowledgements", receipt)
+            self.assertEqual(status, 409, rejected)
+            self.assertEqual(rejected["error"]["code"], "command_expired")
+            replacement = {**request, "command_id": "replacement-light", "payload": {"mode": "Off"}}
+            self.assertEqual(self.request("POST", "/staff-api/commands", replacement)[0], 409)
+            self.assertEqual(self.request("POST", "/staff-api/commands/expired-light/recovery-requests", {
+                "recovery_id": "light-fence", "reason": "Fixture completion was lost.",
+            })[0], 201)
+            status, polled = self.producer_request("GET", "/api/commands", query={
+                "device_id": HARDWARE_DEVICE, "type": "lighting", "status": "recovery_pending",
+            })
+            self.assertEqual(status, 200, polled)
+            recovering, = polled["items"]
+            observed_at = app.timestamp(app.now_utc())
+            self.assertEqual(self.producer_request("POST", "/api/device-status", {
+                "status_id": "post-light-fence", "device_id": HARDWARE_DEVICE, "source": "device",
+                "recorded_at": observed_at, "temperature_c": None, "brightness_percent": None,
+                "occupied": False, "distance_cm": None, "lighting_mode": "Auto", "lighting_output": "Off",
+                "latch": None, "local_control": False, "remote_lighting": True,
+            })[0], 201)
+            recovery = {"acknowledgement_id": "light-recovery-receipt", "recovery_id": "light-fence",
+                        "device_id": HARDWARE_DEVICE, "source": "device", "recorded_at": observed_at,
+                        "fenced_generation": recovering["recovery"]["fence_generation"],
+                        "observed_status_id": "post-light-fence", "outcome": "unknown"}
+            recovery_path = path + "/recovery-acknowledgements"
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 409)
+            self.assertEqual(self.producer_request("POST", recovery_path,
+                             {**recovery, "outcome": "not_applied", "device_id": "other-device"})[0], 403)
+            recovery["outcome"] = "not_applied"
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 201)
+            self.assertEqual(self.producer_request("POST", recovery_path, recovery)[0], 200)
+            self.assertIsNone(store.get(app, "showcase", "lighting-case")["data"]["lighting_mode"])
+            self.assertEqual(self.request("POST", "/staff-api/commands", replacement)[0], 201)
+            self.assertEqual(self.producer_request("POST", path + "/acknowledgements", receipt)[0], 409)
 
     def test_mega_label_freezes_draft_and_accepts_only_in_window_or_fenced_receipt(self):
         key = self.hardware_credential()
@@ -1094,6 +1248,8 @@ class AuthenticationTests(unittest.TestCase):
 
     def test_operator_create_and_recovery_return_projected_commands_without_losing_internal_audit(self):
         self.workflow_record("showcase", "case", {"showcase_id": "case", "device_id": "demo-device", "confirmed_exhibit_id": None})
+        self.workflow_record("status", "light-ready", {"status_id": "light-ready", "device_id": "demo-device",
+                             "recorded_at": app.timestamp(NOW), "source": "demo", "remote_lighting": True})
         status, created = self.request("POST", "/staff-api/commands", {"command_id": "created-light", "showcase_id": "case",
             "type": "lighting", "payload": {"mode": "Auto"}}, user="operator")
         self.assertEqual(status, 201, created)

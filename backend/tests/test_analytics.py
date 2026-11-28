@@ -125,7 +125,7 @@ class AnalyticsTests(unittest.TestCase):
         self.assertTrue(body["provenance"]["contains_demo_data"])
         queries = [params for operation, params in self.table.calls if operation == "query"]
         self.assertGreater(len(queries), 1)
-        self.assertTrue(all(row["ConsistentRead"] for row in queries))
+        self.assertTrue(all(row["ConsistentRead"] for row in queries if "IndexName" not in row))
         self.assertTrue(any("ExclusiveStartKey" in row for row in queries))
 
     def test_event_and_explicit_selection_equal_and_report_includes_raw_history(self):
@@ -176,6 +176,57 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(body["environmental_warnings"], [])
         self.assertEqual(body["display_history"], [])
         self.assertTrue(all(value["missing_seconds"] == 3600 for value in body["data_completeness"].values()))
+
+    def test_uploaded_occupancy_appears_in_activity_reports_and_csv_without_intervals(self):
+        self.create_exhibit()
+        for record_id, at, occupied in (("occupied-a", "2026-10-25T00:01:00Z", True),
+                                        ("occupied-b", "2026-10-25T00:01:10.123Z", True),
+                                        ("clear", "2026-10-25T00:01:20Z", False),
+                                        ("end-excluded", self.query["end"], True)):
+            self.post_ok("readings", dict(self.reading, reading_id=record_id,
+                device_id="analytics-device", recorded_at=at, occupied=occupied))
+        for path, query in (("/api/reports/event", self.query), ("/api/activity", {
+                "device_id": "analytics-device", "start_date": "2026-10-25", "end_date": "2026-10-25"})):
+            with patch.object(app, "now_utc", return_value=datetime(2026, 10, 25, 1, tzinfo=timezone.utc)):
+                response, body = self.request("GET", path, query=query)
+            self.assertEqual(response["statusCode"], 200, body)
+            self.assertEqual(body["summary"]["occupied_sample_count"], 2)
+            self.assertEqual(body["summary"]["sensor_sample_count"], 3)
+            self.assertEqual([row["reading_id"] for row in body["sensor_samples"]], ["occupied-a", "occupied-b", "clear"])
+            self.assertIsNone(body["summary"]["recorded_occupied_seconds"])
+            self.assertIsNone(body["summary"]["proximity_event_count"])
+            self.assertEqual(body["summary"]["coverage_seconds"], 0)
+            self.assertEqual(sum(row["occupied_sample_count"] for row in body["buckets"]), 2)
+        _, selected = self.request("GET", "/api/reports/event", query={**self.query, "exhibit_id": self.exhibit["exhibit_id"]})
+        _, other = self.request("GET", "/api/reports/event", query={**self.query, "exhibit_id": "other-exhibit"})
+        self.assertEqual(selected["summary"]["occupied_sample_count"], 2)
+        self.assertEqual(other["sensor_samples"], [])
+        response, _ = self.request("GET", "/api/reports/event", query={**self.query, "format": "csv"})
+        self.assertIn("sensor_samples", response["body"])
+        self.assertIn("occupied-a", response["body"])
+        self.assertNotIn("end-excluded", response["body"])
+
+    def test_sample_pagination_cap_and_nonadvancing_cursor(self):
+        self.create_exhibit()
+        for i in range(4):
+            self.post_ok("readings", dict(self.reading, reading_id=f"sample-{i}", device_id="analytics-device",
+                                        recorded_at=f"2026-10-25T00:01:0{i}Z"))
+        original = self.table.query
+        def paged(**kwargs):
+            if "IndexName" in kwargs:
+                kwargs["Limit"] = min(kwargs["Limit"], 2)
+            return original(**kwargs)
+        config = analytics.configuration(app, self.query)
+        with patch.object(self.table, "query", side_effect=paged):
+            samples = analytics.read_sensor_samples(app, "analytics-device", config[1], config[2])
+            self.assertEqual(len(samples), 4)
+            with patch.object(analytics, "MAX_SOURCE_RECORDS", 3), self.assertRaises(app.APIError) as error:
+                analytics.read_sensor_samples(app, "analytics-device", config[1], config[2])
+            self.assertEqual(error.exception.status, 413)
+        with patch.object(self.table, "query", return_value={"Items": [], "LastEvaluatedKey": {"PK": "stuck"}}):
+            with self.assertRaises(app.APIError) as error:
+                analytics.read_sensor_samples(app, "analytics-device", config[1], config[2])
+            self.assertEqual(error.exception.status, 503)
 
     def test_atomic_idempotency_normalization_conflict_and_exact_readback(self):
         payload = {**self.base, "coverage_id": "stable", "streams": ["warnings", "proximity"]}
@@ -229,7 +280,7 @@ class AnalyticsTests(unittest.TestCase):
             result, body = self.request("GET", "/api/analytics/heatmap", query=self.query)
         self.assertEqual(result["statusCode"], 200, body)
         self.assertEqual(body["summary"]["coverage_seconds"], 3600)
-        queries = [params for name, params in self.table.calls if name == "query"]
+        queries = [params for name, params in self.table.calls if name == "query" and "IndexName" not in params]
         self.assertEqual(len(queries), 2)
         self.assertEqual(queries[-1]["Limit"], 1)
 

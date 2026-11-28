@@ -21,7 +21,7 @@ HARDWARE_TOKEN_PREFIX = "rshw_hw_v1."
 HARDWARE_TOKEN = re.compile(re.escape(HARDWARE_TOKEN_PREFIX) + r"[A-Za-z0-9_-]{43}")
 HARDWARE_CREDENTIAL_KIND = "hardware-credential"
 HARDWARE_POST_PATHS = ("/api/device-status", "/api/readings", "/api/rfid-events", "/api/tag-scans", "/api/access-attempts")
-HARDWARE_COMMAND_TYPES = ("assignment", "label")
+HARDWARE_COMMAND_TYPES = ("assignment", "label", "lighting")
 
 
 def enforced():
@@ -36,6 +36,7 @@ def config(api):
         raise api.APIError(503, "service_unavailable", "Staff sign-in is not configured.")
     origin = os.environ["FRONTEND_ORIGIN"].rstrip("/")
     return {"issuer": os.environ["COGNITO_ISSUER"], "client_id": os.environ["COGNITO_CLIENT_ID"],
+            **({"setup_client_id": os.environ["COGNITO_SETUP_CLIENT_ID"]} if os.environ.get("COGNITO_SETUP_CLIENT_ID") else {}),
             "authorization_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/authorize",
             "token_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/token",
             "revocation_endpoint": os.environ["COGNITO_DOMAIN"] + "/oauth2/revoke",
@@ -140,7 +141,7 @@ def authorize_hardware(api, token, method, path, query):
         if (query.get("device_id") == device_id and query.get("type") in HARDWARE_COMMAND_TYPES
                 and query.get("status") in ("pending", "recovery_pending")):
             return person
-        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending assignments or labels for the registered device_id.")
+        raise api.APIError(403, "forbidden", "Poll pending or recovery_pending assignment, label or lighting commands for the registered device_id.")
     suffix = {"GET": "", "POST": r"/(?:acknowledgements|recovery-acknowledgements)"}.get(method)
     match = re.fullmatch(r"/api/commands/([A-Za-z0-9][A-Za-z0-9_-]{0,63})" + suffix, path) if suffix is not None else None
     if match:

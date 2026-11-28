@@ -211,7 +211,7 @@ def report_identity(api, body):
 
 
 def frozen_profiles(api, details, captured_at, exhibit_id=None):
-    ids = sorted({row["exhibit_id"] for key in ("display_history", "environmental_warnings") for row in details[key]}
+    ids = sorted({row["exhibit_id"] for key in ("display_history", "environmental_warnings", "sensor_samples") for row in details.get(key, [])}
                  | ({exhibit_id} if exhibit_id else set()))
     if len(ids) > MAX_PROFILE_CONTEXT:
         raise api.APIError(413, "report_too_large", "Snapshot profile context exceeds 100 exhibits; narrow the selected date range.")
@@ -246,7 +246,7 @@ def create_snapshot(api, body):
     config = analytics.configuration(api, identity["query"])
     device, left, right, event, interval, zone_name, zone, _format = config
     cutoff = api.now_utc()
-    items = analytics.read_timeline(api, device) if left < cutoff else []
+    items = analytics.read_timeline(api, device, left, min(right, cutoff)) if left < cutoff else []
     base, details = analytics.calculate(api, items, device, left, right, event, interval, zone_name, zone,
                                       exhibit_id=identity["query"].get("exhibit_id"), captured_at=cutoff)
     captured = api.timestamp(cutoff)
@@ -290,6 +290,7 @@ def selected_payload(payload):
     sections = payload["sections"]
     if "activity" not in sections:
         report.pop("proximity_events", None)
+        report.pop("sensor_samples", None)
         report.pop("buckets", None)
     if "history" not in sections:
         report.pop("display_history", None)
@@ -318,7 +319,7 @@ def get_snapshot(api, report_id, output_format):
     # execution; the captured snapshot metadata stays in its summary detail.
     base["data_quality"] = {**base["data_quality"], "snapshot": {key: payload[key] for key in
                             ("report_id", "title", "captured_at", "sections", "profile_context")}}
-    details = {key: base[key] for key in ("proximity_events", "display_history", "environmental_warnings", "coverage_records") if key in base}
+    details = {key: base[key] for key in ("proximity_events", "display_history", "environmental_warnings", "coverage_records", "sensor_samples") if key in base}
     return analytics.csv_response(api, base, details)
 
 
@@ -400,7 +401,7 @@ def route(api, method, path, query, event, headers):
         config, selection = activity_query(api, query)
         device, left, right, selected, interval, zone_name, zone, output_format = config
         cutoff = api.now_utc()
-        items = analytics.read_timeline(api, device) if left < cutoff else []
+        items = analytics.read_timeline(api, device, left, min(right, cutoff)) if left < cutoff else []
         base, details = analytics.calculate(api, items, device, left, right, selected, interval, zone_name, zone,
                                           exhibit_id=query.get("exhibit_id"), captured_at=cutoff)
         base["date_selection"] = selection

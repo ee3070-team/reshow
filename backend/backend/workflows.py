@@ -276,13 +276,16 @@ def immutable_ingress(api, kind, record_id, clean):
 
 
 def status_data(api, data):
-    fields(api, data, STATUS_FIELDS)
+    fields(api, data, STATUS_FIELDS, ("remote_lighting",))
     clean = {key: api.identifier(data[key], key) for key in ("status_id", "device_id")}
     clean.update(recorded_at=utc(api, data["recorded_at"]), source=source(api, data["source"]))
     for field, bounds in (("temperature_c", (-40, 125)), ("brightness_percent", (0, 100)), ("distance_cm", (0, 1000))):
         clean[field] = None if data[field] is None else api.number(data[field], field, *bounds)
     clean["occupied"] = boolean(api, data["occupied"], "occupied", nullable=True)
     clean["local_control"] = boolean(api, data["local_control"], "local_control", nullable=True)
+    # Preserve omission so pre-upgrade immutable status retries still match.
+    if "remote_lighting" in data:
+        clean["remote_lighting"] = boolean(api, data["remote_lighting"], "remote_lighting", nullable=True)
     for field, choices in (("lighting_mode", ("Auto", "On", "Off")), ("lighting_output", ("On", "Off")),
                            ("latch", ("Locked", "Unlocked"))):
         clean[field] = enum(api, data[field], field, choices, nullable=True)
@@ -431,6 +434,15 @@ def require_contact(api, device_id):
     # does not imply online status, delivery, execution or acknowledgement.
 
 
+def require_remote_lighting(api, device_id):
+    latest = store.list_records(api, "status", {"device_id": device_id, "limit": "1"})["items"]
+    status = latest[0] if latest else None
+    if (status is None or status.get("remote_lighting") is not True or
+            api.now_utc() - datetime.fromisoformat(status["recorded_at"][:-1] + "+00:00") > timedelta(seconds=STALE_SECONDS)):
+        raise api.APIError(409, "lighting_unavailable",
+                           "Remote lighting is not ready. The device must report a fresh remote_lighting=true status after its lighting handshake.")
+
+
 def validate_scan_reference(api, payload, device_id, command_id):
     if "scan_id" not in payload:
         return []  # Compatible legacy requests do not prove a current scan.
@@ -486,6 +498,8 @@ def create_command(api, data, *, prepared_draft=None, additional_actions=()):
     require_contact(api, case["data"]["device_id"])
     payload = dict(request["payload"])
     kind = request["type"]
+    if kind == "lighting":
+        require_remote_lighting(api, case["data"]["device_id"])
     exhibit = case["data"]["confirmed_exhibit_id"]
     lock_id = "showcase#" + request["showcase_id"] + "#" + kind
     actions = list(additional_actions)

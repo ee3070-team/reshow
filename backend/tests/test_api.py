@@ -55,14 +55,21 @@ class FakeTable:
 
     def query(self, **kwargs):
         self.calls.append(("query", copy.deepcopy(kwargs)))
-        if kwargs["IndexName"] != "device-readings-index" or kwargs["KeyConditionExpression"] != "GSI1PK = :device":
+        if kwargs["IndexName"] != "device-readings-index" or kwargs["KeyConditionExpression"] not in (
+                "GSI1PK = :device", "GSI1PK = :device AND GSI1SK BETWEEN :start AND :end"):
             raise AssertionError("Expected indexed device query")
         partition = kwargs["ExpressionAttributeValues"][":device"]
         items = sorted((copy.deepcopy(item) for item in self.items.values() if item.get("GSI1PK") == partition),
                        key=lambda item: item["GSI1SK"], reverse=not kwargs["ScanIndexForward"])
+        values = kwargs["ExpressionAttributeValues"]
+        if ":start" in values:
+            items = [item for item in items if values[":start"] <= item["GSI1SK"] <= values[":end"]]
+        if kwargs.get("ExclusiveStartKey"):
+            key = kwargs["ExclusiveStartKey"]["GSI1SK"]
+            items = [item for item in items if (item["GSI1SK"] > key if kwargs["ScanIndexForward"] else item["GSI1SK"] < key)]
         result = {"Items": items[:kwargs["Limit"]]}
         if len(items) > kwargs["Limit"]:
-            result["LastEvaluatedKey"] = {"PK": items[kwargs["Limit"] - 1]["PK"]}
+            result["LastEvaluatedKey"] = {key: items[kwargs["Limit"] - 1][key] for key in ("PK", "SK", "GSI1PK", "GSI1SK")}
         return result
 
 

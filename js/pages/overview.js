@@ -27,6 +27,7 @@ export function applyNavigationAvailability(container, canNavigate) {
 
 export async function render(container, ctx) {
   let disposed = false, period = "today", drawing = null, queued = false;
+  let lightingBusy = false;
   let cachedActivity = null;
   let refreshError = "", errorRevision = 0;
   const emptyActivity = () => ({ intervals: [], events: [], summary: { proximityEvents: null } });
@@ -85,6 +86,14 @@ export async function render(container, ctx) {
     const pending = snapshot.operations.filter(
       (o) => o.type === "lighting" && ["pending", "recovery_pending"].includes(o.status),
     );
+    const lightingUnavailable = !canOperate ? "Operator or Administrator access is required to change lighting."
+      : !s.id ? "No showcase is configured."
+      : lightingBusy ? "Submitting the lighting request…"
+      : pending.length ? "Waiting for the previous lighting request to be resolved by the device."
+      : live && !s.online ? "The showcase is offline. Lighting controls will return when it reconnects."
+      : live && s.measurementStale ? "Waiting for a fresh lighting status from the showcase."
+      : live && s.remoteLighting !== true ? "Remote lighting is not ready. Install the lighting firmware on both boards and check their connection."
+      : "";
     const lastLighting = snapshot.operations
       .filter((o) => o.type === "lighting")
       .sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt)).at(-1);
@@ -111,7 +120,7 @@ export async function render(container, ctx) {
       <div class="overview-middle">
         <section class="card"><h2 class="section-title">${icon("cube")}Current exhibit</h2>${e ? `<div class="exhibit-summary">${live && !e.image ? `<div class="empty" aria-label="No exhibit image">${icon("cube")}<small>No image</small></div>` : `<img src="${esc(e.image || "assets/vase.svg")}" alt="Illustration of ${esc(e.name)}">`}<div><h3>${esc(e.name)}</h3><p>Tag: ${esc(e.tagId)}</p>${badge("Profile assigned", "success")}</div></div><div class="actions">${canOperate ? `<button class="button" data-edit>${icon("edit")}Edit profile</button>` : ""}<button class="button" data-change>${icon("arrow")}${canOperate ? "Change exhibit" : "View exhibits"}</button></div>` : '<div class="empty">No exhibit assigned.</div><button class="button" data-change>Open exhibit library</button>'}</section>
         <section class="card"><h2 class="section-title">${icon("display")}Electronic label</h2>${label ? `<div class="epaper"><div class="epaper-inner">${label.content.image ? `<img src="${esc(label.content.image)}" alt="Label image">` : ""}<div><h3>${esc(label.content.title)}</h3><p>${esc(label.content.collection)}</p></div></div></div><div class="label-status">${icon("check")} Last update acknowledged<br><span class="muted">${esc(formatTime(label.acknowledgedAt))}</span></div>${label.exhibitId !== s.exhibitId ? '<p class="notice warning">The displayed label belongs to the previous exhibit. A new label update is needed.</p>' : ""}` : '<div class="empty">No acknowledged label.</div>'}${latestLabel && latestLabel.status !== "acknowledged" ? `<p class="small-text" style="margin-bottom:10px">${badge(["pending", "recovery_pending"].includes(latestLabel.status) ? "Pending / recovery" : latestLabel.status === "recovered" ? "Recovered request" : "Failed update", latestLabel.status)} ${esc(latestLabel.error || "Waiting for the showcase")}</p>` : ""}<button class="button full" data-label ${e ? "" : "disabled"}>${icon(canOperate ? "edit" : "display")}${canOperate ? "Edit label" : "View label"}</button><p class="muted small-text" style="margin-top:7px">Illustrative e-paper layout</p></section>
-        <section class="card"><h2 class="section-title">${icon("sun")}Lighting</h2><div class="segmented" role="group" aria-label="Lighting mode">${["Auto", "On", "Off"].map((mode) => `<button type="button" data-mode="${mode}" aria-pressed="${s.lightingMode === mode}" class="${s.lightingMode === mode ? "active" : ""}" ${!canOperate || pending.length || !e ? "disabled" : ""}>${mode}</button>`).join("")}</div><p class="device-detail">Confirmed mode: <strong>${esc(status(s.lightingMode))}</strong></p><p class="device-detail">Light output: <strong>${esc(status(s.lightingOutput))}</strong></p>${live ? "" : '<p class="muted small-text">Clear-zone delay: 30 s</p>'}${pending.length ? `<p class="notice warning" style="margin-top:10px">Requested ${esc(pending.at(-1).payload.mode)} · Pending acknowledgement</p>` : lastLighting?.status === "failed" ? `<p class="notice error" style="margin-top:10px">Previous lighting request failed: ${esc(lastLighting.error)}</p>` : ""}</section>
+        <section class="card"><h2 class="section-title">${icon("sun")}Lighting</h2><div class="segmented" role="group" aria-label="Lighting mode">${["Auto", "On", "Off"].map((mode) => `<button type="button" data-mode="${mode}" aria-pressed="${s.lightingMode === mode}" class="${s.lightingMode === mode ? "active" : ""}" ${lightingUnavailable ? `disabled aria-describedby="lighting-availability"` : ""}>${mode}</button>`).join("")}</div>${lightingUnavailable ? `<p class="muted small-text" id="lighting-availability" role="status">${esc(lightingUnavailable)}</p>` : ""}<p class="device-detail">Confirmed mode: <strong>${esc(status(s.lightingMode))}</strong></p><p class="device-detail">Light output: <strong>${esc(status(s.lightingOutput))}</strong></p>${live ? "" : '<p class="muted small-text">Clear-zone delay: 30 s</p>'}${pending.length ? `<p class="notice warning" style="margin-top:10px">Requested ${esc(pending.at(-1).payload.mode)} · Pending acknowledgement</p>` : lastLighting?.status === "failed" ? `<p class="notice error" style="margin-top:10px">Previous lighting request failed: ${esc(lastLighting.error)}</p>` : ""}</section>
       </div>
       <div class="overview-bottom"><section class="card"><div class="card-head"><h2>${icon("activity")}Activity over time</h2><select class="compact-range" aria-label="Overview activity period" data-period><option value="today" ${period === "today" ? "selected" : ""}>Today</option><option value="all" ${period === "all" ? "selected" : ""}>${live ? "Last 7 days" : "1–6 Oct"}</option></select></div><p class="small-text">${live ? "Occupied duration per hour through captured cutoff" : "Occupied duration per completed hour"}</p>${heatmap(data.intervals, "occupiedSeconds", period === "today")}<p class="footnote">Anonymous proximity activity; no visitor identification. ${live ? "Partial data is a lower bound; future time is excluded." : "Open and future hours are not yet counted."}</p></section><section class="card"><div class="card-head"><h2>${icon("clock")}Recent activity</h2></div>${
         data.events.length
@@ -158,17 +167,20 @@ export async function render(container, ctx) {
     container.querySelectorAll("[data-mode]").forEach(
       (button) =>
         (button.onclick = async () => {
-          if (!ctx.api.can("operate")) return;
-          if (!(await confirmAction("Request lighting change?", `Request ${button.dataset.mode} lighting. Confirmed state changes only after a producer acknowledgement.`, "Request change"))) return;
+          if (lightingUnavailable || lightingBusy || !ctx.api.can("operate")) return;
+          lightingBusy = true;
+          if (!(await confirmAction("Request lighting change?", `Request ${button.dataset.mode} lighting. Confirmed state changes only after a producer acknowledgement.`, "Request change"))) { lightingBusy = false; await draw(); return; }
+          if (disposed || !ctx.api.can("operate")) { lightingBusy = false; return; }
           container
             .querySelectorAll("[data-mode]")
             .forEach((b) => (b.disabled = true));
           try {
             await ctx.api.setLighting(button.dataset.mode);
             toast(`${live ? "Live" : "Demo"} lighting request queued. Waiting for acknowledgement.`);
-            await draw();
           } catch (error) {
             toast(error.message, "error");
+          } finally {
+            lightingBusy = false;
             await draw();
           }
         }),

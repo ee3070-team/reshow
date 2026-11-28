@@ -35,6 +35,36 @@ exercise authenticated database operations. Infrastructure changes remain in
 the separate CloudFormation workflow. If a later infrastructure release also
 changes the Lambda package, use the same approved source revision.
 
+### Initial password setup links
+
+In Live mode, an Administrator can use **Staff access → Website accounts →
+Prepare invitation**, then **Generate setup link** on the pending account.
+The same action works after an invitation email has been sent. Copy and privately
+share the link; the staff member chooses a password on `/auth/setup.html`, then
+returns to **Live → Continue to live sign in** using their email and new password.
+
+Generating a link replaces the previous temporary password, including the one
+in an earlier invitation email. The credential expires under the pool's seven-day
+temporary-password policy and stops working after password setup. Resending an
+invitation also replaces that temporary credential. Already-started Cognito
+challenge sessions remain subject to the provider's session lifetime.
+
+`POST /staff-api/accounts/{staff_id}/setup-link` requires Administrator access,
+the current `If-Match` account version and an empty JSON body. It accepts only
+invited accounts whose enabled provider identity still requires an initial
+password. Its no-store response contains the link once. The secret is in the URL
+fragment, is removed from browser history on page load, and is not saved to
+application records, audit entries, browser storage or server access URLs. Anyone
+holding the link can complete setup. Regenerate a lost link rather than retrieving
+an old one. A timeout is ambiguous; reload the account before generating another.
+
+Deploy `infra/template.json` as well as the backend and static frontend: it adds
+the restricted pool IAM action and a separate public setup client. Setup-client
+tokens cannot authorize staff API requests; normal website sign-in still uses
+the existing PKCE client and account permissions. This feature has local automated
+coverage; production invitation delivery and password setup require live acceptance
+after deployment. No live account is modified by the local tests.
+
 
 ### RFID and e-paper integration
 
@@ -52,7 +82,7 @@ exhibit assignment acknowledged by its device before a label can be sent.
   the versioned label draft, queues the label command, and closes the edit
   in one transaction. Cancel closes the edit without changing the label.
 - The assigned device polls `GET /api/commands` with its registered
-  `device_id`, `type=assignment` or `type=label`, and `status=pending` or
+  `device_id`, `type=assignment`, `type=label` or `type=lighting`, and `status=pending` or
   `status=recovery_pending`, and follows pagination.
   Read the exact command before execution and honor its generation and expiry.
   For label commands, post the normal acknowledgement for that command only
@@ -63,3 +93,27 @@ exhibit assignment acknowledged by its device before a label can be sent.
   these authenticated HTTPS requests and carry command IDs through its serial
   acknowledgement. The staff page shows the backend command state while the
   device completes the work.
+
+### Remote lighting
+
+An Operator or Administrator queues `POST /staff-api/commands` with
+`type: "lighting"` and `payload: {"mode": "Auto"}`, `"On"` or `"Off"`.
+Lighting belongs to the showcase and does not require an exhibit assignment.
+Before a new lighting request, its latest device status must explicitly report
+`remote_lighting: true` with a measurement no more than 120 seconds old. The
+device reports readiness only after its ESP32/Mega lighting handshake. Older
+producers may omit this optional nullable boolean; missing, null or false
+returns `409 lighting_unavailable` without queuing a command. Replaying an
+existing command ID with the same payload remains idempotent after readiness
+is lost. Legacy status retries remain compatible when the field is omitted.
+The registered hardware credential can poll its own pending/recovery lighting
+commands, read the exact command, and post its device-sourced receipt. It cannot
+create commands, read another device's commands, or access staff-card commands.
+
+The device must honor `device-fence-v1`, persist its generation before execution,
+check `execute_before`, and acknowledge only the correlated Mega result. Confirmed
+mode changes on a successful receipt; light output still comes from telemetry.
+Retry the same receipt after a lost response. A failed receipt preserves the
+previous confirmed mode. An expired or uncertain command retains its lock until
+the existing fenced recovery protocol establishes the outcome. Deploying this API
+permission alone does not update the ESP32/Mega firmware or verify the lights.
